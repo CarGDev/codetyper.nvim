@@ -39,7 +39,7 @@ This project and everyone participating in it is governed by our commitment to c
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/codetyper.nvim.git
+   git clone https://github.com/CarGDev/codetyper.nvim.git
    cd codetyper.nvim
    ```
 
