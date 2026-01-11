@@ -387,6 +387,128 @@ local function cmd_transform()
   end
 end
 
+--- Transform prompts within a line range (for visual selection)
+---@param start_line number Start line (1-indexed)
+---@param end_line number End line (1-indexed)
+local function cmd_transform_range(start_line, end_line)
+  local parser = require("codetyper.parser")
+  local llm = require("codetyper.llm")
+
+  local bufnr = vim.api.nvim_get_current_buf()
+  local filepath = vim.fn.expand("%:p")
+
+  if filepath == "" then
+    utils.notify("No file in current buffer", vim.log.levels.WARN)
+    return
+  end
+
+  -- Find all prompts in the current buffer
+  local all_prompts = parser.find_prompts_in_buffer(bufnr)
+
+  -- Filter prompts that are within the selected range
+  local prompts = {}
+  for _, prompt in ipairs(all_prompts) do
+    if prompt.start_line >= start_line and prompt.end_line <= end_line then
+      table.insert(prompts, prompt)
+    end
+  end
+
+  if #prompts == 0 then
+    utils.notify("No /@ @/ tags found in selection (lines " .. start_line .. "-" .. end_line .. ")", vim.log.levels.INFO)
+    return
+  end
+
+  utils.notify("Found " .. #prompts .. " prompt(s) in selection to transform...", vim.log.levels.INFO)
+
+  -- Build context for this file
+  local context = llm.build_context(filepath, "code_generation")
+
+  -- Process prompts in reverse order (bottom to top) to maintain line numbers
+  local sorted_prompts = {}
+  for i = #prompts, 1, -1 do
+    table.insert(sorted_prompts, prompts[i])
+  end
+
+  local pending = #sorted_prompts
+  local completed = 0
+  local errors = 0
+
+  for _, prompt in ipairs(sorted_prompts) do
+    local clean_prompt = parser.clean_prompt(prompt.content)
+
+    local enhanced_prompt = "TASK: " .. clean_prompt .. "\n\n"
+    enhanced_prompt = enhanced_prompt .. "REQUIREMENTS:\n"
+    enhanced_prompt = enhanced_prompt .. "- Generate ONLY " .. (context.language or "code") .. " code\n"
+    enhanced_prompt = enhanced_prompt .. "- NO markdown code blocks (no ```)\n"
+    enhanced_prompt = enhanced_prompt .. "- NO explanations or comments about what you did\n"
+    enhanced_prompt = enhanced_prompt .. "- Match the coding style of the existing file exactly\n"
+    enhanced_prompt = enhanced_prompt .. "- Output must be ready to insert directly into the file\n"
+
+    utils.notify("Processing: " .. clean_prompt:sub(1, 40) .. "...", vim.log.levels.INFO)
+
+    llm.generate(enhanced_prompt, context, function(response, err)
+      if err then
+        utils.notify("Failed: " .. err, vim.log.levels.ERROR)
+        errors = errors + 1
+      elseif response then
+        vim.schedule(function()
+          local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+          local p_start_line = prompt.start_line
+          local p_end_line = prompt.end_line
+
+          local start_line_content = lines[p_start_line] or ""
+          local end_line_content = lines[p_end_line] or ""
+
+          local codetyper = require("codetyper")
+          local config = codetyper.get_config()
+          local before_tag = ""
+          local after_tag = ""
+
+          local open_pos = start_line_content:find(utils.escape_pattern(config.patterns.open_tag))
+          if open_pos and open_pos > 1 then
+            before_tag = start_line_content:sub(1, open_pos - 1)
+          end
+
+          local close_pos = end_line_content:find(utils.escape_pattern(config.patterns.close_tag))
+          if close_pos then
+            local after_close = close_pos + #config.patterns.close_tag
+            if after_close <= #end_line_content then
+              after_tag = end_line_content:sub(after_close)
+            end
+          end
+
+          local replacement_lines = vim.split(response, "\n", { plain = true })
+
+          if before_tag ~= "" and #replacement_lines > 0 then
+            replacement_lines[1] = before_tag .. replacement_lines[1]
+          end
+          if after_tag ~= "" and #replacement_lines > 0 then
+            replacement_lines[#replacement_lines] = replacement_lines[#replacement_lines] .. after_tag
+          end
+
+          vim.api.nvim_buf_set_lines(bufnr, p_start_line - 1, p_end_line, false, replacement_lines)
+
+          completed = completed + 1
+          if completed + errors >= pending then
+            utils.notify(
+              "Transform complete: " .. completed .. " succeeded, " .. errors .. " failed",
+              errors > 0 and vim.log.levels.WARN or vim.log.levels.INFO
+            )
+          end
+        end)
+      end
+    end)
+  end
+end
+
+--- Command wrapper for visual selection transform
+local function cmd_transform_visual()
+  -- Get visual selection marks
+  local start_line = vim.fn.line("'<")
+  local end_line = vim.fn.line("'>")
+  cmd_transform_range(start_line, end_line)
+end
+
 --- Transform a single prompt at cursor position
 local function cmd_transform_at_cursor()
   local parser = require("codetyper.parser")
@@ -564,6 +686,37 @@ function M.setup()
   vim.api.nvim_create_user_command("CoderTransformCursor", function()
     cmd_transform_at_cursor()
   end, { desc = "Transform /@ @/ tag at cursor" })
+
+  vim.api.nvim_create_user_command("CoderTransformVisual", function()
+    cmd_transform_visual()
+  end, { range = true, desc = "Transform /@ @/ tags in visual selection" })
+
+  -- Setup default keymaps
+  M.setup_keymaps()
+end
+
+--- Setup default keymaps for transform commands
+function M.setup_keymaps()
+  -- Visual mode: transform selected /@ @/ tags
+  vim.keymap.set("v", "<leader>ctt", function()
+    -- Exit visual mode and run the command
+    vim.cmd("normal! ")
+    vim.schedule(function()
+      local start_line = vim.fn.line("'<")
+      local end_line = vim.fn.line("'>")
+      cmd_transform_range(start_line, end_line)
+    end)
+  end, { desc = "Coder: Transform selected tags" })
+
+  -- Normal mode: transform tag at cursor
+  vim.keymap.set("n", "<leader>ctt", function()
+    cmd_transform_at_cursor()
+  end, { desc = "Coder: Transform tag at cursor" })
+
+  -- Normal mode: transform all tags in file
+  vim.keymap.set("n", "<leader>ctT", function()
+    cmd_transform()
+  end, { desc = "Coder: Transform all tags in file" })
 end
 
 return M
