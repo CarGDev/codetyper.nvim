@@ -44,8 +44,14 @@ function M.build_system_prompt(context)
   system = system:gsub("{{language}}", context.language or "unknown")
   system = system:gsub("{{filepath}}", context.file_path or "unknown")
 
-  if context.file_content then
-    system = system .. "\n\nExisting file content:\n```\n" .. context.file_content .. "\n```"
+  -- Add file content with analysis hints
+  if context.file_content and context.file_content ~= "" then
+    system = system .. "\n\n===== EXISTING FILE CONTENT (analyze and match this style) =====\n"
+    system = system .. context.file_content
+    system = system .. "\n===== END OF EXISTING FILE =====\n"
+    system = system .. "\nYour generated code MUST follow the exact patterns shown above."
+  else
+    system = system .. "\n\nThis is a new/empty file. Generate clean, idiomatic " .. (context.language or "code") .. " following best practices."
   end
 
   return system
@@ -89,11 +95,31 @@ end
 ---@param response string Raw LLM response
 ---@return string Extracted code
 function M.extract_code(response)
-  -- Remove markdown code blocks if present
-  local code = response:gsub("```%w*\n?", ""):gsub("\n?```", "")
-
-  -- Trim whitespace
-  code = code:match("^%s*(.-)%s*$")
+  local code = response
+  
+  -- Remove markdown code blocks with language tags (```typescript, ```javascript, etc.)
+  code = code:gsub("```%w+%s*\n", "")
+  code = code:gsub("```%w+%s*$", "")
+  code = code:gsub("^```%w*\n?", "")
+  code = code:gsub("\n?```%s*$", "")
+  code = code:gsub("\n```\n", "\n")
+  code = code:gsub("```", "")
+  
+  -- Remove common explanation prefixes that LLMs sometimes add
+  code = code:gsub("^Here.-:\n", "")
+  code = code:gsub("^Here's.-:\n", "")
+  code = code:gsub("^This.-:\n", "")
+  code = code:gsub("^The following.-:\n", "")
+  code = code:gsub("^Below.-:\n", "")
+  
+  -- Remove common explanation suffixes
+  code = code:gsub("\n\nThis code.-$", "")
+  code = code:gsub("\n\nThe above.-$", "")
+  code = code:gsub("\n\nNote:.-$", "")
+  code = code:gsub("\n\nExplanation:.-$", "")
+  
+  -- Trim leading/trailing whitespace but preserve internal formatting
+  code = code:match("^%s*(.-)%s*$") or code
 
   return code
 end

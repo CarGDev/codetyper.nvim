@@ -88,6 +88,23 @@ local function cmd_toggle()
   window.toggle_split(target_path, coder_path)
 end
 
+--- Build enhanced user prompt with context
+---@param clean_prompt string The cleaned user prompt
+---@param context table Context information
+---@return string Enhanced prompt
+local function build_user_prompt(clean_prompt, context)
+  local enhanced = "TASK: " .. clean_prompt .. "\n\n"
+  
+  enhanced = enhanced .. "REQUIREMENTS:\n"
+  enhanced = enhanced .. "- Generate ONLY " .. (context.language or "code") .. " code\n"
+  enhanced = enhanced .. "- NO markdown code blocks (no ```)\n"
+  enhanced = enhanced .. "- NO explanations or comments about what you did\n"
+  enhanced = enhanced .. "- Match the coding style of the existing file exactly\n"
+  enhanced = enhanced .. "- Output must be ready to insert directly into the file\n"
+  
+  return enhanced
+end
+
 --- Process prompt at cursor and generate code
 local function cmd_process()
   local parser = require("codetyper.parser")
@@ -111,8 +128,13 @@ local function cmd_process()
   local prompt_type = parser.detect_prompt_type(prompt.content)
   local context = llm.build_context(target_path, prompt_type)
   local clean_prompt = parser.clean_prompt(prompt.content)
+  
+  -- Build enhanced prompt with explicit instructions
+  local enhanced_prompt = build_user_prompt(clean_prompt, context)
 
-  llm.generate(clean_prompt, context, function(response, err)
+  utils.notify("Processing: " .. clean_prompt:sub(1, 50) .. "...", vim.log.levels.INFO)
+
+  llm.generate(enhanced_prompt, context, function(response, err)
     if err then
       utils.notify("Generation failed: " .. err, vim.log.levels.ERROR)
       return
@@ -122,6 +144,7 @@ local function cmd_process()
       -- Inject code into target file
       local inject = require("codetyper.inject")
       inject.inject_code(target_path, response, prompt_type)
+      utils.notify("Code generated and injected!", vim.log.levels.INFO)
     end
   end)
 end
