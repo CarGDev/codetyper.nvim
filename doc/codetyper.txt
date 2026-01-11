@@ -1,0 +1,220 @@
+*codetyper.txt*  AI-powered coding partner for Neovim
+
+Author:   cargdev <carlos.gutierrez@carg.dev>
+Homepage: https://github.com/cargdev/codetyper.nvim
+License:  MIT
+
+==============================================================================
+CONTENTS                                              *codetyper-contents*
+
+  1. Introduction ............................ |codetyper-introduction|
+  2. Requirements ............................ |codetyper-requirements|
+  3. Installation ............................ |codetyper-installation|
+  4. Configuration ........................... |codetyper-configuration|
+  5. Usage ................................... |codetyper-usage|
+  6. Commands ................................ |codetyper-commands|
+  7. Workflow ................................ |codetyper-workflow|
+  8. API ..................................... |codetyper-api|
+
+==============================================================================
+1. INTRODUCTION                                    *codetyper-introduction*
+
+Codetyper.nvim is an AI-powered coding partner that helps you write code
+faster using LLM APIs (Claude, Ollama) with a unique workflow.
+
+Instead of generating files directly, Codetyper watches what you type in
+special `.coder.*` files and generates code when you close prompt tags.
+
+Key features:
+- Split view with coder file and target file side by side
+- Prompt-based code generation using /@ ... @/ tags
+- Support for Claude and Ollama LLM providers
+- Automatic .gitignore management for coder files and .coder/ folder
+- Intelligent code injection based on prompt type
+- Automatic project tree logging in .coder/tree.log
+
+==============================================================================
+2. REQUIREMENTS                                    *codetyper-requirements*
+
+- Neovim >= 0.8.0
+- curl (for API calls)
+- Claude API key (if using Claude) or Ollama running locally
+
+==============================================================================
+3. INSTALLATION                                    *codetyper-installation*
+
+Using lazy.nvim: >lua
+
+  {
+    "cargdev/codetyper.nvim",
+    config = function()
+      require("codetyper").setup({
+        llm = {
+          provider = "claude", -- or "ollama"
+          claude = {
+            api_key = vim.env.ANTHROPIC_API_KEY,
+          },
+        },
+      })
+    end,
+  }
+<
+Using packer.nvim: >lua
+
+  use {
+    "cargdev/codetyper.nvim",
+    config = function()
+      require("codetyper").setup()
+    end,
+  }
+<
+==============================================================================
+4. CONFIGURATION                                  *codetyper-configuration*
+
+Default configuration: >lua
+
+  require("codetyper").setup({
+    llm = {
+      provider = "claude", -- "claude" or "ollama"
+      claude = {
+        api_key = nil, -- Uses ANTHROPIC_API_KEY env var if nil
+        model = "claude-sonnet-4-20250514",
+      },
+      ollama = {
+        host = "http://localhost:11434",
+        model = "codellama",
+      },
+    },
+    window = {
+      width = 0.4, -- 40% of screen width
+      position = "left", -- "left" or "right"
+      border = "rounded",
+    },
+    patterns = {
+      open_tag = "/@",
+      close_tag = "@/",
+      file_pattern = "*.coder.*",
+    },
+    auto_gitignore = true,
+  })
+<
+==============================================================================
+5. USAGE                                                  *codetyper-usage*
+
+1. Open any file (e.g., `index.ts`)
+2. Run `:Coder open` to create/open the corresponding coder file
+3. In the coder file, write prompts using the tag syntax:
+>
+   /@ Create a function that fetches user data from an API
+   with error handling and returns a User object @/
+<
+4. When you close the tag with `@/`, the plugin will:
+   - Send the prompt to the configured LLM
+   - Generate the code
+   - Inject it into the target file
+
+==============================================================================
+6. COMMANDS                                            *codetyper-commands*
+
+                                                              *:Coder*
+:Coder [subcommand]
+    Main command with subcommands:
+
+    open      Open coder view for current file
+    close     Close coder view
+    toggle    Toggle coder view
+    process   Process the last prompt and generate code
+    status    Show plugin status and project statistics
+    focus     Switch focus between coder and target windows
+    tree      Manually refresh the tree.log file
+    tree-view Open tree.log in a split view
+
+                                                          *:CoderOpen*
+:CoderOpen
+    Open the coder split view for the current file.
+
+                                                         *:CoderClose*
+:CoderClose
+    Close the coder split view.
+
+                                                        *:CoderToggle*
+:CoderToggle
+    Toggle the coder split view.
+
+                                                       *:CoderProcess*
+:CoderProcess
+    Process the last prompt in the current coder buffer and
+    inject generated code into the target file.
+
+                                                          *:CoderTree*
+:CoderTree
+    Manually refresh the tree.log file in .coder/ folder.
+
+                                                      *:CoderTreeView*
+:CoderTreeView
+    Open the tree.log file in a vertical split for viewing.
+
+==============================================================================
+7. WORKFLOW                                            *codetyper-workflow*
+
+The Coder Workflow~
+
+1. Target File: Your actual source file (e.g., `src/utils.ts`)
+2. Coder File: A companion file (e.g., `src/utils.coder.ts`)
+
+The coder file mirrors your target file's location and extension.
+When you write prompts in the coder file and close them, the
+generated code appears in the target file.
+
+Prompt Types~
+
+The plugin detects the type of request from your prompt:
+
+- "refactor" - Modifies existing code
+- "add" / "create" / "implement" - Adds new code
+- "document" / "comment" - Adds documentation
+- "explain" - Provides explanations (no code injection)
+
+Example Prompts~
+>
+   /@ Refactor this function to use async/await @/
+
+   /@ Add input validation to the form handler @/
+
+   /@ Add JSDoc comments to all exported functions @/
+
+   /@ Create a React hook for managing form state
+   with validation support @/
+<
+Project Tree Logging~
+
+Codetyper automatically maintains a .coder/ folder with a tree.log file:
+>
+   .coder/
+   └── tree.log    # Auto-updated project structure
+<
+The tree.log is updated whenever you:
+- Create a new file
+- Save a file
+- Delete a file
+- Change directories
+
+View the tree anytime with `:Coder tree-view` or refresh with `:Coder tree`.
+
+==============================================================================
+8. API                                                      *codetyper-api*
+
+                                                  *codetyper.setup()*
+codetyper.setup({opts})
+    Initialize the plugin with configuration options.
+
+                                                  *codetyper.get_config()*
+codetyper.get_config()
+    Returns the current configuration table.
+
+                                                  *codetyper.is_initialized()*
+codetyper.is_initialized()
+    Returns true if the plugin has been initialized.
+
+==============================================================================
+vim:tw=78:ts=8:ft=help:norl:

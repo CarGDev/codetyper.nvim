@@ -1,0 +1,164 @@
+# Codetyper.nvim - LLM Documentation
+
+> This file helps LLMs understand the Codetyper.nvim plugin structure and functionality.
+
+## Overview
+
+Codetyper.nvim is a Neovim plugin written in Lua that acts as an AI-powered coding partner. It integrates with LLM APIs (Claude, Ollama) to help developers write code faster using a unique prompt-based workflow.
+
+## Core Concept
+
+Instead of having an AI generate entire files, Codetyper lets developers maintain control:
+
+1. Developer opens a source file (e.g., `index.ts`)
+2. A companion "coder file" is created (`index.coder.ts`)
+3. Developer writes prompts using special tags: `/@ prompt @/`
+4. When the closing tag is typed, the LLM generates code
+5. Generated code is injected into the target file
+
+## Plugin Architecture
+
+```
+lua/codetyper/
+├── init.lua          # Main entry, setup function, module initialization
+├── config.lua        # Configuration management, defaults, validation
+├── types.lua         # Lua type definitions for LSP/documentation
+├── utils.lua         # Utility functions (file ops, notifications)
+├── commands.lua      # Vim command definitions (:Coder, :CoderOpen, etc.)
+├── window.lua        # Split window management (open, close, toggle)
+├── parser.lua        # Parses /@ @/ tags from buffer content
+├── gitignore.lua     # Manages .gitignore entries for coder files and .coder/ folder
+├── autocmds.lua      # Autocommands for tag detection, filetype, tree updates
+├── inject.lua        # Code injection strategies
+├── health.lua        # Health check for :checkhealth
+├── tree.lua          # Project tree logging (.coder/tree.log)
+└── llm/
+    ├── init.lua      # LLM interface, provider selection
+    ├── claude.lua    # Claude API client (Anthropic)
+    └── ollama.lua    # Ollama API client (local LLMs)
+```
+
+## .coder/ Folder
+
+The plugin automatically creates and maintains a `.coder/` folder in your project:
+
+```
+.coder/
+└── tree.log    # Project structure, auto-updated on file changes
+```
+
+The `tree.log` contains:
+- Project name and timestamp
+- Full directory tree with file type icons
+- Automatically ignores: hidden files, node_modules, .git, build folders, coder files
+
+Tree updates are triggered by:
+- `BufWritePost` - When files are saved
+- `BufNewFile` - When new files are created
+- `BufDelete` - When files are deleted
+- `DirChanged` - When changing directories
+
+Updates are debounced (1 second) to prevent excessive writes.
+
+## Key Functions
+
+### Setup
+```lua
+require("codetyper").setup({
+  llm = { provider = "claude" | "ollama", ... },
+  window = { width = 0.4, position = "left" },
+  patterns = { open_tag = "/@", close_tag = "@/" },
+  auto_gitignore = true,
+})
+```
+
+### Commands
+- `:Coder open` - Opens split view with coder file
+- `:Coder close` - Closes the split
+- `:Coder toggle` - Toggles the view
+- `:Coder process` - Manually triggers code generation
+- `:Coder status` - Shows configuration status and project stats
+- `:Coder tree` - Manually refresh tree.log
+- `:Coder tree-view` - Open tree.log in split view
+
+### Prompt Tags
+- Opening tag: `/@`
+- Closing tag: `@/`
+- Content between tags is the prompt sent to LLM
+
+### Prompt Types (Auto-detected)
+- `refactor` - Modifies existing code
+- `add` - Adds new code at cursor/end
+- `document` - Adds documentation/comments
+- `explain` - Explanations (no code injection)
+- `generic` - User chooses injection method
+
+## File Naming Convention
+
+| Target File | Coder File |
+|-------------|------------|
+| `index.ts` | `index.coder.ts` |
+| `utils.py` | `utils.coder.py` |
+| `main.lua` | `main.coder.lua` |
+
+Pattern: `name.coder.extension`
+
+## Configuration Schema
+
+```lua
+{
+  llm = {
+    provider = "claude",  -- "claude" | "ollama"
+    claude = {
+      api_key = nil,      -- string, uses ANTHROPIC_API_KEY env if nil
+      model = "claude-sonnet-4-20250514",
+    },
+    ollama = {
+      host = "http://localhost:11434",
+      model = "codellama",
+    },
+  },
+  window = {
+    width = 0.4,          -- number (percentage if <=1, columns if >1)
+    position = "left",    -- "left" | "right"
+    border = "rounded",   -- border style for floating windows
+  },
+  patterns = {
+    open_tag = "/@",      -- string
+    close_tag = "@/",     -- string
+    file_pattern = "*.coder.*",
+  },
+  auto_gitignore = true,  -- boolean
+}
+```
+
+## LLM Integration
+
+### Claude API
+- Endpoint: `https://api.anthropic.com/v1/messages`
+- Uses `x-api-key` header for authentication
+- Requires `anthropic-version: 2023-06-01` header
+
+### Ollama API
+- Endpoint: `{host}/api/generate`
+- No authentication required for local instances
+- Health check via `/api/tags` endpoint
+
+## Code Injection Strategies
+
+1. **Refactor**: Replace entire file content
+2. **Add**: Insert at cursor position in target file
+3. **Document**: Insert above current function/class
+4. **Generic**: Prompt user for action (replace/insert/append/clipboard)
+
+## Dependencies
+
+- **Required**: Neovim >= 0.8.0, curl
+- **Optional**: telescope.nvim (enhanced file picker)
+
+## Contact
+
+- Author: cargdev
+- Email: carlos.gutierrez@carg.dev
+- Website: https://cargdev.io
+- Blog: https://blog.cargdev.io
