@@ -4,13 +4,6 @@
 
 local M = {}
 
-/@ 
-create a prompt to generate code based on user description
--- @usage M.create_function
--- @param description string Description of the code to generate
--- @return string Prompt template
-@/
-
 --- Prompt template for creating a new function
 M.create_function = [[Create a function with the following requirements:
 
