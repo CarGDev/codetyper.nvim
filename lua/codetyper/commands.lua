@@ -267,6 +267,210 @@ local function cmd_focus()
   end
 end
 
+--- Transform inline /@ @/ tags in current file
+--- Works on ANY file, not just .coder.* files
+local function cmd_transform()
+  local parser = require("codetyper.parser")
+  local llm = require("codetyper.llm")
+
+  local bufnr = vim.api.nvim_get_current_buf()
+  local filepath = vim.fn.expand("%:p")
+
+  if filepath == "" then
+    utils.notify("No file in current buffer", vim.log.levels.WARN)
+    return
+  end
+
+  -- Find all prompts in the current buffer
+  local prompts = parser.find_prompts_in_buffer(bufnr)
+
+  if #prompts == 0 then
+    utils.notify("No /@ @/ tags found in current file", vim.log.levels.INFO)
+    return
+  end
+
+  utils.notify("Found " .. #prompts .. " prompt(s) to transform...", vim.log.levels.INFO)
+
+  -- Build context for this file
+  local ext = vim.fn.fnamemodify(filepath, ":e")
+  local context = llm.build_context(filepath, "code_generation")
+
+  -- Process prompts in reverse order (bottom to top) to maintain line numbers
+  local sorted_prompts = {}
+  for i = #prompts, 1, -1 do
+    table.insert(sorted_prompts, prompts[i])
+  end
+
+  -- Track how many are being processed
+  local pending = #sorted_prompts
+  local completed = 0
+  local errors = 0
+
+  -- Process each prompt
+  for _, prompt in ipairs(sorted_prompts) do
+    local clean_prompt = parser.clean_prompt(prompt.content)
+    local prompt_type = parser.detect_prompt_type(prompt.content)
+
+    -- Build enhanced user prompt
+    local enhanced_prompt = "TASK: " .. clean_prompt .. "\n\n"
+    enhanced_prompt = enhanced_prompt .. "REQUIREMENTS:\n"
+    enhanced_prompt = enhanced_prompt .. "- Generate ONLY " .. (context.language or "code") .. " code\n"
+    enhanced_prompt = enhanced_prompt .. "- NO markdown code blocks (no ```)\n"
+    enhanced_prompt = enhanced_prompt .. "- NO explanations or comments about what you did\n"
+    enhanced_prompt = enhanced_prompt .. "- Match the coding style of the existing file exactly\n"
+    enhanced_prompt = enhanced_prompt .. "- Output must be ready to insert directly into the file\n"
+
+    utils.notify("Processing: " .. clean_prompt:sub(1, 40) .. "...", vim.log.levels.INFO)
+
+    -- Generate code for this prompt
+    llm.generate(enhanced_prompt, context, function(response, err)
+      if err then
+        utils.notify("Failed: " .. err, vim.log.levels.ERROR)
+        errors = errors + 1
+      elseif response then
+        -- Replace the prompt tag with generated code
+        vim.schedule(function()
+          -- Get current buffer lines
+          local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+
+          -- Calculate the exact range to replace
+          local start_line = prompt.start_line
+          local end_line = prompt.end_line
+
+          -- Find the full lines containing the tags
+          local start_line_content = lines[start_line] or ""
+          local end_line_content = lines[end_line] or ""
+
+          -- Check if there's content before the opening tag on the same line
+          local codetyper = require("codetyper")
+          local config = codetyper.get_config()
+          local before_tag = ""
+          local after_tag = ""
+
+          local open_pos = start_line_content:find(utils.escape_pattern(config.patterns.open_tag))
+          if open_pos and open_pos > 1 then
+            before_tag = start_line_content:sub(1, open_pos - 1)
+          end
+
+          local close_pos = end_line_content:find(utils.escape_pattern(config.patterns.close_tag))
+          if close_pos then
+            local after_close = close_pos + #config.patterns.close_tag
+            if after_close <= #end_line_content then
+              after_tag = end_line_content:sub(after_close)
+            end
+          end
+
+          -- Build the replacement lines
+          local replacement_lines = vim.split(response, "\n", { plain = true })
+
+          -- Add before/after content if any
+          if before_tag ~= "" and #replacement_lines > 0 then
+            replacement_lines[1] = before_tag .. replacement_lines[1]
+          end
+          if after_tag ~= "" and #replacement_lines > 0 then
+            replacement_lines[#replacement_lines] = replacement_lines[#replacement_lines] .. after_tag
+          end
+
+          -- Replace the lines in buffer
+          vim.api.nvim_buf_set_lines(bufnr, start_line - 1, end_line, false, replacement_lines)
+
+          completed = completed + 1
+          if completed + errors >= pending then
+            utils.notify(
+              "Transform complete: " .. completed .. " succeeded, " .. errors .. " failed",
+              errors > 0 and vim.log.levels.WARN or vim.log.levels.INFO
+            )
+          end
+        end)
+      end
+    end)
+  end
+end
+
+--- Transform a single prompt at cursor position
+local function cmd_transform_at_cursor()
+  local parser = require("codetyper.parser")
+  local llm = require("codetyper.llm")
+
+  local bufnr = vim.api.nvim_get_current_buf()
+  local filepath = vim.fn.expand("%:p")
+
+  if filepath == "" then
+    utils.notify("No file in current buffer", vim.log.levels.WARN)
+    return
+  end
+
+  -- Find prompt at cursor
+  local prompt = parser.get_prompt_at_cursor(bufnr)
+
+  if not prompt then
+    utils.notify("No /@ @/ tag at cursor position", vim.log.levels.WARN)
+    return
+  end
+
+  local clean_prompt = parser.clean_prompt(prompt.content)
+  local context = llm.build_context(filepath, "code_generation")
+
+  -- Build enhanced user prompt
+  local enhanced_prompt = "TASK: " .. clean_prompt .. "\n\n"
+  enhanced_prompt = enhanced_prompt .. "REQUIREMENTS:\n"
+  enhanced_prompt = enhanced_prompt .. "- Generate ONLY " .. (context.language or "code") .. " code\n"
+  enhanced_prompt = enhanced_prompt .. "- NO markdown code blocks (no ```)\n"
+  enhanced_prompt = enhanced_prompt .. "- NO explanations or comments about what you did\n"
+  enhanced_prompt = enhanced_prompt .. "- Match the coding style of the existing file exactly\n"
+  enhanced_prompt = enhanced_prompt .. "- Output must be ready to insert directly into the file\n"
+
+  utils.notify("Transforming: " .. clean_prompt:sub(1, 40) .. "...", vim.log.levels.INFO)
+
+  llm.generate(enhanced_prompt, context, function(response, err)
+    if err then
+      utils.notify("Transform failed: " .. err, vim.log.levels.ERROR)
+      return
+    end
+
+    if response then
+      vim.schedule(function()
+        local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        local start_line = prompt.start_line
+        local end_line = prompt.end_line
+
+        local start_line_content = lines[start_line] or ""
+        local end_line_content = lines[end_line] or ""
+
+        local codetyper = require("codetyper")
+        local config = codetyper.get_config()
+        local before_tag = ""
+        local after_tag = ""
+
+        local open_pos = start_line_content:find(utils.escape_pattern(config.patterns.open_tag))
+        if open_pos and open_pos > 1 then
+          before_tag = start_line_content:sub(1, open_pos - 1)
+        end
+
+        local close_pos = end_line_content:find(utils.escape_pattern(config.patterns.close_tag))
+        if close_pos then
+          local after_close = close_pos + #config.patterns.close_tag
+          if after_close <= #end_line_content then
+            after_tag = end_line_content:sub(after_close)
+          end
+        end
+
+        local replacement_lines = vim.split(response, "\n", { plain = true })
+
+        if before_tag ~= "" and #replacement_lines > 0 then
+          replacement_lines[1] = before_tag .. replacement_lines[1]
+        end
+        if after_tag ~= "" and #replacement_lines > 0 then
+          replacement_lines[#replacement_lines] = replacement_lines[#replacement_lines] .. after_tag
+        end
+
+        vim.api.nvim_buf_set_lines(bufnr, start_line - 1, end_line, false, replacement_lines)
+        utils.notify("Transform complete!", vim.log.levels.INFO)
+      end)
+    end
+  end)
+end
+
 --- Main command dispatcher
 ---@param args table Command arguments
 local function coder_cmd(args)
@@ -287,6 +491,8 @@ local function coder_cmd(args)
     ["ask-toggle"] = cmd_ask_toggle,
     ["ask-clear"] = cmd_ask_clear,
     gitignore = cmd_gitignore,
+    transform = cmd_transform,
+    ["transform-cursor"] = cmd_transform_at_cursor,
   }
 
   local cmd_fn = commands[subcommand]
@@ -306,6 +512,7 @@ function M.setup()
         "open", "close", "toggle", "process", "status", "focus",
         "tree", "tree-view", "reset", "gitignore",
         "ask", "ask-close", "ask-toggle", "ask-clear",
+        "transform", "transform-cursor",
       }
     end,
     desc = "Codetyper.nvim commands",
@@ -348,6 +555,15 @@ function M.setup()
   vim.api.nvim_create_user_command("CoderAskClear", function()
     cmd_ask_clear()
   end, { desc = "Clear Ask history" })
+
+  -- Transform commands (inline /@ @/ tag replacement)
+  vim.api.nvim_create_user_command("CoderTransform", function()
+    cmd_transform()
+  end, { desc = "Transform all /@ @/ tags in current file" })
+
+  vim.api.nvim_create_user_command("CoderTransformCursor", function()
+    cmd_transform_at_cursor()
+  end, { desc = "Transform /@ @/ tag at cursor" })
 end
 
 return M

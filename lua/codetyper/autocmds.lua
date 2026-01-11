@@ -20,182 +20,182 @@ local processed_prompts = {}
 ---@param prompt table Prompt object
 ---@return string Unique key
 local function get_prompt_key(bufnr, prompt)
-  return string.format("%d:%d:%d:%s", bufnr, prompt.start_line, prompt.end_line, prompt.content:sub(1, 50))
+	return string.format("%d:%d:%d:%s", bufnr, prompt.start_line, prompt.end_line, prompt.content:sub(1, 50))
 end
 
 --- Schedule tree update with debounce
 local function schedule_tree_update()
-  if tree_update_timer then
-    tree_update_timer:stop()
-  end
+	if tree_update_timer then
+		tree_update_timer:stop()
+	end
 
-  tree_update_timer = vim.defer_fn(function()
-    local tree = require("codetyper.tree")
-    tree.update_tree_log()
-    tree_update_timer = nil
-  end, TREE_UPDATE_DEBOUNCE_MS)
+	tree_update_timer = vim.defer_fn(function()
+		local tree = require("codetyper.tree")
+		tree.update_tree_log()
+		tree_update_timer = nil
+	end, TREE_UPDATE_DEBOUNCE_MS)
 end
 
 --- Setup autocommands
 function M.setup()
-  local group = vim.api.nvim_create_augroup(AUGROUP, { clear = true })
+	local group = vim.api.nvim_create_augroup(AUGROUP, { clear = true })
 
-  -- Auto-save coder file when leaving insert mode
-  vim.api.nvim_create_autocmd("InsertLeave", {
-    group = group,
-    pattern = "*.coder.*",
-    callback = function()
-      -- Auto-save the coder file
-      if vim.bo.modified then
-        vim.cmd("silent! write")
-      end
-      -- Check for closed prompts and auto-process
-      M.check_for_closed_prompt()
-    end,
-    desc = "Auto-save and check for closed prompt tags",
-  })
+	-- Auto-save coder file when leaving insert mode
+	vim.api.nvim_create_autocmd("InsertLeave", {
+		group = group,
+		pattern = "*.coder.*",
+		callback = function()
+			-- Auto-save the coder file
+			if vim.bo.modified then
+				vim.cmd("silent! write")
+			end
+			-- Check for closed prompts and auto-process
+			M.check_for_closed_prompt()
+		end,
+		desc = "Auto-save and check for closed prompt tags",
+	})
 
-  -- Auto-set filetype for coder files based on extension
-  vim.api.nvim_create_autocmd({ "BufRead", "BufNewFile" }, {
-    group = group,
-    pattern = "*.coder.*",
-    callback = function()
-      M.set_coder_filetype()
-    end,
-    desc = "Set filetype for coder files",
-  })
+	-- Auto-set filetype for coder files based on extension
+	vim.api.nvim_create_autocmd({ "BufRead", "BufNewFile" }, {
+		group = group,
+		pattern = "*.coder.*",
+		callback = function()
+			M.set_coder_filetype()
+		end,
+		desc = "Set filetype for coder files",
+	})
 
-  -- Auto-open split view when opening a coder file directly (e.g., from nvim-tree)
-  vim.api.nvim_create_autocmd("BufEnter", {
-    group = group,
-    pattern = "*.coder.*",
-    callback = function()
-      -- Delay slightly to ensure buffer is fully loaded
-      vim.defer_fn(function()
-        M.auto_open_target_file()
-      end, 50)
-    end,
-    desc = "Auto-open target file when coder file is opened",
-  })
+	-- Auto-open split view when opening a coder file directly (e.g., from nvim-tree)
+	vim.api.nvim_create_autocmd("BufEnter", {
+		group = group,
+		pattern = "*.coder.*",
+		callback = function()
+			-- Delay slightly to ensure buffer is fully loaded
+			vim.defer_fn(function()
+				M.auto_open_target_file()
+			end, 50)
+		end,
+		desc = "Auto-open target file when coder file is opened",
+	})
 
-  -- Cleanup on buffer close
-  vim.api.nvim_create_autocmd("BufWipeout", {
-    group = group,
-    pattern = "*.coder.*",
-    callback = function(ev)
-      local window = require("codetyper.window")
-      if window.is_open() then
-        window.close_split()
-      end
-      -- Clear processed prompts for this buffer
-      local bufnr = ev.buf
-      for key, _ in pairs(processed_prompts) do
-        if key:match("^" .. bufnr .. ":") then
-          processed_prompts[key] = nil
-        end
-      end
-      -- Clear auto-opened tracking
-      M.clear_auto_opened(bufnr)
-    end,
-    desc = "Cleanup on coder buffer close",
-  })
+	-- Cleanup on buffer close
+	vim.api.nvim_create_autocmd("BufWipeout", {
+		group = group,
+		pattern = "*.coder.*",
+		callback = function(ev)
+			local window = require("codetyper.window")
+			if window.is_open() then
+				window.close_split()
+			end
+			-- Clear processed prompts for this buffer
+			local bufnr = ev.buf
+			for key, _ in pairs(processed_prompts) do
+				if key:match("^" .. bufnr .. ":") then
+					processed_prompts[key] = nil
+				end
+			end
+			-- Clear auto-opened tracking
+			M.clear_auto_opened(bufnr)
+		end,
+		desc = "Cleanup on coder buffer close",
+	})
 
-  -- Update tree.log when files are created/written
-  vim.api.nvim_create_autocmd({ "BufWritePost", "BufNewFile" }, {
-    group = group,
-    pattern = "*",
-    callback = function(ev)
-      -- Skip coder files and tree.log itself
-      local filepath = ev.file or vim.fn.expand("%:p")
-      if filepath:match("%.coder%.") or filepath:match("tree%.log$") then
-        return
-      end
-      -- Schedule tree update with debounce
-      schedule_tree_update()
-    end,
-    desc = "Update tree.log on file creation/save",
-  })
+	-- Update tree.log when files are created/written
+	vim.api.nvim_create_autocmd({ "BufWritePost", "BufNewFile" }, {
+		group = group,
+		pattern = "*",
+		callback = function(ev)
+			-- Skip coder files and tree.log itself
+			local filepath = ev.file or vim.fn.expand("%:p")
+			if filepath:match("%.coder%.") or filepath:match("tree%.log$") then
+				return
+			end
+			-- Schedule tree update with debounce
+			schedule_tree_update()
+		end,
+		desc = "Update tree.log on file creation/save",
+	})
 
-  -- Update tree.log when files are deleted (via netrw or file explorer)
-  vim.api.nvim_create_autocmd("BufDelete", {
-    group = group,
-    pattern = "*",
-    callback = function(ev)
-      local filepath = ev.file or ""
-      -- Skip special buffers and coder files
-      if filepath == "" or filepath:match("%.coder%.") or filepath:match("tree%.log$") then
-        return
-      end
-      schedule_tree_update()
-    end,
-    desc = "Update tree.log on file deletion",
-  })
+	-- Update tree.log when files are deleted (via netrw or file explorer)
+	vim.api.nvim_create_autocmd("BufDelete", {
+		group = group,
+		pattern = "*",
+		callback = function(ev)
+			local filepath = ev.file or ""
+			-- Skip special buffers and coder files
+			if filepath == "" or filepath:match("%.coder%.") or filepath:match("tree%.log$") then
+				return
+			end
+			schedule_tree_update()
+		end,
+		desc = "Update tree.log on file deletion",
+	})
 
-  -- Update tree on directory change
-  vim.api.nvim_create_autocmd("DirChanged", {
-    group = group,
-    pattern = "*",
-    callback = function()
-      schedule_tree_update()
-    end,
-    desc = "Update tree.log on directory change",
-  })
+	-- Update tree on directory change
+	vim.api.nvim_create_autocmd("DirChanged", {
+		group = group,
+		pattern = "*",
+		callback = function()
+			schedule_tree_update()
+		end,
+		desc = "Update tree.log on directory change",
+	})
 end
 
 --- Check if the buffer has a newly closed prompt and auto-process
 function M.check_for_closed_prompt()
-  local codetyper = require("codetyper")
-  local config = codetyper.get_config()
-  local parser = require("codetyper.parser")
+	local codetyper = require("codetyper")
+	local config = codetyper.get_config()
+	local parser = require("codetyper.parser")
 
-  local bufnr = vim.api.nvim_get_current_buf()
+	local bufnr = vim.api.nvim_get_current_buf()
 
-  -- Get current line
-  local cursor = vim.api.nvim_win_get_cursor(0)
-  local line = cursor[1]
-  local lines = vim.api.nvim_buf_get_lines(bufnr, line - 1, line, false)
+	-- Get current line
+	local cursor = vim.api.nvim_win_get_cursor(0)
+	local line = cursor[1]
+	local lines = vim.api.nvim_buf_get_lines(bufnr, line - 1, line, false)
 
-  if #lines == 0 then
-    return
-  end
+	if #lines == 0 then
+		return
+	end
 
-  local current_line = lines[1]
+	local current_line = lines[1]
 
-  -- Check if line contains closing tag
-  if parser.has_closing_tag(current_line, config.patterns.close_tag) then
-    -- Find the complete prompt
-    local prompt = parser.get_last_prompt(bufnr)
-    if prompt and prompt.content and prompt.content ~= "" then
-      -- Generate unique key for this prompt
-      local prompt_key = get_prompt_key(bufnr, prompt)
+	-- Check if line contains closing tag
+	if parser.has_closing_tag(current_line, config.patterns.close_tag) then
+		-- Find the complete prompt
+		local prompt = parser.get_last_prompt(bufnr)
+		if prompt and prompt.content and prompt.content ~= "" then
+			-- Generate unique key for this prompt
+			local prompt_key = get_prompt_key(bufnr, prompt)
 
-      -- Check if already processed
-      if processed_prompts[prompt_key] then
-        return
-      end
+			-- Check if already processed
+			if processed_prompts[prompt_key] then
+				return
+			end
 
-      -- Mark as processed
-      processed_prompts[prompt_key] = true
+			-- Mark as processed
+			processed_prompts[prompt_key] = true
 
-      -- Auto-process the prompt (no confirmation needed)
-      utils.notify("Processing prompt...", vim.log.levels.INFO)
-      vim.schedule(function()
-        vim.cmd("CoderProcess")
-      end)
-    end
-  end
+			-- Auto-process the prompt (no confirmation needed)
+			utils.notify("Processing prompt...", vim.log.levels.INFO)
+			vim.schedule(function()
+				vim.cmd("CoderProcess")
+			end)
+		end
+	end
 end
 
 --- Reset processed prompts for a buffer (useful for re-processing)
 ---@param bufnr? number Buffer number (default: current)
 function M.reset_processed(bufnr)
-  bufnr = bufnr or vim.api.nvim_get_current_buf()
-  for key, _ in pairs(processed_prompts) do
-    if key:match("^" .. bufnr .. ":") then
-      processed_prompts[key] = nil
-    end
-  end
-  utils.notify("Prompt history cleared - prompts can be re-processed")
+	bufnr = bufnr or vim.api.nvim_get_current_buf()
+	for key, _ in pairs(processed_prompts) do
+		if key:match("^" .. bufnr .. ":") then
+			processed_prompts[key] = nil
+		end
+	end
+	utils.notify("Prompt history cleared - prompts can be re-processed")
 end
 
 --- Track if we already opened the split for this buffer
@@ -204,146 +204,146 @@ local auto_opened_buffers = {}
 
 --- Auto-open target file when a coder file is opened directly
 function M.auto_open_target_file()
-  local window = require("codetyper.window")
+	local window = require("codetyper.window")
 
-  -- Skip if split is already open
-  if window.is_open() then
-    return
-  end
+	-- Skip if split is already open
+	if window.is_open() then
+		return
+	end
 
-  local bufnr = vim.api.nvim_get_current_buf()
+	local bufnr = vim.api.nvim_get_current_buf()
 
-  -- Skip if we already handled this buffer
-  if auto_opened_buffers[bufnr] then
-    return
-  end
+	-- Skip if we already handled this buffer
+	if auto_opened_buffers[bufnr] then
+		return
+	end
 
-  local current_file = vim.fn.expand("%:p")
+	local current_file = vim.fn.expand("%:p")
 
-  -- Skip empty paths
-  if not current_file or current_file == "" then
-    return
-  end
+	-- Skip empty paths
+	if not current_file or current_file == "" then
+		return
+	end
 
-  -- Verify it's a coder file
-  if not utils.is_coder_file(current_file) then
-    return
-  end
+	-- Verify it's a coder file
+	if not utils.is_coder_file(current_file) then
+		return
+	end
 
-  -- Skip if we're in a special buffer (nvim-tree, etc.)
-  local buftype = vim.bo[bufnr].buftype
-  if buftype ~= "" then
-    return
-  end
+	-- Skip if we're in a special buffer (nvim-tree, etc.)
+	local buftype = vim.bo[bufnr].buftype
+	if buftype ~= "" then
+		return
+	end
 
-  -- Mark as handled
-  auto_opened_buffers[bufnr] = true
+	-- Mark as handled
+	auto_opened_buffers[bufnr] = true
 
-  -- Get the target file path
-  local target_path = utils.get_target_path(current_file)
+	-- Get the target file path
+	local target_path = utils.get_target_path(current_file)
 
-  -- Check if target file exists
-  if not utils.file_exists(target_path) then
-    utils.notify("Target file not found: " .. vim.fn.fnamemodify(target_path, ":t"), vim.log.levels.WARN)
-    return
-  end
+	-- Check if target file exists
+	if not utils.file_exists(target_path) then
+		utils.notify("Target file not found: " .. vim.fn.fnamemodify(target_path, ":t"), vim.log.levels.WARN)
+		return
+	end
 
-  -- Get config with fallback defaults
-  local codetyper = require("codetyper")
-  local config = codetyper.get_config()
+	-- Get config with fallback defaults
+	local codetyper = require("codetyper")
+	local config = codetyper.get_config()
 
-  -- Fallback width if config not fully loaded
-  local width = (config and config.window and config.window.width) or 0.4
-  if width <= 1 then
-    width = math.floor(vim.o.columns * width)
-  end
+	-- Fallback width if config not fully loaded
+	local width = (config and config.window and config.window.width) or 0.4
+	if width <= 1 then
+		width = math.floor(vim.o.columns * width)
+	end
 
-  -- Store current coder window
-  local coder_win = vim.api.nvim_get_current_win()
-  local coder_buf = bufnr
+	-- Store current coder window
+	local coder_win = vim.api.nvim_get_current_win()
+	local coder_buf = bufnr
 
-  -- Open target file in a vertical split on the right
-  local ok, err = pcall(function()
-    vim.cmd("vsplit " .. vim.fn.fnameescape(target_path))
-  end)
+	-- Open target file in a vertical split on the right
+	local ok, err = pcall(function()
+		vim.cmd("vsplit " .. vim.fn.fnameescape(target_path))
+	end)
 
-  if not ok then
-    utils.notify("Failed to open target file: " .. tostring(err), vim.log.levels.ERROR)
-    auto_opened_buffers[bufnr] = nil -- Allow retry
-    return
-  end
+	if not ok then
+		utils.notify("Failed to open target file: " .. tostring(err), vim.log.levels.ERROR)
+		auto_opened_buffers[bufnr] = nil -- Allow retry
+		return
+	end
 
-  -- Now we're in the target window (right side)
-  local target_win = vim.api.nvim_get_current_win()
-  local target_buf = vim.api.nvim_get_current_buf()
+	-- Now we're in the target window (right side)
+	local target_win = vim.api.nvim_get_current_win()
+	local target_buf = vim.api.nvim_get_current_buf()
 
-  -- Set the coder window width (left side)
-  pcall(vim.api.nvim_win_set_width, coder_win, width)
+	-- Set the coder window width (left side)
+	pcall(vim.api.nvim_win_set_width, coder_win, width)
 
-  -- Update window module state
-  window._coder_win = coder_win
-  window._coder_buf = coder_buf
-  window._target_win = target_win
-  window._target_buf = target_buf
+	-- Update window module state
+	window._coder_win = coder_win
+	window._coder_buf = coder_buf
+	window._target_win = target_win
+	window._target_buf = target_buf
 
-  -- Set up window options for coder window
-  pcall(function()
-    vim.wo[coder_win].number = true
-    vim.wo[coder_win].relativenumber = true
-    vim.wo[coder_win].signcolumn = "yes"
-  end)
+	-- Set up window options for coder window
+	pcall(function()
+		vim.wo[coder_win].number = true
+		vim.wo[coder_win].relativenumber = true
+		vim.wo[coder_win].signcolumn = "yes"
+	end)
 
-  utils.notify("Opened target: " .. vim.fn.fnamemodify(target_path, ":t"))
+	utils.notify("Opened target: " .. vim.fn.fnamemodify(target_path, ":t"))
 end
 
 --- Clear auto-opened tracking for a buffer
 ---@param bufnr number Buffer number
 function M.clear_auto_opened(bufnr)
-  auto_opened_buffers[bufnr] = nil
+	auto_opened_buffers[bufnr] = nil
 end
 
 --- Set appropriate filetype for coder files
 function M.set_coder_filetype()
-  local filepath = vim.fn.expand("%:p")
+	local filepath = vim.fn.expand("%:p")
 
-  -- Extract the actual extension (e.g., index.coder.ts -> ts)
-  local ext = filepath:match("%.coder%.(%w+)$")
+	-- Extract the actual extension (e.g., index.coder.ts -> ts)
+	local ext = filepath:match("%.coder%.(%w+)$")
 
-  if ext then
-    -- Map extension to filetype
-    local ft_map = {
-      ts = "typescript",
-      tsx = "typescriptreact",
-      js = "javascript",
-      jsx = "javascriptreact",
-      py = "python",
-      lua = "lua",
-      go = "go",
-      rs = "rust",
-      rb = "ruby",
-      java = "java",
-      c = "c",
-      cpp = "cpp",
-      cs = "cs",
-      json = "json",
-      yaml = "yaml",
-      yml = "yaml",
-      md = "markdown",
-      html = "html",
-      css = "css",
-      scss = "scss",
-      vue = "vue",
-      svelte = "svelte",
-    }
+	if ext then
+		-- Map extension to filetype
+		local ft_map = {
+			ts = "typescript",
+			tsx = "typescriptreact",
+			js = "javascript",
+			jsx = "javascriptreact",
+			py = "python",
+			lua = "lua",
+			go = "go",
+			rs = "rust",
+			rb = "ruby",
+			java = "java",
+			c = "c",
+			cpp = "cpp",
+			cs = "cs",
+			json = "json",
+			yaml = "yaml",
+			yml = "yaml",
+			md = "markdown",
+			html = "html",
+			css = "css",
+			scss = "scss",
+			vue = "vue",
+			svelte = "svelte",
+		}
 
-    local filetype = ft_map[ext] or ext
-    vim.bo.filetype = filetype
-  end
+		local filetype = ft_map[ext] or ext
+		vim.bo.filetype = filetype
+	end
 end
 
 --- Clear all autocommands
 function M.clear()
-  vim.api.nvim_del_augroup_by_name(AUGROUP)
+	vim.api.nvim_del_augroup_by_name(AUGROUP)
 end
 
 return M
