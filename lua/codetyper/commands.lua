@@ -687,8 +687,10 @@ function M.setup()
     cmd_transform_at_cursor()
   end, { desc = "Transform /@ @/ tag at cursor" })
 
-  vim.api.nvim_create_user_command("CoderTransformVisual", function()
-    cmd_transform_visual()
+  vim.api.nvim_create_user_command("CoderTransformVisual", function(opts)
+    local start_line = opts.line1
+    local end_line = opts.line2
+    cmd_transform_range(start_line, end_line)
   end, { range = true, desc = "Transform /@ @/ tags in visual selection" })
 
   -- Setup default keymaps
@@ -698,25 +700,22 @@ end
 --- Setup default keymaps for transform commands
 function M.setup_keymaps()
   -- Visual mode: transform selected /@ @/ tags
-  vim.keymap.set("v", "<leader>ctt", function()
-    -- Exit visual mode and run the command
-    vim.cmd("normal! ")
-    vim.schedule(function()
-      local start_line = vim.fn.line("'<")
-      local end_line = vim.fn.line("'>")
-      cmd_transform_range(start_line, end_line)
-    end)
-  end, { desc = "Coder: Transform selected tags" })
+  vim.keymap.set("v", "<leader>ctt", ":<C-u>CoderTransformVisual<CR>", { 
+    silent = true, 
+    desc = "Coder: Transform selected tags" 
+  })
 
   -- Normal mode: transform tag at cursor
-  vim.keymap.set("n", "<leader>ctt", function()
-    cmd_transform_at_cursor()
-  end, { desc = "Coder: Transform tag at cursor" })
+  vim.keymap.set("n", "<leader>ctt", "<cmd>CoderTransformCursor<CR>", { 
+    silent = true, 
+    desc = "Coder: Transform tag at cursor" 
+  })
 
   -- Normal mode: transform all tags in file
-  vim.keymap.set("n", "<leader>ctT", function()
-    cmd_transform()
-  end, { desc = "Coder: Transform all tags in file" })
+  vim.keymap.set("n", "<leader>ctT", "<cmd>CoderTransform<CR>", { 
+    silent = true, 
+    desc = "Coder: Transform all tags in file" 
+  })
 end
 
 return M
