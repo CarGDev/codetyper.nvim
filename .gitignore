@@ -1,5 +1,7 @@
-
-
 # Codetyper.nvim - AI coding partner files
 *.coder.*
 .coder/
+
+/@
+add gitignore for lua files
+/@
