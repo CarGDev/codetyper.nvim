@@ -142,10 +142,26 @@ function M.setup()
 	})
 end
 
---- Check if the buffer has a newly closed prompt and auto-process
-function M.check_for_closed_prompt()
+--- Get config with fallback defaults
+local function get_config_safe()
 	local codetyper = require("codetyper")
 	local config = codetyper.get_config()
+	-- Return defaults if not initialized
+	if not config or not config.patterns then
+		return {
+			patterns = {
+				open_tag = "/@",
+				close_tag = "@/",
+				file_pattern = "*.coder.*",
+			}
+		}
+	end
+	return config
+end
+
+--- Check if the buffer has a newly closed prompt and auto-process
+function M.check_for_closed_prompt()
+	local config = get_config_safe()
 	local parser = require("codetyper.parser")
 
 	local bufnr = vim.api.nvim_get_current_buf()

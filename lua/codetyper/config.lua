@@ -5,14 +5,14 @@ local M = {}
 ---@type CoderConfig
 local defaults = {
   llm = {
-    provider = "claude",
+    provider = "ollama",
     claude = {
       api_key = nil, -- Will use ANTHROPIC_API_KEY env var if nil
       model = "claude-sonnet-4-20250514",
     },
     ollama = {
       host = "http://localhost:11434",
-      model = "codellama",
+      model = "deepseek-coder:6.7b",
     },
   },
   window = {

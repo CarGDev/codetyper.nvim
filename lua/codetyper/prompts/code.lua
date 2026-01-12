@@ -14,6 +14,8 @@ Requirements:
 - Include proper error handling
 - Use appropriate types (if applicable)
 - Make it efficient and readable
+
+OUTPUT ONLY THE RAW CODE. No explanations, no markdown, no code fences.
 ]]
 
 --- Prompt template for creating a new class/module
@@ -26,6 +28,8 @@ Requirements:
 - Include constructor/initialization
 - Implement proper encapsulation
 - Add necessary methods as described
+
+OUTPUT ONLY THE RAW CODE. No explanations, no markdown, no code fences.
 ]]
 
 --- Prompt template for implementing an interface/trait
@@ -37,6 +41,8 @@ Requirements:
 - Implement all required methods
 - Follow the interface contract exactly
 - Handle edge cases appropriately
+
+OUTPUT ONLY THE RAW CODE. No explanations, no markdown, no code fences.
 ]]
 
 --- Prompt template for creating a React component
@@ -49,6 +55,8 @@ Requirements:
 - Include proper TypeScript types (if .tsx)
 - Follow React best practices
 - Make it reusable and composable
+
+OUTPUT ONLY THE RAW CODE. No explanations, no markdown, no code fences.
 ]]
 
 --- Prompt template for creating an API endpoint
@@ -61,6 +69,8 @@ Requirements:
 - Proper error handling and status codes
 - Follow RESTful conventions
 - Include appropriate middleware
+
+OUTPUT ONLY THE RAW CODE. No explanations, no markdown, no code fences.
 ]]
 
 --- Prompt template for creating a utility function
@@ -73,6 +83,8 @@ Requirements:
 - Handle edge cases
 - Efficient implementation
 - Well-typed (if applicable)
+
+OUTPUT ONLY THE RAW CODE. No explanations, no markdown, no code fences.
 ]]
 
 --- Prompt template for generic code generation
@@ -88,6 +100,8 @@ Requirements:
 - Match existing code style
 - Follow best practices
 - Handle errors appropriately
+
+OUTPUT ONLY THE RAW CODE. No explanations, no markdown, no code fences.
 ]]
 
 return M

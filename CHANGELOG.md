@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Improved code generation prompts to explicitly request only raw code output (no explanations, markdown, or code fences)
+
 ## [0.2.0] - 2026-01-11
 
 ### Added

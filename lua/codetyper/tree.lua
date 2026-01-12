@@ -10,6 +10,19 @@ local CODER_FOLDER = ".coder"
 --- Name of the tree log file
 local TREE_LOG_FILE = "tree.log"
 
+--- Name of the settings file
+local SETTINGS_FILE = "settings.json"
+
+--- Default settings for the coder folder
+local DEFAULT_SETTINGS = {
+  ["editor.fontSize"] = 14,
+  ["editor.tabSize"] = 2,
+  ["files.autoSave"] = "afterDelay",
+  ["files.autoSaveDelay"] = 1000,
+  ["terminal.integrated.fontSize"] = 14,
+  ["workbench.colorTheme"] = "Default Dark+",
+}
+
 --- Get the path to the .coder folder
 ---@return string|nil Path to .coder folder or nil
 function M.get_coder_folder()
@@ -28,6 +41,57 @@ function M.get_tree_log_path()
     return nil
   end
   return coder_folder .. "/" .. TREE_LOG_FILE
+end
+
+--- Get the path to the settings.json file
+---@return string|nil Path to settings.json or nil
+function M.get_settings_path()
+  local coder_folder = M.get_coder_folder()
+  if not coder_folder then
+    return nil
+  end
+  return coder_folder .. "/" .. SETTINGS_FILE
+end
+
+--- Ensure settings.json exists with default settings
+---@return boolean Success status
+function M.ensure_settings()
+  local settings_path = M.get_settings_path()
+  if not settings_path then
+    return false
+  end
+
+  -- Check if file already exists
+  local stat = vim.loop.fs_stat(settings_path)
+  if stat then
+    return true -- File already exists, don't overwrite
+  end
+
+  -- Create settings file with defaults
+  local json_content = vim.fn.json_encode(DEFAULT_SETTINGS)
+  -- Pretty print the JSON
+  local ok, pretty_json = pcall(function()
+    return vim.fn.system({ "python3", "-m", "json.tool" }, json_content)
+  end)
+
+  if not ok or vim.v.shell_error ~= 0 then
+    -- Fallback to simple formatting if python not available
+    pretty_json = "{\n"
+    local keys = vim.tbl_keys(DEFAULT_SETTINGS)
+    table.sort(keys)
+    for i, key in ipairs(keys) do
+      local value = DEFAULT_SETTINGS[key]
+      local value_str = type(value) == "string" and ('"' .. value .. '"') or tostring(value)
+      pretty_json = pretty_json .. '  "' .. key .. '": ' .. value_str
+      if i < #keys then
+        pretty_json = pretty_json .. ","
+      end
+      pretty_json = pretty_json .. "\n"
+    end
+    pretty_json = pretty_json .. "}\n"
+  end
+
+  return utils.write_file(settings_path, pretty_json)
 end
 
 --- Ensure .coder folder exists
@@ -198,10 +262,51 @@ function M.update_tree_log()
   return false
 end
 
+--- Cache to track initialized projects (by root path)
+local initialized_projects = {}
+
+--- Check if project is already initialized
+---@param root string Project root path
+---@return boolean
+local function is_project_initialized(root)
+  return initialized_projects[root] == true
+end
+
 --- Initialize tree logging (called on setup)
-function M.setup()
+---@param force? boolean Force re-initialization even if cached
+---@return boolean success
+function M.setup(force)
+  local coder_folder = M.get_coder_folder()
+  if not coder_folder then
+    return false
+  end
+
+  local root = utils.get_project_root()
+  if not root then
+    return false
+  end
+
+  -- Skip if already initialized (unless forced)
+  if not force and is_project_initialized(root) then
+    return true
+  end
+
+  -- Ensure .coder folder exists
+  if not M.ensure_coder_folder() then
+    utils.notify("Failed to create .coder folder", vim.log.levels.ERROR)
+    return false
+  end
+
+  -- Create settings.json with defaults if it doesn't exist
+  M.ensure_settings()
+
   -- Create initial tree log
   M.update_tree_log()
+
+  -- Mark project as initialized
+  initialized_projects[root] = true
+
+  return true
 end
 
 --- Get file statistics from tree

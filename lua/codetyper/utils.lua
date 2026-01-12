@@ -17,7 +17,8 @@ function M.get_project_root()
     end
     found = vim.fn.finddir(marker, current .. ";")
     if found ~= "" then
-      return vim.fn.fnamemodify(found, ":p:h")
+      -- For directories, :p:h gives the dir itself, so we need :p:h:h to get parent
+      return vim.fn.fnamemodify(found, ":p:h:h")
     end
   end
 

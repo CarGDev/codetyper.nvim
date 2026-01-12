@@ -18,17 +18,32 @@ if fn.has("nvim-0.8.0") == 0 then
 	return
 end
 
+--- Initialize codetyper plugin fully
+--- Creates .coder folder, settings.json, tree.log, .gitignore
+--- Also registers autocmds for /@ @/ prompt detection
+---@return boolean success
+local function init_coder_files()
+	local ok, err = pcall(function()
+		-- Full plugin initialization (includes config, commands, autocmds, tree, gitignore)
+		local codetyper = require("codetyper")
+		if not codetyper.is_initialized() then
+			codetyper.setup()
+		end
+	end)
+
+	if not ok then
+		vim.notify("[Codetyper] Failed to initialize: " .. tostring(err), vim.log.levels.ERROR)
+		return false
+	end
+	return true
+end
+
 -- Initialize .coder folder and tree.log on project open
 api.nvim_create_autocmd("VimEnter", {
 	callback = function()
 		-- Delay slightly to ensure cwd is set
 		vim.defer_fn(function()
-			local tree = require("codetyper.tree")
-			tree.setup()
-
-			-- Also ensure gitignore is updated
-			local gitignore = require("codetyper.gitignore")
-			gitignore.ensure_ignored()
+			init_coder_files()
 		end, 100)
 	end,
 	desc = "Initialize Codetyper .coder folder on startup",
@@ -38,11 +53,7 @@ api.nvim_create_autocmd("VimEnter", {
 api.nvim_create_autocmd("DirChanged", {
 	callback = function()
 		vim.defer_fn(function()
-			local tree = require("codetyper.tree")
-			tree.setup()
-
-			local gitignore = require("codetyper.gitignore")
-			gitignore.ensure_ignored()
+			init_coder_files()
 		end, 100)
 	end,
 	desc = "Initialize Codetyper .coder folder on directory change",
