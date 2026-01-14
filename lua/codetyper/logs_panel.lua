@@ -274,38 +274,48 @@ function M.open()
 end
 
 --- Close the logs panel
-function M.close()
-  if not state.is_open then
+---@param force? boolean Force close even if not marked as open
+function M.close(force)
+  if not state.is_open and not force then
     return
   end
 
   -- Remove log listener
   if state.listener_id then
-    logs.remove_listener(state.listener_id)
+    pcall(logs.remove_listener, state.listener_id)
     state.listener_id = nil
   end
 
   -- Remove queue listener
   if state.queue_listener_id then
-    queue.remove_listener(state.queue_listener_id)
+    pcall(queue.remove_listener, state.queue_listener_id)
     state.queue_listener_id = nil
   end
 
-  -- Close queue window
-  if state.queue_win and vim.api.nvim_win_is_valid(state.queue_win) then
+  -- Close queue window first
+  if state.queue_win then
     pcall(vim.api.nvim_win_close, state.queue_win, true)
+    state.queue_win = nil
   end
 
   -- Close logs window
-  if state.win and vim.api.nvim_win_is_valid(state.win) then
+  if state.win then
     pcall(vim.api.nvim_win_close, state.win, true)
+    state.win = nil
   end
 
-  -- Reset state
-  state.buf = nil
-  state.win = nil
-  state.queue_buf = nil
-  state.queue_win = nil
+  -- Delete queue buffer
+  if state.queue_buf then
+    pcall(vim.api.nvim_buf_delete, state.queue_buf, { force = true })
+    state.queue_buf = nil
+  end
+
+  -- Delete logs buffer
+  if state.buf then
+    pcall(vim.api.nvim_buf_delete, state.buf, { force = true })
+    state.buf = nil
+  end
+
   state.is_open = false
 end
 
@@ -329,6 +339,44 @@ function M.ensure_open()
   if not state.is_open then
     M.open()
   end
+end
+
+--- Setup autocmds for the logs panel
+function M.setup()
+  local group = vim.api.nvim_create_augroup("CodetypeLogsPanel", { clear = true })
+
+  -- Close logs panel when exiting Neovim
+  vim.api.nvim_create_autocmd("VimLeavePre", {
+    group = group,
+    callback = function()
+      -- Force close to ensure cleanup even in edge cases
+      M.close(true)
+    end,
+    desc = "Close logs panel before exiting Neovim",
+  })
+
+  -- Also clean up when QuitPre fires (handles :qa, :wqa, etc.)
+  vim.api.nvim_create_autocmd("QuitPre", {
+    group = group,
+    callback = function()
+      -- Check if this is the last window (about to quit Neovim)
+      local wins = vim.api.nvim_list_wins()
+      local real_wins = 0
+      for _, win in ipairs(wins) do
+        local buf = vim.api.nvim_win_get_buf(win)
+        local buftype = vim.bo[buf].buftype
+        -- Count non-special windows
+        if buftype == "" or buftype == "help" then
+          real_wins = real_wins + 1
+        end
+      end
+      -- If only logs/queue windows remain, close them
+      if real_wins <= 1 then
+        M.close(true)
+      end
+    end,
+    desc = "Close logs panel on quit",
+  })
 end
 
 return M

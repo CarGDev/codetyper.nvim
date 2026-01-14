@@ -94,6 +94,15 @@ local function clean_response(response, filetype)
 
 	local cleaned = response
 
+	-- Remove LLM special tokens (deepseek, llama, etc.)
+	cleaned = cleaned:gsub("<｜begin▁of▁sentence｜>", "")
+	cleaned = cleaned:gsub("<｜end▁of▁sentence｜>", "")
+	cleaned = cleaned:gsub("<|im_start|>", "")
+	cleaned = cleaned:gsub("<|im_end|>", "")
+	cleaned = cleaned:gsub("<s>", "")
+	cleaned = cleaned:gsub("</s>", "")
+	cleaned = cleaned:gsub("<|endoftext|>", "")
+
 	-- Remove the original prompt tags /@ ... @/ if they appear in output
 	-- Use [%s%S] to match any character including newlines (Lua's . doesn't match newlines)
 	cleaned = cleaned:gsub("/@[%s%S]-@/", "")
@@ -264,8 +273,35 @@ local function build_prompt(event)
 		local scope_type = event.scope.type
 		local scope_name = event.scope.name or "anonymous"
 
-		-- For replacement intents, provide the full scope to transform
-		if event.intent and intent_mod.is_replacement(event.intent) then
+		-- Special handling for "complete" intent - fill in the function body
+		if event.intent and event.intent.type == "complete" then
+			user_prompt = string.format(
+				[[Complete this %s. Fill in the implementation based on the description.
+
+IMPORTANT:
+- Keep the EXACT same function signature (name, parameters, return type)
+- Only provide the COMPLETE function with implementation
+- Do NOT create a new function or duplicate the signature
+- Do NOT add any text before or after the function
+
+Current %s (incomplete):
+```%s
+%s
+```
+%s
+What it should do: %s
+
+Return ONLY the complete %s with implementation. No explanations, no duplicates.]],
+				scope_type,
+				scope_type,
+				filetype,
+				event.scope_text,
+				attached_content,
+				event.prompt_content,
+				scope_type
+			)
+		-- For other replacement intents, provide the full scope to transform
+		elseif event.intent and intent_mod.is_replacement(event.intent) then
 			user_prompt = string.format(
 				[[Here is a %s named "%s" in a %s file:
 
@@ -490,6 +526,18 @@ function M.complete(worker, response, error, usage)
 		})
 		return
 	end
+
+	-- Log the full raw LLM response (for debugging)
+	pcall(function()
+		local logs = require("codetyper.agent.logs")
+		logs.add({
+			type = "response",
+			message = "--- LLM Response ---",
+			data = {
+				raw_response = response,
+			},
+		})
+	end)
 
 	-- Clean the response (remove markdown, explanations, etc.)
 	local filetype = vim.fn.fnamemodify(worker.event.target_path or "", ":e")

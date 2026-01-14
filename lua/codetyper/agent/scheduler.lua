@@ -12,6 +12,9 @@ local worker = require("codetyper.agent.worker")
 local confidence_mod = require("codetyper.agent.confidence")
 local context_modal = require("codetyper.agent.context_modal")
 
+-- Setup context modal cleanup on exit
+context_modal.setup()
+
 --- Scheduler state
 local state = {
 	running = false,
@@ -24,6 +27,7 @@ local state = {
 		escalation_threshold = 0.7,
 		max_concurrent = 2,
 		completion_delay_ms = 100,
+		apply_delay_ms = 5000, -- Wait before applying code
 		remote_provider = "claude", -- Default fallback provider
 	},
 }
@@ -228,8 +232,19 @@ local function handle_worker_result(event, result)
 
 	queue.complete(event.id)
 
-	-- Schedule patch application
-	M.schedule_patch_flush()
+	-- Schedule patch application after delay (gives user time to review/cancel)
+	local delay = state.config.apply_delay_ms or 5000
+	pcall(function()
+		local logs = require("codetyper.agent.logs")
+		logs.add({
+			type = "info",
+			message = string.format("Code ready. Applying in %.1f seconds...", delay / 1000),
+		})
+	end)
+
+	vim.defer_fn(function()
+		M.schedule_patch_flush()
+	end, delay)
 end
 
 --- Dispatch next event from queue
@@ -291,11 +306,23 @@ local function dispatch_next()
 	end)
 end
 
+--- Track if we're already waiting to flush (avoid spam logs)
+local waiting_to_flush = false
+
 --- Schedule patch flush after delay (completion safety)
+--- Will keep retrying until safe to inject or no pending patches
 function M.schedule_patch_flush()
 	vim.defer_fn(function()
+		-- Check if there are any pending patches
+		local pending = patch.get_pending()
+		if #pending == 0 then
+			waiting_to_flush = false
+			return -- Nothing to apply
+		end
+
 		local safe, reason = M.is_safe_to_inject()
 		if safe then
+			waiting_to_flush = false
 			local applied, stale = patch.flush_pending()
 			if applied > 0 or stale > 0 then
 				pcall(function()
@@ -307,15 +334,20 @@ function M.schedule_patch_flush()
 				end)
 			end
 		else
-			-- Not safe yet, reschedule
-			pcall(function()
-				local logs = require("codetyper.agent.logs")
-				logs.add({
-					type = "debug",
-					message = string.format("Patch flush deferred: %s", reason or "unknown"),
-				})
-			end)
-			-- Will be retried on next InsertLeave or CursorHold
+			-- Not safe yet (user is typing), reschedule to try again
+			-- Only log once when we start waiting
+			if not waiting_to_flush then
+				waiting_to_flush = true
+				pcall(function()
+					local logs = require("codetyper.agent.logs")
+					logs.add({
+						type = "info",
+						message = "Waiting for user to finish typing before applying code...",
+					})
+				end)
+			end
+			-- Retry after a delay - keep waiting for user to finish typing
+			M.schedule_patch_flush()
 		end
 	end, state.config.completion_delay_ms)
 end
@@ -389,6 +421,15 @@ local function setup_autocmds()
 			worker.cancel_for_event(ev.buf)
 		end,
 		desc = "Cleanup on buffer delete",
+	})
+
+	-- Stop scheduler when exiting Neovim
+	vim.api.nvim_create_autocmd("VimLeavePre", {
+		group = augroup,
+		callback = function()
+			M.stop()
+		end,
+		desc = "Stop scheduler before exiting Neovim",
 	})
 end
 

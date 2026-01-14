@@ -332,10 +332,7 @@ function M.check_for_closed_prompt()
 					-- Clean prompt content (strip file references)
 					local cleaned = parser.clean_prompt(parser.strip_file_references(prompt.content))
 
-					-- Detect intent from prompt
-					local intent = intent_mod.detect(cleaned)
-
-					-- Resolve scope in target file (use prompt position to find enclosing scope)
+					-- Resolve scope in target file FIRST (need it to adjust intent)
 					local target_bufnr = vim.fn.bufnr(target_path)
 					if target_bufnr == -1 then
 						target_bufnr = bufnr
@@ -352,6 +349,24 @@ function M.check_for_closed_prompt()
 							start_line = scope.range.start_row,
 							end_line = scope.range.end_row,
 						}
+					end
+
+					-- Detect intent from prompt
+					local intent = intent_mod.detect(cleaned)
+
+					-- IMPORTANT: If prompt is inside a function/method and intent is "add",
+					-- override to "complete" since we're completing the function body
+					if scope and (scope.type == "function" or scope.type == "method") then
+						if intent.type == "add" or intent.action == "insert" or intent.action == "append" then
+							-- Override to complete the function instead of adding new code
+							intent = {
+								type = "complete",
+								scope_hint = "function",
+								confidence = intent.confidence,
+								action = "replace",
+								keywords = intent.keywords,
+							}
+						end
 					end
 
 					-- Determine priority based on intent
@@ -472,10 +487,7 @@ function M.check_all_prompts()
 				-- Clean prompt content (strip file references)
 				local cleaned = parser.clean_prompt(parser.strip_file_references(prompt.content))
 
-				-- Detect intent from prompt
-				local intent = intent_mod.detect(cleaned)
-
-				-- Resolve scope in target file
+				-- Resolve scope in target file FIRST (need it to adjust intent)
 				local target_bufnr = vim.fn.bufnr(target_path)
 				if target_bufnr == -1 then
 					target_bufnr = bufnr -- Use current buffer if target not loaded
@@ -492,6 +504,24 @@ function M.check_all_prompts()
 						start_line = scope.range.start_row,
 						end_line = scope.range.end_row,
 					}
+				end
+
+				-- Detect intent from prompt
+				local intent = intent_mod.detect(cleaned)
+
+				-- IMPORTANT: If prompt is inside a function/method and intent is "add",
+				-- override to "complete" since we're completing the function body
+				if scope and (scope.type == "function" or scope.type == "method") then
+					if intent.type == "add" or intent.action == "insert" or intent.action == "append" then
+						-- Override to complete the function instead of adding new code
+						intent = {
+							type = "complete",
+							scope_hint = "function",
+							confidence = intent.confidence,
+							action = "replace",
+							keywords = intent.keywords,
+						}
+					end
 				end
 
 				-- Determine priority based on intent

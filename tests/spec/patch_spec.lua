@@ -16,7 +16,7 @@ describe("patch", function()
 			local id2 = patch.generate_id()
 
 			assert.is_not.equals(id1, id2)
-			assert.is_true(id1:match("^patch_"))
+			assert.is_truthy(id1:match("^patch_"))
 		end)
 	end)
 
@@ -300,6 +300,72 @@ describe("patch", function()
 
 			assert.equals(1, cancelled)
 			assert.equals(1, #patch.get_pending())
+		end)
+	end)
+
+	describe("create_from_event", function()
+		it("should create patch with replace strategy for complete intent", function()
+			local event = {
+				id = "evt_123",
+				target_path = "/tmp/test.lua",
+				bufnr = 1,
+				range = { start_line = 5, end_line = 10 },
+				scope_range = { start_line = 3, end_line = 12 },
+				scope = { type = "function", name = "test_fn" },
+				intent = {
+					type = "complete",
+					action = "replace",
+					confidence = 0.9,
+					keywords = {},
+				},
+			}
+
+			local p = patch.create_from_event(event, "function code", 0.9)
+
+			assert.equals("replace", p.injection_strategy)
+			assert.is_truthy(p.injection_range)
+			assert.equals(3, p.injection_range.start_line)
+			assert.equals(12, p.injection_range.end_line)
+		end)
+
+		it("should create patch with append strategy for add intent", function()
+			local event = {
+				id = "evt_456",
+				target_path = "/tmp/test.lua",
+				bufnr = 1,
+				range = { start_line = 5, end_line = 10 },
+				intent = {
+					type = "add",
+					action = "append",
+					confidence = 0.8,
+					keywords = {},
+				},
+			}
+
+			local p = patch.create_from_event(event, "new function", 0.8)
+
+			assert.equals("append", p.injection_strategy)
+		end)
+
+		it("should create patch with insert strategy for insert action", function()
+			local event = {
+				id = "evt_789",
+				target_path = "/tmp/test.lua",
+				bufnr = 1,
+				range = { start_line = 5, end_line = 10 },
+				intent = {
+					type = "add",
+					action = "insert",
+					confidence = 0.8,
+					keywords = {},
+				},
+			}
+
+			local p = patch.create_from_event(event, "inserted code", 0.8)
+
+			assert.equals("insert", p.injection_strategy)
+			assert.is_truthy(p.injection_range)
+			assert.equals(5, p.injection_range.start_line)
 		end)
 	end)
 end)

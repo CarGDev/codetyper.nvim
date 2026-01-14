@@ -160,4 +160,18 @@ function M.is_open()
 	return state.win ~= nil and vim.api.nvim_win_is_valid(state.win)
 end
 
+--- Setup autocmds for the context modal
+function M.setup()
+	local group = vim.api.nvim_create_augroup("CodetypeContextModal", { clear = true })
+
+	-- Close context modal when exiting Neovim
+	vim.api.nvim_create_autocmd("VimLeavePre", {
+		group = group,
+		callback = function()
+			M.close()
+		end,
+		desc = "Close context modal before exiting Neovim",
+	})
+end
+
 return M

@@ -397,11 +397,30 @@ local function remove_prompt_tags(bufnr)
 	return removed
 end
 
+--- Check if it's safe to modify the buffer (not in insert mode)
+---@return boolean
+local function is_safe_to_modify()
+	local mode = vim.fn.mode()
+	-- Don't modify if in insert mode or completion is visible
+	if mode == "i" or mode == "ic" or mode == "ix" then
+		return false
+	end
+	if vim.fn.pumvisible() == 1 then
+		return false
+	end
+	return true
+end
+
 --- Apply a patch to the target buffer
 ---@param patch PatchCandidate
 ---@return boolean success
 ---@return string|nil error
 function M.apply(patch)
+	-- Check if safe to modify (not in insert mode)
+	if not is_safe_to_modify() then
+		return false, "user_typing"
+	end
+
 	-- Check staleness first
 	local is_stale, stale_reason = M.is_stale(patch)
 	if is_stale then
@@ -454,14 +473,87 @@ function M.apply(patch)
 	-- Apply based on strategy
 	local ok, err = pcall(function()
 		if patch.injection_strategy == "replace" and patch.injection_range then
-			-- For replace, we need to adjust the range since we removed tags
-			-- Just append to end since the original context might have shifted
-			vim.api.nvim_buf_set_lines(target_bufnr, line_count, line_count, false, code_lines)
+			-- Replace the scope range with the new code
+			-- The injection_range points to the function/method we're completing
+			local start_line = patch.injection_range.start_line
+			local end_line = patch.injection_range.end_line
+
+			-- Adjust for tag removal - find the new range by searching for the scope
+			-- After removing tags, line numbers may have shifted
+			-- Use the scope information to find the correct range
+			if patch.scope and patch.scope.type then
+				-- Try to find the scope using treesitter if available
+				local found_range = nil
+				pcall(function()
+					local ts_utils = require("nvim-treesitter.ts_utils")
+					local parsers = require("nvim-treesitter.parsers")
+					local parser = parsers.get_parser(target_bufnr)
+					if parser then
+						local tree = parser:parse()[1]
+						if tree then
+							local root = tree:root()
+							-- Find the function/method node that contains our original position
+							local function find_scope_node(node)
+								local node_type = node:type()
+								local is_scope = node_type:match("function")
+									or node_type:match("method")
+									or node_type:match("class")
+									or node_type:match("declaration")
+
+								if is_scope then
+									local s_row, _, e_row, _ = node:range()
+									-- Check if this scope roughly matches our expected range
+									if math.abs(s_row - (start_line - 1)) <= 5 then
+										found_range = { start_line = s_row + 1, end_line = e_row + 1 }
+										return true
+									end
+								end
+
+								for child in node:iter_children() do
+									if find_scope_node(child) then
+										return true
+									end
+								end
+								return false
+							end
+							find_scope_node(root)
+						end
+					end
+				end)
+
+				if found_range then
+					start_line = found_range.start_line
+					end_line = found_range.end_line
+				end
+			end
+
+			-- Clamp to valid range
+			start_line = math.max(1, start_line)
+			end_line = math.min(line_count, end_line)
+
+			-- Replace the range (0-indexed for nvim_buf_set_lines)
+			vim.api.nvim_buf_set_lines(target_bufnr, start_line - 1, end_line, false, code_lines)
+
+			pcall(function()
+				local logs = require("codetyper.agent.logs")
+				logs.add({
+					type = "info",
+					message = string.format("Replacing lines %d-%d with %d lines of code", start_line, end_line, #code_lines),
+				})
+			end)
 		elseif patch.injection_strategy == "insert" and patch.injection_range then
-			-- Insert at end since original position might have shifted
-			vim.api.nvim_buf_set_lines(target_bufnr, line_count, line_count, false, code_lines)
+			-- Insert at the specified location
+			local insert_line = patch.injection_range.start_line
+			insert_line = math.max(1, math.min(line_count + 1, insert_line))
+			vim.api.nvim_buf_set_lines(target_bufnr, insert_line - 1, insert_line - 1, false, code_lines)
 		else
 			-- Default: append to end
+			-- Check if last line is empty, if not add a blank line for spacing
+			local last_line = vim.api.nvim_buf_get_lines(target_bufnr, line_count - 1, line_count, false)[1] or ""
+			if last_line:match("%S") then
+				-- Last line has content, add blank line for spacing
+				table.insert(code_lines, 1, "")
+			end
 			vim.api.nvim_buf_set_lines(target_bufnr, line_count, line_count, false, code_lines)
 		end
 	end)
@@ -491,22 +583,27 @@ end
 --- Flush all pending patches that are safe to apply
 ---@return number applied_count
 ---@return number stale_count
+---@return number deferred_count
 function M.flush_pending()
 	local applied = 0
 	local stale = 0
+	local deferred = 0
 
-	for _, patch in ipairs(patches) do
-		if patch.status == "pending" then
-			local success, _ = M.apply(patch)
+	for _, p in ipairs(patches) do
+		if p.status == "pending" then
+			local success, err = M.apply(p)
 			if success then
 				applied = applied + 1
+			elseif err == "user_typing" then
+				-- Keep pending, will retry later
+				deferred = deferred + 1
 			else
 				stale = stale + 1
 			end
 		end
 	end
 
-	return applied, stale
+	return applied, stale, deferred
 end
 
 --- Cancel all pending patches for a buffer

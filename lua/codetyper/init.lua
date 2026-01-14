@@ -31,6 +31,7 @@ function M.setup(opts)
   local autocmds = require("codetyper.autocmds")
   local tree = require("codetyper.tree")
   local completion = require("codetyper.completion")
+  local logs_panel = require("codetyper.logs_panel")
 
   -- Register commands
   commands.setup()
@@ -40,6 +41,9 @@ function M.setup(opts)
 
   -- Setup file reference completion
   completion.setup()
+
+  -- Setup logs panel (handles VimLeavePre cleanup)
+  logs_panel.setup()
 
   -- Ensure .gitignore has coder files excluded
   gitignore.ensure_ignored()

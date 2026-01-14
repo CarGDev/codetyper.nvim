@@ -46,6 +46,16 @@
 - curl (for API calls)
 - One of: Claude API key, OpenAI API key, Gemini API key, GitHub Copilot, or Ollama running locally
 
+### Required Plugins
+
+- [plenary.nvim](https://github.com/nvim-lua/plenary.nvim) - Async utilities
+- [nvim-treesitter](https://github.com/nvim-treesitter/nvim-treesitter) - Scope detection for functions/methods
+
+### Optional Plugins
+
+- [nvim-treesitter-textobjects](https://github.com/nvim-treesitter/nvim-treesitter-textobjects) - Better text object support
+- [nui.nvim](https://github.com/MunifTanjim/nui.nvim) - UI components
+
 ---
 
 ## 📦 Installation
@@ -55,6 +65,12 @@
 ```lua
 {
   "cargdev/codetyper.nvim",
+  dependencies = {
+    "nvim-lua/plenary.nvim", -- Required: async utilities
+    "nvim-treesitter/nvim-treesitter", -- Required: scope detection
+    "nvim-treesitter/nvim-treesitter-textobjects", -- Optional: text objects
+    "MunifTanjim/nui.nvim", -- Optional: UI components
+  },
   cmd = { "Coder", "CoderOpen", "CoderToggle", "CoderAgent" },
   keys = {
     { "<leader>co", "<cmd>Coder open<cr>", desc = "Coder: Open" },
@@ -167,6 +183,7 @@ require("codetyper").setup({
     escalation_threshold = 0.7, -- Below this confidence, escalate to remote
     max_concurrent = 2, -- Max parallel workers
     completion_delay_ms = 100, -- Delay injection after completion popup
+    apply_delay_ms = 5000, -- Wait before applying code (ms), allows review
   },
 })
 ```
@@ -317,10 +334,53 @@ The plugin auto-detects prompt type:
 
 | Keywords | Type | Behavior |
 |----------|------|----------|
-| `refactor`, `rewrite` | Refactor | Replaces code |
-| `add`, `create`, `implement` | Add | Inserts new code |
-| `document`, `comment` | Document | Adds documentation |
+| `complete`, `finish`, `implement`, `todo` | Complete | Completes function body (replaces scope) |
+| `refactor`, `rewrite`, `simplify` | Refactor | Replaces code |
+| `fix`, `debug`, `bug`, `error` | Fix | Fixes bugs (replaces scope) |
+| `add`, `create`, `generate` | Add | Inserts new code |
+| `document`, `comment`, `jsdoc` | Document | Adds documentation |
+| `optimize`, `performance`, `faster` | Optimize | Optimizes code (replaces scope) |
 | `explain`, `what`, `how` | Explain | Shows explanation only |
+
+### Function Completion
+
+When you write a prompt **inside** a function body, the plugin uses Tree-sitter to detect the enclosing scope and automatically switches to "complete" mode:
+
+```typescript
+function getUserById(id: number): User | null {
+  /@ return the user from the database by id, handle not found case @/
+}
+```
+
+The LLM will complete the function body while keeping the exact same signature. The entire function scope is replaced with the completed version.
+
+---
+
+## 📊 Logs Panel
+
+The logs panel provides real-time visibility into LLM operations:
+
+### Features
+
+- **Generation Logs**: Shows all LLM requests, responses, and token usage
+- **Queue Display**: Shows pending and processing prompts
+- **Full Response View**: Complete LLM responses are logged for debugging
+- **Auto-cleanup**: Logs panel and queue windows automatically close when exiting Neovim
+
+### Opening the Logs Panel
+
+```vim
+:CoderLogs
+```
+
+The logs panel opens automatically when processing prompts with the scheduler enabled.
+
+### Keymaps
+
+| Key | Description |
+|-----|-------------|
+| `q` | Close logs panel |
+| `<Esc>` | Close logs panel |
 
 ---
 

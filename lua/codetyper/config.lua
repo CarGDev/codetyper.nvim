@@ -46,6 +46,7 @@ local defaults = {
     escalation_threshold = 0.7, -- Below this confidence, escalate to remote LLM
     max_concurrent = 2, -- Maximum concurrent workers
     completion_delay_ms = 100, -- Wait after completion popup closes
+    apply_delay_ms = 5000, -- Wait before removing tags and applying code (ms)
   },
 }
 

@@ -230,9 +230,22 @@ function M.format_entry(entry)
     response = "<",
     tool = "T",
     error = "!",
+    warning = "?",
+    success = "i",
+    queue = "Q",
+    patch = "P",
   })[entry.level] or "?"
 
-  return string.format("[%s] %s %s", entry.timestamp, level_prefix, entry.message)
+  local base = string.format("[%s] %s %s", entry.timestamp, level_prefix, entry.message)
+
+  -- If this is a response entry with raw_response, append the full response
+  if entry.data and entry.data.raw_response then
+    local response = entry.data.raw_response
+    -- Add separator and the full response
+    base = base .. "\n" .. string.rep("-", 40) .. "\n" .. response .. "\n" .. string.rep("-", 40)
+  end
+
+  return base
 end
 
 --- Estimate token count for a string (rough approximation)
