@@ -7,29 +7,36 @@
 
 ## ✨ Features
 
-- **🪟 Split View**: Work with your code and prompts side by side
-- **💬 Ask Panel**: Chat interface for questions and explanations (like avante.nvim)
-- **🏷️ Tag-based Prompts**: Use `/@` and `@/` tags to write natural language prompts
-- **🤖 Multiple LLM Providers**: Support for Claude API and Ollama (local)
-- **📝 Smart Injection**: Automatically detects prompt type (refactor, add, document)
-- **🔒 Git Integration**: Automatically adds `.coder.*` files and `.coder/` folder to `.gitignore`
-- **🌳 Project Tree Logging**: Automatically maintains a `tree.log` tracking your project structure
-- **⚡ Lazy Loading**: Only loads when you need it
+- 📐 **Split View**: Work with your code and prompts side by side
+- 💬 **Ask Panel**: Chat interface for questions and explanations
+- 🤖 **Agent Mode**: Autonomous coding agent with tool use (read, edit, write, bash)
+- 🏷️ **Tag-based Prompts**: Use `/@` and `@/` tags to write natural language prompts
+- ⚡ **Transform Commands**: Transform prompts inline without leaving your file
+- 🔌 **Multiple LLM Providers**: Claude, OpenAI, Gemini, Copilot, and Ollama (local)
+- 📋 **Event-Driven Scheduler**: Queue-based processing with optimistic execution
+- 🎯 **Tree-sitter Scope Resolution**: Smart context extraction for functions/methods
+- 🧠 **Intent Detection**: Understands complete, refactor, fix, add, document intents
+- 📊 **Confidence Scoring**: Automatic escalation from local to remote LLMs
+- 🛡️ **Completion-Aware**: Safe injection that doesn't fight with autocomplete
+- 📁 **Auto-Index**: Automatically create coder companion files on file open
+- 📜 **Logs Panel**: Real-time visibility into LLM requests and token usage
+- 🔒 **Git Integration**: Automatically adds `.coder.*` files to `.gitignore`
+- 🌳 **Project Tree Logging**: Maintains a `tree.log` tracking your project structure
 
 ---
 
-## 📋 Table of Contents
+## 📚 Table of Contents
 
 - [Requirements](#-requirements)
 - [Installation](#-installation)
 - [Quick Start](#-quick-start)
-- [Configuration](#%EF%B8%8F-configuration)
+- [Configuration](#-configuration)
+- [LLM Providers](#-llm-providers)
 - [Commands Reference](#-commands-reference)
 - [Usage Guide](#-usage-guide)
-- [How It Works](#%EF%B8%8F-how-it-works)
-- [Keymaps](#-keymaps-suggested)
+- [Agent Mode](#-agent-mode)
+- [Keymaps](#-keymaps)
 - [Health Check](#-health-check)
-- [Contributing](#-contributing)
 
 ---
 
@@ -37,7 +44,7 @@
 
 - Neovim >= 0.8.0
 - curl (for API calls)
-- Claude API key **OR** Ollama running locally
+- One of: Claude API key, OpenAI API key, Gemini API key, GitHub Copilot, or Ollama running locally
 
 ---
 
@@ -48,16 +55,16 @@
 ```lua
 {
   "cargdev/codetyper.nvim",
-  cmd = { "Coder", "CoderOpen", "CoderToggle" },
+  cmd = { "Coder", "CoderOpen", "CoderToggle", "CoderAgent" },
   keys = {
     { "<leader>co", "<cmd>Coder open<cr>", desc = "Coder: Open" },
     { "<leader>ct", "<cmd>Coder toggle<cr>", desc = "Coder: Toggle" },
-    { "<leader>cp", "<cmd>Coder process<cr>", desc = "Coder: Process" },
+    { "<leader>ca", "<cmd>CoderAgentToggle<cr>", desc = "Coder: Agent" },
   },
   config = function()
     require("codetyper").setup({
       llm = {
-        provider = "claude", -- or "ollama"
+        provider = "claude", -- or "openai", "gemini", "copilot", "ollama"
       },
     })
   end,
@@ -93,8 +100,6 @@ using regex, return boolean @/
 
 **3. The LLM generates code and injects it into `utils.ts` (right panel)**
 
-That's it! You're now coding with AI assistance. 🎉
-
 ---
 
 ## ⚙️ Configuration
@@ -103,37 +108,66 @@ That's it! You're now coding with AI assistance. 🎉
 require("codetyper").setup({
   -- LLM Provider Configuration
   llm = {
-    provider = "claude", -- "claude" or "ollama"
-    
+    provider = "claude", -- "claude", "openai", "gemini", "copilot", or "ollama"
+
     -- Claude (Anthropic) settings
     claude = {
       api_key = nil, -- Uses ANTHROPIC_API_KEY env var if nil
       model = "claude-sonnet-4-20250514",
     },
-    
+
+    -- OpenAI settings
+    openai = {
+      api_key = nil, -- Uses OPENAI_API_KEY env var if nil
+      model = "gpt-4o",
+      endpoint = nil, -- Custom endpoint (Azure, OpenRouter, etc.)
+    },
+
+    -- Google Gemini settings
+    gemini = {
+      api_key = nil, -- Uses GEMINI_API_KEY env var if nil
+      model = "gemini-2.0-flash",
+    },
+
+    -- GitHub Copilot settings (uses copilot.lua/copilot.vim auth)
+    copilot = {
+      model = "gpt-4o",
+    },
+
     -- Ollama (local) settings
     ollama = {
       host = "http://localhost:11434",
-      model = "codellama",
+      model = "deepseek-coder:6.7b",
     },
   },
-  
+
   -- Window Configuration
   window = {
-    width = 0.25,         -- 25% of screen width (1/4) for Ask panel
-    position = "left",    -- "left" or "right"
-    border = "rounded",   -- Border style for floating windows
+    width = 25, -- Percentage of screen width (25 = 25%)
+    position = "left",
+    border = "rounded",
   },
-  
+
   -- Prompt Tag Patterns
   patterns = {
-    open_tag = "/@",      -- Tag to start a prompt
-    close_tag = "@/",     -- Tag to end a prompt
+    open_tag = "/@",
+    close_tag = "@/",
     file_pattern = "*.coder.*",
   },
-  
+
   -- Auto Features
-  auto_gitignore = true,  -- Automatically add coder files to .gitignore
+  auto_gitignore = true, -- Automatically add coder files to .gitignore
+  auto_open_ask = true, -- Auto-open Ask panel on startup
+  auto_index = false, -- Auto-create coder companion files on file open
+
+  -- Event-Driven Scheduler
+  scheduler = {
+    enabled = true, -- Enable event-driven prompt processing
+    ollama_scout = true, -- Use Ollama for first attempt (fast local)
+    escalation_threshold = 0.7, -- Below this confidence, escalate to remote
+    max_concurrent = 2, -- Max parallel workers
+    completion_delay_ms = 100, -- Delay injection after completion popup
+  },
 })
 ```
 
@@ -141,334 +175,238 @@ require("codetyper").setup({
 
 | Variable | Description |
 |----------|-------------|
-| `ANTHROPIC_API_KEY` | Your Claude API key (if not set in config) |
+| `ANTHROPIC_API_KEY` | Claude API key |
+| `OPENAI_API_KEY` | OpenAI API key |
+| `GEMINI_API_KEY` | Google Gemini API key |
 
 ---
 
-## 📜 Commands Reference
+## 🔌 LLM Providers
 
-### Main Command
+### Claude (Anthropic)
+Best for complex reasoning and code generation.
+```lua
+llm = {
+  provider = "claude",
+  claude = { model = "claude-sonnet-4-20250514" },
+}
+```
+
+### OpenAI
+Supports custom endpoints for Azure, OpenRouter, etc.
+```lua
+llm = {
+  provider = "openai",
+  openai = {
+    model = "gpt-4o",
+    endpoint = "https://api.openai.com/v1/chat/completions", -- optional
+  },
+}
+```
+
+### Google Gemini
+Fast and capable.
+```lua
+llm = {
+  provider = "gemini",
+  gemini = { model = "gemini-2.0-flash" },
+}
+```
+
+### GitHub Copilot
+Uses your existing Copilot subscription (requires copilot.lua or copilot.vim).
+```lua
+llm = {
+  provider = "copilot",
+  copilot = { model = "gpt-4o" },
+}
+```
+
+### Ollama (Local)
+Run models locally with no API costs.
+```lua
+llm = {
+  provider = "ollama",
+  ollama = {
+    host = "http://localhost:11434",
+    model = "deepseek-coder:6.7b",
+  },
+}
+```
+
+---
+
+## 📝 Commands Reference
+
+### Main Commands
 
 | Command | Description |
 |---------|-------------|
-| `:Coder {subcommand}` | Main command with subcommands below |
+| `:Coder {subcommand}` | Main command with subcommands |
+| `:CoderOpen` | Open the coder split view |
+| `:CoderClose` | Close the coder split view |
+| `:CoderToggle` | Toggle the coder split view |
+| `:CoderProcess` | Process the last prompt |
 
-### Subcommands
+### Ask Panel
 
-| Subcommand | Alias | Description |
-|------------|-------|-------------|
-| `open` | `:CoderOpen` | Open the coder split view for current file |
-| `close` | `:CoderClose` | Close the coder split view |
-| `toggle` | `:CoderToggle` | Toggle the coder split view on/off |
-| `process` | `:CoderProcess` | Process the last prompt and generate code |
-| `status` | - | Show plugin status and project statistics |
-| `focus` | - | Switch focus between coder and target windows |
-| `tree` | `:CoderTree` | Manually refresh the tree.log file |
-| `tree-view` | `:CoderTreeView` | Open tree.log in a readonly split |
-| `ask` | `:CoderAsk` | Open the Ask panel for questions |
-| `ask-toggle` | `:CoderAskToggle` | Toggle the Ask panel |
-| `ask-clear` | `:CoderAskClear` | Clear Ask chat history |
+| Command | Description |
+|---------|-------------|
+| `:CoderAsk` | Open the Ask panel |
+| `:CoderAskToggle` | Toggle the Ask panel |
+| `:CoderAskClear` | Clear chat history |
 
----
+### Agent Mode
 
-### Command Details
+| Command | Description |
+|---------|-------------|
+| `:CoderAgent` | Open the Agent panel |
+| `:CoderAgentToggle` | Toggle the Agent panel |
+| `:CoderAgentStop` | Stop the running agent |
 
-#### `:Coder open` / `:CoderOpen`
+### Transform Commands
 
-Opens a split view with:
-- **Left panel**: The coder file (`*.coder.*`) where you write prompts
-- **Right panel**: The target file where generated code is injected
+| Command | Description |
+|---------|-------------|
+| `:CoderTransform` | Transform all /@ @/ tags in file |
+| `:CoderTransformCursor` | Transform tag at cursor position |
+| `:CoderTransformVisual` | Transform selected tags (visual mode) |
 
-```vim
-" If you have index.ts open:
-:Coder open
-" Creates/opens index.coder.ts on the left
-```
+### Utility Commands
 
-**Behavior:**
-- If no file is in buffer, opens a file picker (Telescope if available)
-- Creates the coder file if it doesn't exist
-- Automatically sets the correct filetype for syntax highlighting
-
----
-
-#### `:Coder close` / `:CoderClose`
-
-Closes the coder split view, keeping only your target file open.
-
-```vim
-:Coder close
-```
-
----
-
-#### `:Coder toggle` / `:CoderToggle`
-
-Toggles the coder view on or off. Useful for quick switching.
-
-```vim
-:Coder toggle
-```
-
----
-
-#### `:Coder process` / `:CoderProcess`
-
-Processes the last completed prompt in the coder file and sends it to the LLM.
-
-```vim
-" After writing a prompt and closing with @/
-:Coder process
-```
-
-**What happens:**
-1. Finds the last `/@...@/` prompt in the coder buffer
-2. Detects the prompt type (refactor, add, document, etc.)
-3. Sends it to the configured LLM with file context
-4. Injects the generated code into the target file
-
----
-
-#### `:Coder status`
-
-Displays current plugin status including:
-- LLM provider and configuration
-- API key status (configured/not set)
-- Window settings
-- Project statistics (files, directories)
-- Tree log path
-
-```vim
-:Coder status
-```
-
----
-
-#### `:Coder focus`
-
-Switches focus between the coder window and target window.
-
-```vim
-:Coder focus
-" Press again to switch back
-```
-
----
-
-#### `:Coder tree` / `:CoderTree`
-
-Manually refreshes the `.coder/tree.log` file with current project structure.
-
-```vim
-:Coder tree
-```
-
-> Note: The tree is automatically updated on file save/create/delete.
-
----
-
-#### `:Coder tree-view` / `:CoderTreeView`
-
-Opens the tree.log file in a readonly split for viewing your project structure.
-
-```vim
-:Coder tree-view
-```
-
----
-
-#### `:Coder ask` / `:CoderAsk`
-
-Opens the **Ask panel** - a chat interface similar to avante.nvim for asking questions about your code, getting explanations, or general programming help.
-
-```vim
-:Coder ask
-```
-
-**The Ask Panel Layout:**
-```
-┌───────────────────┬─────────────────────────────────────────┐
-│  💬 Chat (output) │                                         │
-│                   │         Your code file                  │
-│  ┌─ 👤 You ────   │                                         │
-│  │ What is this?  │                                         │
-│                   │                                         │
-│  ┌─ 🤖 AI ─────   │                                         │
-│  │ This is...     │                                         │
-├───────────────────┤                                         │
-│  ✏️  Input        │                                         │
-│  Type question... │                                         │
-└───────────────────┴─────────────────────────────────────────┘
-      (1/4 width)                  (3/4 width)
-```
-
-> **Note:** The Ask panel is fixed at 1/4 (25%) of the screen width.
-
-**Ask Panel Keymaps:**
-
-| Key | Mode | Description |
-|-----|------|-------------|
-| `@` | Insert | Attach/reference a file |
-| `Ctrl+Enter` | Insert/Normal | Submit question |
-| `Ctrl+n` | Insert/Normal | Start new chat (clear all) |
-| `Ctrl+f` | Insert/Normal | Add current file as context |
-| `Ctrl+h/j/k/l` | Normal/Insert | Navigate between windows |
-| `q` | Normal | Close panel (closes both windows) |
-| `K` / `J` | Normal | Jump between output/input |
-| `Y` | Normal | Copy last response to clipboard |
-
----
-
-#### `:Coder ask-toggle` / `:CoderAskToggle`
-
-Toggles the Ask panel on or off.
-
-```vim
-:Coder ask-toggle
-```
-
----
-
-#### `:Coder ask-clear` / `:CoderAskClear`
-
-Clears the Ask panel chat history.
-
-```vim
-:Coder ask-clear
-```
+| Command | Description |
+|---------|-------------|
+| `:CoderIndex` | Open coder companion for current file |
+| `:CoderLogs` | Toggle logs panel |
+| `:CoderType` | Switch between Ask/Agent modes |
+| `:CoderTree` | Refresh tree.log |
+| `:CoderTreeView` | View tree.log |
 
 ---
 
 ## 📖 Usage Guide
 
-### Step 1: Open Your Project File
+### Tag-Based Prompts
 
-Open any source file you want to work with:
+Write prompts in your coder file using `/@` and `@/` tags:
 
-```vim
-:e src/components/Button.tsx
-```
-
-### Step 2: Start Coder View
-
-```vim
-:Coder open
-```
-
-This creates a split:
-```
-┌─────────────────────────┬─────────────────────────┐
-│  Button.coder.tsx       │  Button.tsx             │
-│  (write prompts here)   │  (your actual code)     │
-└─────────────────────────┴─────────────────────────┘
-```
-
-### Step 3: Write Your Prompt
-
-In the coder file (left), write your prompt using tags:
-
-```tsx
+```typescript
 /@ Create a Button component with the following props:
 - variant: 'primary' | 'secondary' | 'danger'
 - size: 'sm' | 'md' | 'lg'
 - disabled: boolean
-- onClick: function
 Use Tailwind CSS for styling @/
 ```
 
-### Step 4: Process the Prompt
+When you close the tag with `@/`, the prompt is automatically processed.
 
-When you close the tag with `@/`, you'll be prompted to process. Or manually:
+### Transform Commands
 
-```vim
-:Coder process
+Transform prompts inline without the split view:
+
+```typescript
+// In your source file:
+/@ Add input validation for email and password @/
+
+// Run :CoderTransformCursor to transform the prompt at cursor
 ```
-
-### Step 5: Review Generated Code
-
-The generated code appears in your target file (right panel). Review, edit if needed, and save!
-
----
 
 ### Prompt Types
 
-The plugin automatically detects what you want based on keywords:
+The plugin auto-detects prompt type:
 
 | Keywords | Type | Behavior |
 |----------|------|----------|
-| `refactor`, `rewrite`, `change` | Refactor | Replaces code in target file |
-| `add`, `create`, `implement`, `new` | Add | Inserts code at cursor position |
-| `document`, `comment`, `jsdoc` | Document | Adds documentation above code |
-| `explain`, `what`, `how` | Explain | Shows explanation (no injection) |
-| *(other)* | Generic | Prompts you for injection method |
+| `refactor`, `rewrite` | Refactor | Replaces code |
+| `add`, `create`, `implement` | Add | Inserts new code |
+| `document`, `comment` | Document | Adds documentation |
+| `explain`, `what`, `how` | Explain | Shows explanation only |
 
 ---
 
-### Prompt Examples
+## 🤖 Agent Mode
 
-#### Creating New Functions
+The Agent mode provides an autonomous coding assistant with tool access:
 
-```typescript
-/@ Create an async function fetchUsers that:
-- Takes a page number and limit as parameters
-- Fetches from /api/users endpoint
-- Returns typed User[] array
-- Handles errors gracefully @/
-```
+### Available Tools
 
-#### Refactoring Code
+- **read_file**: Read file contents
+- **edit_file**: Edit files with find/replace
+- **write_file**: Create or overwrite files
+- **bash**: Execute shell commands
 
-```typescript
-/@ Refactor the handleSubmit function to:
-- Use async/await instead of .then()
-- Add proper TypeScript types
-- Extract validation logic into separate function @/
-```
+### Using Agent Mode
 
-#### Adding Documentation
+1. Open the agent panel: `:CoderAgent` or `<leader>ca`
+2. Describe what you want to accomplish
+3. The agent will use tools to complete the task
+4. Review changes before they're applied
 
-```typescript
-/@ Add JSDoc documentation to all exported functions
-including @param, @returns, and @example tags @/
-```
+### Agent Keymaps
 
-#### Implementing Patterns
+| Key | Description |
+|-----|-------------|
+| `<CR>` | Submit message |
+| `Ctrl+c` | Stop agent execution |
+| `q` | Close agent panel |
 
-```typescript
-/@ Implement the singleton pattern for DatabaseConnection class
-with lazy initialization and thread safety @/
-```
+---
 
-#### Adding Tests
+## ⌨️ Keymaps
 
-```typescript
-/@ Create unit tests for the calculateTotal function
-using Jest, cover edge cases:
-- Empty array
-- Negative numbers
-- Large numbers @/
+### Default Keymaps (auto-configured)
+
+| Key | Mode | Description |
+|-----|------|-------------|
+| `<leader>ctt` | Normal | Transform tag at cursor |
+| `<leader>ctt` | Visual | Transform selected tags |
+| `<leader>ctT` | Normal | Transform all tags in file |
+| `<leader>ca` | Normal | Toggle Agent panel |
+| `<leader>ci` | Normal | Open coder companion (index) |
+
+### Ask Panel Keymaps
+
+| Key | Description |
+|-----|-------------|
+| `@` | Attach/reference a file |
+| `Ctrl+Enter` | Submit question |
+| `Ctrl+n` | Start new chat |
+| `Ctrl+f` | Add current file as context |
+| `q` | Close panel |
+| `Y` | Copy last response |
+
+### Suggested Additional Keymaps
+
+```lua
+local map = vim.keymap.set
+
+map("n", "<leader>co", "<cmd>Coder open<cr>", { desc = "Coder: Open" })
+map("n", "<leader>cc", "<cmd>Coder close<cr>", { desc = "Coder: Close" })
+map("n", "<leader>ct", "<cmd>Coder toggle<cr>", { desc = "Coder: Toggle" })
+map("n", "<leader>cp", "<cmd>Coder process<cr>", { desc = "Coder: Process" })
+map("n", "<leader>cs", "<cmd>Coder status<cr>", { desc = "Coder: Status" })
 ```
 
 ---
 
-## 🏗️ How It Works
+## 🏥 Health Check
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                          Neovim                                  │
-├────────────────────────────┬────────────────────────────────────┤
-│   src/api.coder.ts         │        src/api.ts                  │
-│                            │                                    │
-│   /@ Create a REST client  │   // Generated code appears here   │
-│   class with methods for   │   export class RestClient {        │
-│   GET, POST, PUT, DELETE   │     async get<T>(url: string) {    │
-│   with TypeScript          │       // ...                       │
-│   generics @/              │     }                              │
-│                            │   }                                │
-└────────────────────────────┴────────────────────────────────────┘
+Verify your setup:
+
+```vim
+:checkhealth codetyper
 ```
 
-### File Structure
+This checks:
+- Neovim version
+- curl availability
+- LLM configuration
+- API key status
+- Telescope availability (optional)
+
+---
+
+## 📁 File Structure
 
 ```
 your-project/
@@ -477,104 +415,8 @@ your-project/
 ├── src/
 │   ├── index.ts              # Your source file
 │   ├── index.coder.ts        # Coder file (gitignored)
-│   ├── utils.ts
-│   └── utils.coder.ts
 └── .gitignore                # Auto-updated with coder patterns
 ```
-
-### The Flow
-
-1. **You write prompts** in `*.coder.*` files using `/@...@/` tags
-2. **Plugin detects** when you close a prompt tag
-3. **Context is gathered** from the target file (content, language, etc.)
-4. **LLM generates** code based on your prompt and context
-5. **Code is injected** into the target file based on prompt type
-6. **You review and save** - you're always in control!
-
-### Project Tree Logging
-
-The `.coder/tree.log` file is automatically maintained:
-
-```
-# Project Tree: my-project
-# Generated: 2026-01-11 15:30:45
-# By: Codetyper.nvim
-
-📦 my-project
-├── 📁 src
-│   ├── 📘 index.ts
-│   ├── 📘 utils.ts
-│   └── 📁 components
-│       └── ⚛️  Button.tsx
-├── 📋 package.json
-└── 📝 README.md
-```
-
-Updated automatically when you:
-- Create new files
-- Save files
-- Delete files
-
----
-
-## 🔑 Keymaps (Suggested)
-
-Add these to your Neovim config:
-
-```lua
--- Codetyper keymaps
-local map = vim.keymap.set
-
--- Coder view
-map("n", "<leader>co", "<cmd>Coder open<cr>", { desc = "Coder: Open view" })
-map("n", "<leader>cc", "<cmd>Coder close<cr>", { desc = "Coder: Close view" })
-map("n", "<leader>ct", "<cmd>Coder toggle<cr>", { desc = "Coder: Toggle view" })
-map("n", "<leader>cp", "<cmd>Coder process<cr>", { desc = "Coder: Process prompt" })
-map("n", "<leader>cs", "<cmd>Coder status<cr>", { desc = "Coder: Show status" })
-map("n", "<leader>cf", "<cmd>Coder focus<cr>", { desc = "Coder: Switch focus" })
-map("n", "<leader>cv", "<cmd>Coder tree-view<cr>", { desc = "Coder: View tree" })
-
--- Ask panel
-map("n", "<leader>ca", "<cmd>Coder ask<cr>", { desc = "Coder: Open Ask" })
-map("n", "<leader>cA", "<cmd>Coder ask-toggle<cr>", { desc = "Coder: Toggle Ask" })
-map("n", "<leader>cx", "<cmd>Coder ask-clear<cr>", { desc = "Coder: Clear Ask" })
-```
-
-Or with [which-key.nvim](https://github.com/folke/which-key.nvim):
-
-```lua
-local wk = require("which-key")
-wk.register({
-  ["<leader>c"] = {
-    name = "+coder",
-    o = { "<cmd>Coder open<cr>", "Open view" },
-    c = { "<cmd>Coder close<cr>", "Close view" },
-    t = { "<cmd>Coder toggle<cr>", "Toggle view" },
-    p = { "<cmd>Coder process<cr>", "Process prompt" },
-    s = { "<cmd>Coder status<cr>", "Show status" },
-    f = { "<cmd>Coder focus<cr>", "Switch focus" },
-    v = { "<cmd>Coder tree-view<cr>", "View tree" },
-  },
-})
-```
-
----
-
-## 🔧 Health Check
-
-Verify your setup is correct:
-
-```vim
-:checkhealth codetyper
-```
-
-This checks:
-- ✅ Neovim version
-- ✅ curl availability
-- ✅ LLM configuration
-- ✅ API key status
-- ✅ Telescope availability (optional)
-- ✅ Gitignore configuration
 
 ---
 
@@ -590,13 +432,13 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ---
 
-## 👤 Author
+## 👨‍💻 Author
 
 **cargdev**
 
-- 🌐 Website: [cargdev.io](https://cargdev.io)
-- 📝 Blog: [blog.cargdev.io](https://blog.cargdev.io)
-- 📧 Email: carlos.gutierrez@carg.dev
+- Website: [cargdev.io](https://cargdev.io)
+- Blog: [blog.cargdev.io](https://blog.cargdev.io)
+- Email: carlos.gutierrez@carg.dev
 
 ---
 

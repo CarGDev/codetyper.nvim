@@ -788,6 +788,12 @@ function M.setup()
     cmd_logs_toggle()
   end, { desc = "Toggle logs panel" })
 
+  -- Index command - open coder companion for current file
+  vim.api.nvim_create_user_command("CoderIndex", function()
+    local autocmds = require("codetyper.autocmds")
+    autocmds.open_coder_companion()
+  end, { desc = "Open coder companion for current file" })
+
   -- Setup default keymaps
   M.setup_keymaps()
 end
@@ -816,6 +822,12 @@ function M.setup_keymaps()
   vim.keymap.set("n", "<leader>ca", "<cmd>CoderAgentToggle<CR>", {
     silent = true,
     desc = "Coder: Toggle Agent panel"
+  })
+
+  -- Index keymap - open coder companion
+  vim.keymap.set("n", "<leader>ci", "<cmd>CoderIndex<CR>", {
+    silent = true,
+    desc = "Coder: Open coder companion for file"
   })
 end
 

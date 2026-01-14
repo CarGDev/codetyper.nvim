@@ -1,128 +1,191 @@
 ---@mod codetyper.prompts.refactor Refactoring prompts for Codetyper.nvim
 ---
---- These prompts are used for code refactoring operations.
+--- These prompts are used for scoped, non-destructive refactoring operations.
 
 local M = {}
 
 --- Prompt for general refactoring
-M.general = [[Refactor this code to improve its quality:
+M.general = [[You are refactoring a SPECIFIC REGION of existing code.
 
-{{code}}
+The provided code will be REPLACED by your output.
 
-Focus on:
-- Readability
-- Maintainability
-- Following best practices
-- Keeping the same functionality
+Goals:
+- Improve readability and maintainability
+- Preserve ALL existing behavior
+- Follow the coding style already present
+- Keep changes minimal and justified
+
+Constraints:
+- Do NOT change public APIs unless explicitly required
+- Do NOT introduce new dependencies
+- Do NOT refactor unrelated logic
+- Do NOT add comments unless explicitly requested
+
+OUTPUT ONLY THE FULL REFACTORED CODE FOR THIS REGION. No explanations, no markdown, no code fences.
 ]]
 
 --- Prompt for extracting a function
-M.extract_function = [[Extract a function from this code:
+M.extract_function = [[You are extracting a function from an EXISTING CODE REGION.
 
-{{code}}
+The provided code will be REPLACED by your output.
 
-The function should:
+Instructions:
 {{description}}
 
-Requirements:
-- Give it a meaningful name
-- Include proper parameters
-- Return appropriate values
+Constraints:
+- Preserve behavior exactly
+- Extract ONLY the logic required
+- Choose a name consistent with existing naming conventions
+- Do NOT introduce new abstractions beyond the extracted function
+- Keep parameter order and data flow explicit
+
+OUTPUT ONLY THE FULL UPDATED CODE FOR THIS REGION. No explanations, no markdown, no code fences.
 ]]
 
 --- Prompt for simplifying code
-M.simplify = [[Simplify this code while maintaining functionality:
+M.simplify = [[You are simplifying an EXISTING CODE REGION.
 
-{{code}}
+The provided code will be REPLACED by your output.
 
 Goals:
-- Reduce complexity
+- Reduce unnecessary complexity
 - Remove redundancy
-- Improve readability
-- Keep all existing behavior
+- Improve clarity without changing behavior
+
+Constraints:
+- Do NOT change function signatures unless required
+- Do NOT alter control flow semantics
+- Do NOT refactor unrelated logic
+
+OUTPUT ONLY THE FULL SIMPLIFIED CODE FOR THIS REGION. No explanations, no markdown, no code fences.
 ]]
 
 --- Prompt for converting to async/await
-M.async_await = [[Convert this code to use async/await:
+M.async_await = [[You are converting an EXISTING CODE REGION to async/await syntax.
 
-{{code}}
+The provided code will be REPLACED by your output.
 
 Requirements:
-- Convert all promises to async/await
-- Maintain error handling
-- Keep the same functionality
+- Convert promise-based logic to async/await
+- Preserve existing error handling semantics
+- Maintain return values and control flow
+- Match existing async patterns in the file
+
+Constraints:
+- Do NOT introduce new behavior
+- Do NOT change public APIs unless required
+- Do NOT refactor unrelated code
+
+OUTPUT ONLY THE FULL UPDATED CODE FOR THIS REGION. No explanations, no markdown, no code fences.
 ]]
 
 --- Prompt for adding error handling
-M.add_error_handling = [[Add proper error handling to this code:
+M.add_error_handling = [[You are adding error handling to an EXISTING CODE REGION.
 
-{{code}}
+The provided code will be REPLACED by your output.
 
 Requirements:
-- Handle all potential errors
-- Use appropriate error types
-- Add meaningful error messages
-- Don't change core functionality
+- Handle realistic failure cases for the existing logic
+- Follow error-handling patterns already used in the file
+- Preserve normal execution paths
+
+Constraints:
+- Do NOT change core logic
+- Do NOT introduce new error types unless necessary
+- Do NOT add logging unless explicitly requested
+
+OUTPUT ONLY THE FULL UPDATED CODE FOR THIS REGION. No explanations, no markdown, no code fences.
 ]]
 
 --- Prompt for improving performance
-M.optimize_performance = [[Optimize this code for better performance:
+M.optimize_performance = [[You are optimizing an EXISTING CODE REGION for performance.
 
-{{code}}
+The provided code will be REPLACED by your output.
 
-Focus on:
-- Algorithm efficiency
-- Memory usage
-- Reducing unnecessary operations
-- Maintaining readability
+Goals:
+- Improve algorithmic or operational efficiency
+- Reduce unnecessary work or allocations
+- Preserve readability where possible
+
+Constraints:
+- Preserve ALL existing behavior
+- Do NOT introduce premature optimization
+- Do NOT change public APIs
+- Do NOT refactor unrelated logic
+
+OUTPUT ONLY THE FULL OPTIMIZED CODE FOR THIS REGION. No explanations, no markdown, no code fences.
 ]]
 
---- Prompt for converting to TypeScript
-M.convert_to_typescript = [[Convert this JavaScript code to TypeScript:
+--- Prompt for converting JavaScript to TypeScript
+M.convert_to_typescript = [[You are converting an EXISTING JavaScript CODE REGION to TypeScript.
 
-{{code}}
+The provided code will be REPLACED by your output.
 
 Requirements:
-- Add proper type annotations
-- Use interfaces where appropriate
-- Handle null/undefined properly
-- Maintain all functionality
+- Add accurate type annotations
+- Use interfaces or types only when they clarify intent
+- Handle null and undefined explicitly where required
+
+Constraints:
+- Do NOT change runtime behavior
+- Do NOT introduce types that alter semantics
+- Match TypeScript style already used in the project
+
+OUTPUT ONLY THE FULL TYPESCRIPT CODE FOR THIS REGION. No explanations, no markdown, no code fences.
 ]]
 
---- Prompt for applying design pattern
-M.apply_pattern = [[Refactor this code to use the {{pattern}} pattern:
+--- Prompt for applying a design pattern
+M.apply_pattern = [[You are refactoring an EXISTING CODE REGION to apply the {{pattern}} pattern.
 
-{{code}}
+The provided code will be REPLACED by your output.
 
 Requirements:
-- Properly implement the pattern
-- Maintain existing functionality
-- Improve code organization
+- Apply the pattern correctly and idiomatically
+- Preserve ALL existing behavior
+- Improve structure only where justified by the pattern
+
+Constraints:
+- Do NOT over-abstract
+- Do NOT introduce unnecessary indirection
+- Do NOT modify unrelated code
+
+OUTPUT ONLY THE FULL UPDATED CODE FOR THIS REGION. No explanations, no markdown, no code fences.
 ]]
 
 --- Prompt for splitting a large function
-M.split_function = [[Split this large function into smaller, focused functions:
+M.split_function = [[You are splitting an EXISTING LARGE FUNCTION into smaller functions.
 
-{{code}}
+The provided code will be REPLACED by your output.
 
 Goals:
-- Single responsibility per function
-- Clear function names
-- Proper parameter passing
-- Maintain all functionality
+- Each function has a single, clear responsibility
+- Names reflect existing naming conventions
+- Data flow remains explicit and understandable
+
+Constraints:
+- Preserve external behavior exactly
+- Do NOT change the public API unless required
+- Do NOT introduce unnecessary abstraction layers
+
+OUTPUT ONLY THE FULL UPDATED CODE FOR THIS REGION. No explanations, no markdown, no code fences.
 ]]
 
 --- Prompt for removing code smells
-M.remove_code_smells = [[Refactor this code to remove code smells:
+M.remove_code_smells = [[You are refactoring an EXISTING CODE REGION to remove code smells.
 
-{{code}}
+The provided code will be REPLACED by your output.
 
-Look for and fix:
-- Long methods
-- Duplicated code
-- Magic numbers
-- Deep nesting
-- Other anti-patterns
+Focus on:
+- Reducing duplication
+- Simplifying long or deeply nested logic
+- Removing magic numbers where appropriate
+
+Constraints:
+- Preserve ALL existing behavior
+- Do NOT introduce speculative refactors
+- Do NOT refactor beyond the provided region
+
+OUTPUT ONLY THE FULL CLEANED CODE FOR THIS REGION. No explanations, no markdown, no code fences.
 ]]
 
 return M

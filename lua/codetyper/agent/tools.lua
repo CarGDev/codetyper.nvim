@@ -97,6 +97,23 @@ function M.to_claude_format()
   return tools
 end
 
+--- Convert tool definitions to OpenAI API format
+---@return table[] Tools in OpenAI's expected format
+function M.to_openai_format()
+  local tools = {}
+  for _, tool in pairs(M.definitions) do
+    table.insert(tools, {
+      type = "function",
+      ["function"] = {
+        name = tool.name,
+        description = tool.description,
+        parameters = tool.parameters,
+      },
+    })
+  end
+  return tools
+end
+
 --- Convert tool definitions to prompt format for Ollama
 ---@return string Formatted tool descriptions for system prompt
 function M.to_prompt_format()

@@ -1,361 +1,394 @@
-local Utils = require("avante.utils")
-local Providers = require("avante.providers")
-local Clipboard = require("avante.clipboard")
-local OpenAI = require("avante.providers").openai
-local Prompts = require("avante.utils.prompts")
+---@mod codetyper.llm.gemini Google Gemini API client for Codetyper.nvim
 
----@class AvanteProviderFunctor
 local M = {}
 
-M.api_key_name = "GEMINI_API_KEY"
-M.role_map = {
-	user = "user",
-	assistant = "model",
-}
+local utils = require("codetyper.utils")
+local llm = require("codetyper.llm")
 
-function M:is_disable_stream()
-	return false
+--- Gemini API endpoint
+local API_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+
+--- Get API key from config or environment
+---@return string|nil API key
+local function get_api_key()
+	local codetyper = require("codetyper")
+	local config = codetyper.get_config()
+	return config.llm.gemini.api_key or vim.env.GEMINI_API_KEY
 end
 
----@param tool AvanteLLMTool
-function M:transform_to_function_declaration(tool)
-	local input_schema_properties, required = Utils.llm_tool_param_fields_to_json_schema(tool.param.fields)
-	local parameters = nil
-	if not vim.tbl_isempty(input_schema_properties) then
-		parameters = {
-			type = "object",
-			properties = input_schema_properties,
-			required = required,
-		}
-	end
-	return {
-		name = tool.name,
-		description = tool.get_description and tool.get_description() or tool.description,
-		parameters = parameters,
-	}
+--- Get model from config
+---@return string Model name
+local function get_model()
+	local codetyper = require("codetyper")
+	local config = codetyper.get_config()
+	return config.llm.gemini.model
 end
 
-function M:parse_messages(opts)
-	local provider_conf, _ = Providers.parse_config(self)
-	local use_ReAct_prompt = provider_conf.use_ReAct_prompt == true
-
-	local contents = {}
-	local prev_role = nil
-
-	local tool_id_to_name = {}
-	vim.iter(opts.messages):each(function(message)
-		local role = message.role
-		if role == prev_role then
-			if role == M.role_map["user"] then
-				table.insert(
-					contents,
-					{ role = M.role_map["assistant"], parts = {
-						{ text = "Ok, I understand." },
-					} }
-				)
-			else
-				table.insert(contents, { role = M.role_map["user"], parts = {
-					{ text = "Ok" },
-				} })
-			end
-		end
-		prev_role = role
-		local parts = {}
-		local content_items = message.content
-		if type(content_items) == "string" then
-			table.insert(parts, { text = content_items })
-		elseif type(content_items) == "table" then
-			---@cast content_items AvanteLLMMessageContentItem[]
-			for _, item in ipairs(content_items) do
-				if type(item) == "string" then
-					table.insert(parts, { text = item })
-				elseif type(item) == "table" and item.type == "text" then
-					table.insert(parts, { text = item.text })
-				elseif type(item) == "table" and item.type == "image" then
-					table.insert(parts, {
-						inline_data = {
-							mime_type = "image/png",
-							data = item.source.data,
-						},
-					})
-				elseif type(item) == "table" and item.type == "tool_use" and not use_ReAct_prompt then
-					tool_id_to_name[item.id] = item.name
-					role = "model"
-					table.insert(parts, {
-						functionCall = {
-							name = item.name,
-							args = item.input,
-						},
-					})
-				elseif type(item) == "table" and item.type == "tool_result" and not use_ReAct_prompt then
-					role = "function"
-					local ok, content = pcall(vim.json.decode, item.content)
-					if not ok then
-						content = item.content
-					end
-					-- item.name here refers to the name of the tool that was called,
-					-- which is available in the tool_result content item prepared by llm.lua
-					local tool_name = item.name
-					if not tool_name then
-						-- Fallback, though item.name should ideally always be present for tool_result
-						tool_name = tool_id_to_name[item.tool_use_id]
-					end
-					table.insert(parts, {
-						functionResponse = {
-							name = tool_name,
-							response = {
-								name = tool_name, -- Gemini API requires the name in the response object as well
-								content = content,
-							},
-						},
-					})
-				elseif type(item) == "table" and item.type == "thinking" then
-					table.insert(parts, { text = item.thinking })
-				elseif type(item) == "table" and item.type == "redacted_thinking" then
-					table.insert(parts, { text = item.data })
-				end
-			end
-			if not provider_conf.disable_tools and use_ReAct_prompt then
-				if content_items[1].type == "tool_result" then
-					local tool_use_msg = nil
-					for _, msg_ in ipairs(opts.messages) do
-						if type(msg_.content) == "table" and #msg_.content > 0 then
-							if
-								msg_.content[1].type == "tool_use"
-								and msg_.content[1].id == content_items[1].tool_use_id
-							then
-								tool_use_msg = msg_
-								break
-							end
-						end
-					end
-					if tool_use_msg then
-						table.insert(contents, {
-							role = "model",
-							parts = {
-								{ text = Utils.tool_use_to_xml(tool_use_msg.content[1]) },
-							},
-						})
-						role = "user"
-						table.insert(parts, {
-							text = "The result of tool use "
-								.. Utils.tool_use_to_xml(tool_use_msg.content[1])
-								.. " is:\n",
-						})
-						table.insert(parts, {
-							text = content_items[1].content,
-						})
-					end
-				end
-			end
-		end
-		if #parts > 0 then
-			table.insert(contents, { role = M.role_map[role] or role, parts = parts })
-		end
-	end)
-
-	if Clipboard.support_paste_image() and opts.image_paths then
-		for _, image_path in ipairs(opts.image_paths) do
-			local image_data = {
-				inline_data = {
-					mime_type = "image/png",
-					data = Clipboard.get_base64_content(image_path),
-				},
-			}
-
-			table.insert(contents[#contents].parts, image_data)
-		end
-	end
-
-	local system_prompt = opts.system_prompt
-
-	if use_ReAct_prompt then
-		system_prompt = Prompts.get_ReAct_system_prompt(provider_conf, opts)
-	end
+--- Build request body for Gemini API
+---@param prompt string User prompt
+---@param context table Context information
+---@return table Request body
+local function build_request_body(prompt, context)
+	local system_prompt = llm.build_system_prompt(context)
 
 	return {
 		systemInstruction = {
 			role = "user",
-			parts = {
-				{
-					text = system_prompt,
-				},
+			parts = { { text = system_prompt } },
+		},
+		contents = {
+			{
+				role = "user",
+				parts = { { text = prompt } },
 			},
 		},
-		contents = contents,
+		generationConfig = {
+			temperature = 0.2,
+			maxOutputTokens = 4096,
+		},
 	}
 end
 
---- Prepares the main request body for Gemini-like APIs.
----@param provider_instance AvanteProviderFunctor The provider instance (self).
----@param prompt_opts AvantePromptOptions Prompt options including messages, tools, system_prompt.
----@param provider_conf table Provider configuration from config.lua (e.g., model, top-level temperature/max_tokens).
----@param request_body_ table Request-specific overrides, typically from provider_conf.request_config_overrides.
----@return table The fully constructed request body.
-function M.prepare_request_body(provider_instance, prompt_opts, provider_conf, request_body_)
-	local request_body = {}
-	request_body.generationConfig = request_body_.generationConfig or {}
-
-	local use_ReAct_prompt = provider_conf.use_ReAct_prompt == true
-
-	if use_ReAct_prompt then
-		request_body.generationConfig.stopSequences = { "</tool_use>" }
+--- Make HTTP request to Gemini API
+---@param body table Request body
+---@param callback fun(response: string|nil, error: string|nil, usage: table|nil) Callback function
+local function make_request(body, callback)
+	local api_key = get_api_key()
+	if not api_key then
+		callback(nil, "Gemini API key not configured", nil)
+		return
 	end
 
-	local disable_tools = provider_conf.disable_tools or false
+	local model = get_model()
+	local url = API_URL .. "/" .. model .. ":generateContent?key=" .. api_key
+	local json_body = vim.json.encode(body)
 
-	if not use_ReAct_prompt and not disable_tools and prompt_opts.tools then
-		local function_declarations = {}
-		for _, tool in ipairs(prompt_opts.tools) do
-			table.insert(function_declarations, provider_instance:transform_to_function_declaration(tool))
-		end
-
-		if #function_declarations > 0 then
-			request_body.tools = {
-				{
-					functionDeclarations = function_declarations,
-				},
-			}
-		end
-	end
-
-	return vim.tbl_deep_extend("force", {}, provider_instance:parse_messages(prompt_opts), request_body)
-end
-
----@param usage avante.GeminiTokenUsage | nil
----@return avante.LLMTokenUsage | nil
-function M.transform_gemini_usage(usage)
-	if not usage then
-		return nil
-	end
-	---@type avante.LLMTokenUsage
-	local res = {
-		prompt_tokens = usage.promptTokenCount,
-		completion_tokens = usage.candidatesTokenCount,
+	local cmd = {
+		"curl",
+		"-s",
+		"-X",
+		"POST",
+		url,
+		"-H",
+		"Content-Type: application/json",
+		"-d",
+		json_body,
 	}
-	return res
-end
 
-function M:parse_response(ctx, data_stream, _, opts)
-	local ok, jsn = pcall(vim.json.decode, data_stream)
-	if not ok then
-		opts.on_stop({ reason = "error", error = "Failed to parse JSON response: " .. tostring(jsn) })
-		return
-	end
-
-	if opts.update_tokens_usage and jsn.usageMetadata and jsn.usageMetadata ~= nil then
-		local usage = M.transform_gemini_usage(jsn.usageMetadata)
-		if usage ~= nil then
-			opts.update_tokens_usage(usage)
-		end
-	end
-
-	-- Handle prompt feedback first, as it might indicate an overall issue with the prompt
-	if jsn.promptFeedback and jsn.promptFeedback.blockReason then
-		local feedback = jsn.promptFeedback
-		OpenAI:finish_pending_messages(ctx, opts) -- Ensure any pending messages are cleared
-		opts.on_stop({
-			reason = "error",
-			error = "Prompt blocked or filtered. Reason: " .. feedback.blockReason,
-			details = feedback,
-		})
-		return
-	end
-
-	if jsn.candidates and #jsn.candidates > 0 then
-		local candidate = jsn.candidates[1]
-		---@type AvanteLLMToolUse[]
-		ctx.tool_use_list = ctx.tool_use_list or {}
-
-		-- Check if candidate.content and candidate.content.parts exist before iterating
-		if candidate.content and candidate.content.parts then
-			for _, part in ipairs(candidate.content.parts) do
-				if part.text then
-					if opts.on_chunk then
-						opts.on_chunk(part.text)
-					end
-					OpenAI:add_text_message(ctx, part.text, "generating", opts)
-				elseif part.functionCall then
-					if not ctx.function_call_id then
-						ctx.function_call_id = 0
-					end
-					ctx.function_call_id = ctx.function_call_id + 1
-					local tool_use = {
-						id = ctx.turn_id .. "-" .. tostring(ctx.function_call_id),
-						name = part.functionCall.name,
-						input_json = vim.json.encode(part.functionCall.args),
-					}
-					table.insert(ctx.tool_use_list, tool_use)
-					OpenAI:add_tool_use_message(ctx, tool_use, "generated", opts)
-				end
+	vim.fn.jobstart(cmd, {
+		stdout_buffered = true,
+		on_stdout = function(_, data)
+			if not data or #data == 0 or (data[1] == "" and #data == 1) then
+				return
 			end
-		end
 
-		-- Check for finishReason to determine if this candidate's stream is done.
-		if candidate.finishReason then
-			OpenAI:finish_pending_messages(ctx, opts)
-			local reason_str = candidate.finishReason
-			local stop_details = { finish_reason = reason_str }
-			stop_details.usage = M.transform_gemini_usage(jsn.usageMetadata)
+			local response_text = table.concat(data, "\n")
+			local ok, response = pcall(vim.json.decode, response_text)
 
-			if reason_str == "TOOL_CODE" then
-				-- Model indicates a tool-related stop.
-				-- The tool_use list is added to the table in llm.lua
-				opts.on_stop(vim.tbl_deep_extend("force", { reason = "tool_use" }, stop_details))
-			elseif reason_str == "STOP" then
-				if ctx.tool_use_list and #ctx.tool_use_list > 0 then
-					-- Natural stop, but tools were found in this final chunk.
-					opts.on_stop(vim.tbl_deep_extend("force", { reason = "tool_use" }, stop_details))
+			if not ok then
+				vim.schedule(function()
+					callback(nil, "Failed to parse Gemini response", nil)
+				end)
+				return
+			end
+
+			if response.error then
+				vim.schedule(function()
+					callback(nil, response.error.message or "Gemini API error", nil)
+				end)
+				return
+			end
+
+			-- Extract usage info
+			local usage = {}
+			if response.usageMetadata then
+				usage.prompt_tokens = response.usageMetadata.promptTokenCount or 0
+				usage.completion_tokens = response.usageMetadata.candidatesTokenCount or 0
+			end
+
+			if response.candidates and response.candidates[1] then
+				local candidate = response.candidates[1]
+				if candidate.content and candidate.content.parts then
+					local text_parts = {}
+					for _, part in ipairs(candidate.content.parts) do
+						if part.text then
+							table.insert(text_parts, part.text)
+						end
+					end
+					local full_text = table.concat(text_parts, "")
+					local code = llm.extract_code(full_text)
+					vim.schedule(function()
+						callback(code, nil, usage)
+					end)
 				else
-					-- Natural stop, no tools in this final chunk.
-					-- llm.lua will check its accumulated tools if tool_choice was active.
-					opts.on_stop(vim.tbl_deep_extend("force", { reason = "complete" }, stop_details))
+					vim.schedule(function()
+						callback(nil, "No content in Gemini response", nil)
+					end)
 				end
-			elseif reason_str == "MAX_TOKENS" then
-				opts.on_stop(vim.tbl_deep_extend("force", { reason = "max_tokens" }, stop_details))
-			elseif reason_str == "SAFETY" or reason_str == "RECITATION" then
-				opts.on_stop(
-					vim.tbl_deep_extend(
-						"force",
-						{ reason = "error", error = "Generation stopped: " .. reason_str },
-						stop_details
-					)
-				)
-			else -- OTHER, FINISH_REASON_UNSPECIFIED, or any other unhandled reason.
-				opts.on_stop(
-					vim.tbl_deep_extend(
-						"force",
-						{ reason = "error", error = "Generation stopped with unhandled reason: " .. reason_str },
-						stop_details
-					)
-				)
+			else
+				vim.schedule(function()
+					callback(nil, "No candidates in Gemini response", nil)
+				end)
 			end
-		end
-		-- If no finishReason, it's an intermediate chunk; do not call on_stop.
-	end
+		end,
+		on_stderr = function(_, data)
+			if data and #data > 0 and data[1] ~= "" then
+				vim.schedule(function()
+					callback(nil, "Gemini API request failed: " .. table.concat(data, "\n"), nil)
+				end)
+			end
+		end,
+		on_exit = function(_, code)
+			if code ~= 0 then
+				vim.schedule(function()
+					callback(nil, "Gemini API request failed with code: " .. code, nil)
+				end)
+			end
+		end,
+	})
 end
 
----@param prompt_opts AvantePromptOptions
----@return AvanteCurlOutput|nil
-function M:parse_curl_args(prompt_opts)
-	local provider_conf, request_body = Providers.parse_config(self)
+--- Generate code using Gemini API
+---@param prompt string The user's prompt
+---@param context table Context information
+---@param callback fun(response: string|nil, error: string|nil) Callback function
+function M.generate(prompt, context, callback)
+	local logs = require("codetyper.agent.logs")
+	local model = get_model()
 
-	local api_key = self:parse_api_key()
-	if api_key == nil then
-		Utils.error("Gemini: API key is not set. Please set " .. M.api_key_name)
-		return nil
+	-- Log the request
+	logs.request("gemini", model)
+	logs.thinking("Building request body...")
+
+	local body = build_request_body(prompt, context)
+
+	-- Estimate prompt tokens
+	local prompt_estimate = logs.estimate_tokens(vim.json.encode(body))
+	logs.debug(string.format("Estimated prompt: ~%d tokens", prompt_estimate))
+	logs.thinking("Sending to Gemini API...")
+
+	utils.notify("Sending request to Gemini...", vim.log.levels.INFO)
+
+	make_request(body, function(response, err, usage)
+		if err then
+			logs.error(err)
+			utils.notify(err, vim.log.levels.ERROR)
+			callback(nil, err)
+		else
+			-- Log token usage
+			if usage then
+				logs.response(usage.prompt_tokens or 0, usage.completion_tokens or 0, "stop")
+			end
+			logs.thinking("Response received, extracting code...")
+			logs.info("Code generated successfully")
+			utils.notify("Code generated successfully", vim.log.levels.INFO)
+			callback(response, nil)
+		end
+	end)
+end
+
+--- Check if Gemini is properly configured
+---@return boolean, string? Valid status and optional error message
+function M.validate()
+	local api_key = get_api_key()
+	if not api_key or api_key == "" then
+		return false, "Gemini API key not configured"
+	end
+	return true
+end
+
+--- Generate with tool use support for agentic mode
+---@param messages table[] Conversation history
+---@param context table Context information
+---@param tool_definitions table Tool definitions
+---@param callback fun(response: table|nil, error: string|nil) Callback with raw response
+function M.generate_with_tools(messages, context, tool_definitions, callback)
+	local logs = require("codetyper.agent.logs")
+	local model = get_model()
+
+	logs.request("gemini", model)
+	logs.thinking("Preparing agent request...")
+
+	local api_key = get_api_key()
+	if not api_key then
+		logs.error("Gemini API key not configured")
+		callback(nil, "Gemini API key not configured")
+		return
 	end
 
-	return {
-		url = Utils.url_join(
-			provider_conf.endpoint,
-			provider_conf.model .. ":streamGenerateContent?alt=sse&key=" .. api_key
-		),
-		proxy = provider_conf.proxy,
-		insecure = provider_conf.allow_insecure,
-		headers = Utils.tbl_override({ ["Content-Type"] = "application/json" }, self.extra_headers),
-		body = M.prepare_request_body(self, prompt_opts, provider_conf, request_body),
+	local tools_module = require("codetyper.agent.tools")
+	local agent_prompts = require("codetyper.prompts.agent")
+
+	-- Build system prompt with agent instructions
+	local system_prompt = llm.build_system_prompt(context)
+	system_prompt = system_prompt .. "\n\n" .. agent_prompts.system
+	system_prompt = system_prompt .. "\n\n" .. agent_prompts.tool_instructions
+
+	-- Format messages for Gemini
+	local gemini_contents = {}
+	for _, msg in ipairs(messages) do
+		local role = msg.role == "assistant" and "model" or "user"
+		local parts = {}
+
+		if type(msg.content) == "string" then
+			table.insert(parts, { text = msg.content })
+		elseif type(msg.content) == "table" then
+			for _, part in ipairs(msg.content) do
+				if part.type == "tool_result" then
+					table.insert(parts, { text = "[" .. (part.name or "tool") .. " result]: " .. (part.content or "") })
+				elseif part.type == "text" then
+					table.insert(parts, { text = part.text or "" })
+				end
+			end
+		end
+
+		if #parts > 0 then
+			table.insert(gemini_contents, { role = role, parts = parts })
+		end
+	end
+
+	-- Build function declarations for tools
+	local function_declarations = {}
+	for _, tool in ipairs(tools_module.definitions) do
+		local properties = {}
+		local required = {}
+
+		if tool.parameters and tool.parameters.properties then
+			for name, prop in pairs(tool.parameters.properties) do
+				properties[name] = {
+					type = prop.type:upper(),
+					description = prop.description,
+				}
+			end
+		end
+
+		if tool.parameters and tool.parameters.required then
+			required = tool.parameters.required
+		end
+
+		table.insert(function_declarations, {
+			name = tool.name,
+			description = tool.description,
+			parameters = {
+				type = "OBJECT",
+				properties = properties,
+				required = required,
+			},
+		})
+	end
+
+	local body = {
+		systemInstruction = {
+			role = "user",
+			parts = { { text = system_prompt } },
+		},
+		contents = gemini_contents,
+		generationConfig = {
+			temperature = 0.3,
+			maxOutputTokens = 4096,
+		},
+		tools = {
+			{ functionDeclarations = function_declarations },
+		},
 	}
+
+	local url = API_URL .. "/" .. model .. ":generateContent?key=" .. api_key
+	local json_body = vim.json.encode(body)
+
+	local prompt_estimate = logs.estimate_tokens(json_body)
+	logs.debug(string.format("Estimated prompt: ~%d tokens", prompt_estimate))
+	logs.thinking("Sending to Gemini API...")
+
+	local cmd = {
+		"curl",
+		"-s",
+		"-X",
+		"POST",
+		url,
+		"-H",
+		"Content-Type: application/json",
+		"-d",
+		json_body,
+	}
+
+	vim.fn.jobstart(cmd, {
+		stdout_buffered = true,
+		on_stdout = function(_, data)
+			if not data or #data == 0 or (data[1] == "" and #data == 1) then
+				return
+			end
+
+			local response_text = table.concat(data, "\n")
+			local ok, response = pcall(vim.json.decode, response_text)
+
+			if not ok then
+				vim.schedule(function()
+					logs.error("Failed to parse Gemini response")
+					callback(nil, "Failed to parse Gemini response")
+				end)
+				return
+			end
+
+			if response.error then
+				vim.schedule(function()
+					logs.error(response.error.message or "Gemini API error")
+					callback(nil, response.error.message or "Gemini API error")
+				end)
+				return
+			end
+
+			-- Log token usage
+			if response.usageMetadata then
+				logs.response(
+					response.usageMetadata.promptTokenCount or 0,
+					response.usageMetadata.candidatesTokenCount or 0,
+					"stop"
+				)
+			end
+
+			-- Convert to Claude-like format for parser compatibility
+			local converted = { content = {} }
+			if response.candidates and response.candidates[1] then
+				local candidate = response.candidates[1]
+				if candidate.content and candidate.content.parts then
+					for _, part in ipairs(candidate.content.parts) do
+						if part.text then
+							table.insert(converted.content, { type = "text", text = part.text })
+							logs.thinking("Response contains text")
+						elseif part.functionCall then
+							table.insert(converted.content, {
+								type = "tool_use",
+								id = vim.fn.sha256(vim.json.encode(part.functionCall)):sub(1, 16),
+								name = part.functionCall.name,
+								input = part.functionCall.args or {},
+							})
+							logs.thinking("Tool call: " .. part.functionCall.name)
+						end
+					end
+				end
+			end
+
+			vim.schedule(function()
+				callback(converted, nil)
+			end)
+		end,
+		on_stderr = function(_, data)
+			if data and #data > 0 and data[1] ~= "" then
+				vim.schedule(function()
+					logs.error("Gemini API request failed: " .. table.concat(data, "\n"))
+					callback(nil, "Gemini API request failed: " .. table.concat(data, "\n"))
+				end)
+			end
+		end,
+		on_exit = function(_, code)
+			if code ~= 0 then
+				vim.schedule(function()
+					logs.error("Gemini API request failed with code: " .. code)
+					callback(nil, "Gemini API request failed with code: " .. code)
+				end)
+			end
+		end,
+	})
 end
 
 return M

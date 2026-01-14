@@ -140,6 +140,19 @@ function M.setup()
 		end,
 		desc = "Update tree.log on directory change",
 	})
+
+	-- Auto-index: Create/open coder companion file when opening source files
+	vim.api.nvim_create_autocmd("BufEnter", {
+		group = group,
+		pattern = "*",
+		callback = function(ev)
+			-- Delay to ensure buffer is fully loaded
+			vim.defer_fn(function()
+				M.auto_index_file(ev.buf)
+			end, 100)
+		end,
+		desc = "Auto-index source files with coder companion",
+	})
 end
 
 --- Get config with fallback defaults
@@ -193,11 +206,96 @@ function M.check_for_closed_prompt()
 			-- Mark as processed
 			processed_prompts[prompt_key] = true
 
-			-- Auto-process the prompt (no confirmation needed)
-			utils.notify("Processing prompt...", vim.log.levels.INFO)
-			vim.schedule(function()
-				vim.cmd("CoderProcess")
-			end)
+			-- Check if scheduler is enabled
+			local codetyper = require("codetyper")
+			local ct_config = codetyper.get_config()
+			local scheduler_enabled = ct_config and ct_config.scheduler and ct_config.scheduler.enabled
+
+			if scheduler_enabled then
+				-- Event-driven: emit to queue
+				vim.schedule(function()
+					local queue = require("codetyper.agent.queue")
+					local patch_mod = require("codetyper.agent.patch")
+					local intent_mod = require("codetyper.agent.intent")
+					local scope_mod = require("codetyper.agent.scope")
+
+					-- Take buffer snapshot
+					local snapshot = patch_mod.snapshot_buffer(bufnr, {
+						start_line = prompt.start_line,
+						end_line = prompt.end_line,
+					})
+
+					-- Get target path
+					local current_file = vim.fn.expand("%:p")
+					local target_path = utils.get_target_path(current_file)
+
+					-- Clean prompt content
+					local cleaned = parser.clean_prompt(prompt.content)
+
+					-- Detect intent from prompt
+					local intent = intent_mod.detect(cleaned)
+
+					-- Resolve scope in target file (use prompt position to find enclosing scope)
+					local target_bufnr = vim.fn.bufnr(target_path)
+					local scope = nil
+					local scope_text = nil
+					local scope_range = nil
+
+					if target_bufnr ~= -1 then
+						-- Find scope at the corresponding line in target
+						-- Use the prompt's line position as reference
+						scope = scope_mod.resolve_scope(target_bufnr, prompt.start_line, 1)
+						if scope and scope.type ~= "file" then
+							scope_text = scope.text
+							scope_range = {
+								start_line = scope.range.start_row,
+								end_line = scope.range.end_row,
+							}
+						end
+					end
+
+					-- Determine priority based on intent
+					local priority = 2 -- Normal
+					if intent.type == "fix" or intent.type == "complete" then
+						priority = 1 -- High priority for fixes and completions
+					elseif intent.type == "test" or intent.type == "document" then
+						priority = 3 -- Lower priority for tests and docs
+					end
+
+					-- Enqueue the event
+					queue.enqueue({
+						id = queue.generate_id(),
+						bufnr = bufnr,
+						range = { start_line = prompt.start_line, end_line = prompt.end_line },
+						timestamp = os.clock(),
+						changedtick = snapshot.changedtick,
+						content_hash = snapshot.content_hash,
+						prompt_content = cleaned,
+						target_path = target_path,
+						priority = priority,
+						status = "pending",
+						attempt_count = 0,
+						intent = intent,
+						scope = scope,
+						scope_text = scope_text,
+						scope_range = scope_range,
+					})
+
+					local scope_info = scope and scope.type ~= "file"
+						and string.format(" [%s: %s]", scope.type, scope.name or "anonymous")
+						or ""
+					utils.notify(
+						string.format("Prompt queued: %s%s", intent.type, scope_info),
+						vim.log.levels.INFO
+					)
+				end)
+			else
+				-- Legacy: direct processing
+				utils.notify("Processing prompt...", vim.log.levels.INFO)
+				vim.schedule(function()
+					vim.cmd("CoderProcess")
+				end)
+			end
 		end
 	end
 end
@@ -268,11 +366,9 @@ function M.auto_open_target_file()
 	local codetyper = require("codetyper")
 	local config = codetyper.get_config()
 
-	-- Fallback width if config not fully loaded
-	local width = (config and config.window and config.window.width) or 0.4
-	if width <= 1 then
-		width = math.floor(vim.o.columns * width)
-	end
+	-- Fallback width if config not fully loaded (percentage, e.g., 25 = 25%)
+	local width_pct = (config and config.window and config.window.width) or 25
+	local width = math.ceil(vim.o.columns * (width_pct / 100))
 
 	-- Store current coder window
 	local coder_win = vim.api.nvim_get_current_win()
@@ -360,6 +456,180 @@ end
 --- Clear all autocommands
 function M.clear()
 	vim.api.nvim_del_augroup_by_name(AUGROUP)
+end
+
+--- Track buffers that have been auto-indexed
+---@type table<number, boolean>
+local auto_indexed_buffers = {}
+
+--- Supported file extensions for auto-indexing
+local supported_extensions = {
+	"ts", "tsx", "js", "jsx", "py", "lua", "go", "rs", "rb",
+	"java", "c", "cpp", "cs", "json", "yaml", "yml", "md",
+	"html", "css", "scss", "vue", "svelte", "php", "sh", "zsh",
+}
+
+--- Check if extension is supported
+---@param ext string File extension
+---@return boolean
+local function is_supported_extension(ext)
+	for _, supported in ipairs(supported_extensions) do
+		if ext == supported then
+			return true
+		end
+	end
+	return false
+end
+
+--- Auto-index a file by creating/opening its coder companion
+---@param bufnr number Buffer number
+function M.auto_index_file(bufnr)
+	-- Skip if buffer is invalid
+	if not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+
+	-- Skip if already indexed
+	if auto_indexed_buffers[bufnr] then
+		return
+	end
+
+	-- Get file path
+	local filepath = vim.api.nvim_buf_get_name(bufnr)
+	if not filepath or filepath == "" then
+		return
+	end
+
+	-- Skip coder files
+	if utils.is_coder_file(filepath) then
+		return
+	end
+
+	-- Skip special buffers
+	local buftype = vim.bo[bufnr].buftype
+	if buftype ~= "" then
+		return
+	end
+
+	-- Skip unsupported file types
+	local ext = vim.fn.fnamemodify(filepath, ":e")
+	if ext == "" or not is_supported_extension(ext) then
+		return
+	end
+
+	-- Skip if auto_index is disabled in config
+	local codetyper = require("codetyper")
+	local config = codetyper.get_config()
+	if config and config.auto_index == false then
+		return
+	end
+
+	-- Mark as indexed
+	auto_indexed_buffers[bufnr] = true
+
+	-- Get coder companion path
+	local coder_path = utils.get_coder_path(filepath)
+
+	-- Check if coder file already exists
+	local coder_exists = utils.file_exists(coder_path)
+
+	-- Create coder file with template if it doesn't exist
+	if not coder_exists then
+		local filename = vim.fn.fnamemodify(filepath, ":t")
+		local template = string.format(
+			[[-- Coder companion for %s
+-- Use /@ @/ tags to write pseudo-code prompts
+-- Example:
+-- /@
+-- Add a function that validates user input
+-- - Check for empty strings
+-- - Validate email format
+-- @/
+
+]],
+			filename
+		)
+		utils.write_file(coder_path, template)
+	end
+
+	-- Notify user about the coder companion
+	local coder_filename = vim.fn.fnamemodify(coder_path, ":t")
+	if coder_exists then
+		utils.notify("Coder companion available: " .. coder_filename, vim.log.levels.DEBUG)
+	else
+		utils.notify("Created coder companion: " .. coder_filename, vim.log.levels.INFO)
+	end
+end
+
+--- Open the coder companion for the current file
+---@param open_split? boolean Whether to open in split view (default: true)
+function M.open_coder_companion(open_split)
+	open_split = open_split ~= false -- Default to true
+
+	local filepath = vim.fn.expand("%:p")
+	if not filepath or filepath == "" then
+		utils.notify("No file open", vim.log.levels.WARN)
+		return
+	end
+
+	if utils.is_coder_file(filepath) then
+		utils.notify("Already in coder file", vim.log.levels.INFO)
+		return
+	end
+
+	local coder_path = utils.get_coder_path(filepath)
+
+	-- Create if it doesn't exist
+	if not utils.file_exists(coder_path) then
+		local filename = vim.fn.fnamemodify(filepath, ":t")
+		local ext = vim.fn.fnamemodify(filepath, ":e")
+		local comment_prefix = "--"
+		if vim.tbl_contains({ "js", "jsx", "ts", "tsx", "java", "c", "cpp", "cs", "go", "rs", "php" }, ext) then
+			comment_prefix = "//"
+		elseif vim.tbl_contains({ "py", "sh", "zsh", "yaml", "yml" }, ext) then
+			comment_prefix = "#"
+		elseif vim.tbl_contains({ "html", "md" }, ext) then
+			comment_prefix = "<!--"
+		end
+
+		local close_comment = comment_prefix == "<!--" and " -->" or ""
+		local template = string.format(
+			[[%s Coder companion for %s%s
+%s Use /@ @/ tags to write pseudo-code prompts%s
+%s Example:%s
+%s /@%s
+%s Add a function that validates user input%s
+%s - Check for empty strings%s
+%s - Validate email format%s
+%s @/%s
+
+]],
+			comment_prefix, filename, close_comment,
+			comment_prefix, close_comment,
+			comment_prefix, close_comment,
+			comment_prefix, close_comment,
+			comment_prefix, close_comment,
+			comment_prefix, close_comment,
+			comment_prefix, close_comment,
+			comment_prefix, close_comment
+		)
+		utils.write_file(coder_path, template)
+	end
+
+	if open_split then
+		-- Use the window module to open split view
+		local window = require("codetyper.window")
+		window.open_split(coder_path, filepath)
+	else
+		-- Just open the coder file
+		vim.cmd("edit " .. vim.fn.fnameescape(coder_path))
+	end
+end
+
+--- Clear auto-indexed tracking for a buffer
+---@param bufnr number Buffer number
+function M.clear_auto_indexed(bufnr)
+	auto_indexed_buffers[bufnr] = nil
 end
 
 return M

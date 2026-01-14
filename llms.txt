@@ -4,7 +4,7 @@
 
 ## Overview
 
-Codetyper.nvim is a Neovim plugin written in Lua that acts as an AI-powered coding partner. It integrates with LLM APIs (Claude, Ollama) to help developers write code faster using a unique prompt-based workflow.
+Codetyper.nvim is a Neovim plugin written in Lua that acts as an AI-powered coding partner. It integrates with multiple LLM APIs (Claude, OpenAI, Gemini, Copilot, Ollama) to help developers write code faster using a unique prompt-based workflow.
 
 ## Core Concept
 
@@ -27,15 +27,39 @@ lua/codetyper/
 ├── commands.lua      # Vim command definitions (:Coder, :CoderOpen, etc.)
 ├── window.lua        # Split window management (open, close, toggle)
 ├── parser.lua        # Parses /@ @/ tags from buffer content
-├── gitignore.lua     # Manages .gitignore entries for coder files and .coder/ folder
-├── autocmds.lua      # Autocommands for tag detection, filetype, tree updates
+├── gitignore.lua     # Manages .gitignore entries for coder files
+├── autocmds.lua      # Autocommands for tag detection, filetype, auto-index
 ├── inject.lua        # Code injection strategies
 ├── health.lua        # Health check for :checkhealth
 ├── tree.lua          # Project tree logging (.coder/tree.log)
-└── llm/
-    ├── init.lua      # LLM interface, provider selection
-    ├── claude.lua    # Claude API client (Anthropic)
-    └── ollama.lua    # Ollama API client (local LLMs)
+├── logs_panel.lua    # Standalone logs panel UI
+├── llm/
+│   ├── init.lua      # LLM interface, provider selection
+│   ├── claude.lua    # Claude API client (Anthropic)
+│   ├── openai.lua    # OpenAI API client (with custom endpoint support)
+│   ├── gemini.lua    # Google Gemini API client
+│   ├── copilot.lua   # GitHub Copilot client (uses OAuth from copilot.lua/vim)
+│   └── ollama.lua    # Ollama API client (local LLMs)
+├── agent/
+│   ├── init.lua      # Agent system entry point
+│   ├── ui.lua        # Agent panel UI
+│   ├── logs.lua      # Logging system with listeners
+│   ├── tools.lua     # Tool definitions (read_file, edit_file, write_file, bash)
+│   ├── executor.lua  # Tool execution logic
+│   ├── parser.lua    # Parse tool calls from LLM responses
+│   ├── queue.lua     # Event queue with priority heap
+│   ├── patch.lua     # Patch candidates with staleness detection
+│   ├── confidence.lua # Response confidence scoring heuristics
+│   ├── worker.lua    # Async LLM worker wrapper
+│   ├── scheduler.lua # Event scheduler with completion-awareness
+│   ├── scope.lua     # Tree-sitter scope resolution
+│   └── intent.lua    # Intent detection from prompts
+├── ask/
+│   ├── init.lua      # Ask panel entry point
+│   └── ui.lua        # Ask panel UI (chat interface)
+└── prompts/
+    ├── init.lua      # System prompts for code generation
+    └── agent.lua     # Agent-specific prompts and tool instructions
 ```
 
 ## .coder/ Folder
@@ -47,51 +71,240 @@ The plugin automatically creates and maintains a `.coder/` folder in your projec
 └── tree.log    # Project structure, auto-updated on file changes
 ```
 
-The `tree.log` contains:
-- Project name and timestamp
-- Full directory tree with file type icons
-- Automatically ignores: hidden files, node_modules, .git, build folders, coder files
+## Key Features
 
-Tree updates are triggered by:
-- `BufWritePost` - When files are saved
-- `BufNewFile` - When new files are created
-- `BufDelete` - When files are deleted
-- `DirChanged` - When changing directories
+### 1. Multiple LLM Providers
 
-Updates are debounced (1 second) to prevent excessive writes.
-
-## Key Functions
-
-### Setup
 ```lua
-require("codetyper").setup({
-  llm = { provider = "claude" | "ollama", ... },
-  window = { width = 0.4, position = "left" },
-  patterns = { open_tag = "/@", close_tag = "@/" },
-  auto_gitignore = true,
-})
+llm = {
+  provider = "claude", -- "claude", "openai", "gemini", "copilot", "ollama"
+  claude = { api_key = nil, model = "claude-sonnet-4-20250514" },
+  openai = { api_key = nil, model = "gpt-4o", endpoint = nil },
+  gemini = { api_key = nil, model = "gemini-2.0-flash" },
+  copilot = { model = "gpt-4o" },
+  ollama = { host = "http://localhost:11434", model = "deepseek-coder:6.7b" },
+}
 ```
 
-### Commands
+### 2. Agent Mode
+
+Autonomous coding assistant with tool access:
+
+- `read_file` - Read file contents
+- `edit_file` - Edit files with find/replace
+- `write_file` - Create or overwrite files
+- `bash` - Execute shell commands
+
+### 3. Transform Commands
+
+Transform `/@ @/` tags inline without split view:
+
+- `:CoderTransform` - Transform all tags in file
+- `:CoderTransformCursor` - Transform tag at cursor
+- `:CoderTransformVisual` - Transform selected tags
+
+### 4. Auto-Index
+
+Automatically create coder companion files when opening source files:
+
+```lua
+auto_index = true  -- disabled by default
+```
+
+### 5. Logs Panel
+
+Real-time visibility into LLM operations with token usage tracking.
+
+### 6. Event-Driven Scheduler
+
+Prompts are treated as events, not commands:
+
+```
+User types /@...@/ → Event queued → Scheduler dispatches → Worker processes → Patch created → Safe injection
+```
+
+**Key concepts:**
+
+- **PromptEvent**: Captures buffer state (changedtick, content hash) at prompt time
+- **Optimistic Execution**: Ollama as fast scout, escalate to remote LLMs if confidence low
+- **Confidence Scoring**: 5 heuristics (length, uncertainty, syntax, repetition, truncation)
+- **Staleness Detection**: Discard patches if buffer changed during generation
+- **Completion Safety**: Defer injection while autocomplete popup visible
+
+**Configuration:**
+
+```lua
+scheduler = {
+  enabled = true,           -- Enable event-driven mode
+  ollama_scout = true,      -- Use Ollama first
+  escalation_threshold = 0.7, -- Below this → escalate
+  max_concurrent = 2,       -- Parallel workers
+  completion_delay_ms = 100, -- Wait after popup closes
+}
+```
+
+### 7. Tree-sitter Scope Resolution
+
+Prompts automatically resolve to their enclosing function/method/class:
+
+```lua
+function foo()
+  /@ complete this function @/  -- Resolves to `foo`
+end
+```
+
+**Scope types:** `function`, `method`, `class`, `block`, `file`
+
+For replacement intents (complete, refactor, fix), the entire scope is extracted
+and sent to the LLM, then replaced with the transformed version.
+
+### 8. Intent Detection
+
+The system parses prompts to detect user intent:
+
+| Intent | Keywords | Action |
+|--------|----------|--------|
+| complete | complete, finish, implement | replace |
+| refactor | refactor, rewrite, simplify | replace |
+| fix | fix, repair, debug, bug | replace |
+| add | add, create, insert, new | insert |
+| document | document, comment, jsdoc | replace |
+| test | test, spec, unit test | append |
+| optimize | optimize, performance, faster | replace |
+| explain | explain, what, how, why | none |
+
+### 9. Tag Precedence
+
+Multiple tags in the same scope follow "first tag wins" rule:
+- Earlier (by line number) unresolved tag processes first
+- Later tags in same scope are skipped with warning
+- Different scopes process independently
+
+## Commands
+
+### Main Commands
 - `:Coder open` - Opens split view with coder file
 - `:Coder close` - Closes the split
 - `:Coder toggle` - Toggles the view
 - `:Coder process` - Manually triggers code generation
-- `:Coder status` - Shows configuration status and project stats
-- `:Coder tree` - Manually refresh tree.log
-- `:Coder tree-view` - Open tree.log in split view
 
-### Prompt Tags
-- Opening tag: `/@`
-- Closing tag: `@/`
-- Content between tags is the prompt sent to LLM
+### Ask Panel
+- `:CoderAsk` - Open Ask panel
+- `:CoderAskToggle` - Toggle Ask panel
+- `:CoderAskClear` - Clear chat history
 
-### Prompt Types (Auto-detected)
-- `refactor` - Modifies existing code
-- `add` - Adds new code at cursor/end
-- `document` - Adds documentation/comments
-- `explain` - Explanations (no code injection)
-- `generic` - User chooses injection method
+### Agent Mode
+- `:CoderAgent` - Open Agent panel
+- `:CoderAgentToggle` - Toggle Agent panel
+- `:CoderAgentStop` - Stop running agent
+
+### Transform
+- `:CoderTransform` - Transform all tags
+- `:CoderTransformCursor` - Transform at cursor
+- `:CoderTransformVisual` - Transform selection
+
+### Utility
+- `:CoderIndex` - Open coder companion
+- `:CoderLogs` - Toggle logs panel
+- `:CoderType` - Switch Ask/Agent mode
+- `:CoderTree` - Refresh tree.log
+- `:CoderTreeView` - View tree.log
+
+## Configuration Schema
+
+```lua
+{
+  llm = {
+    provider = "claude",  -- "claude" | "openai" | "gemini" | "copilot" | "ollama"
+    claude = {
+      api_key = nil,      -- string, uses ANTHROPIC_API_KEY env if nil
+      model = "claude-sonnet-4-20250514",
+    },
+    openai = {
+      api_key = nil,      -- string, uses OPENAI_API_KEY env if nil
+      model = "gpt-4o",
+      endpoint = nil,     -- custom endpoint for Azure, OpenRouter, etc.
+    },
+    gemini = {
+      api_key = nil,      -- string, uses GEMINI_API_KEY env if nil
+      model = "gemini-2.0-flash",
+    },
+    copilot = {
+      model = "gpt-4o",   -- uses OAuth from copilot.lua/copilot.vim
+    },
+    ollama = {
+      host = "http://localhost:11434",
+      model = "deepseek-coder:6.7b",
+    },
+  },
+  window = {
+    width = 25,           -- percentage (25 = 25% of screen)
+    position = "left",    -- "left" | "right"
+    border = "rounded",
+  },
+  patterns = {
+    open_tag = "/@",
+    close_tag = "@/",
+    file_pattern = "*.coder.*",
+  },
+  auto_gitignore = true,
+  auto_open_ask = true,
+  auto_index = false,     -- auto-create coder companion files
+  scheduler = {
+    enabled = true,           -- enable event-driven scheduler
+    ollama_scout = true,      -- use Ollama as fast scout
+    escalation_threshold = 0.7,
+    max_concurrent = 2,
+    completion_delay_ms = 100,
+  },
+}
+```
+
+## LLM Integration
+
+### Claude API
+- Endpoint: `https://api.anthropic.com/v1/messages`
+- Uses `x-api-key` header for authentication
+- Supports tool use for agent mode
+
+### OpenAI API
+- Endpoint: `https://api.openai.com/v1/chat/completions` (configurable)
+- Uses `Authorization: Bearer` header
+- Supports tool use for agent mode
+- Compatible with Azure, OpenRouter, and other OpenAI-compatible APIs
+
+### Gemini API
+- Endpoint: `https://generativelanguage.googleapis.com/v1beta/models`
+- Uses API key in URL parameter
+- Supports function calling for agent mode
+
+### Copilot API
+- Uses GitHub OAuth token from copilot.lua/copilot.vim
+- Endpoint from token response (typically `api.githubcopilot.com`)
+- OpenAI-compatible format
+
+### Ollama API
+- Endpoint: `{host}/api/generate` or `{host}/api/chat`
+- No authentication required for local instances
+- Tool use via prompt-based approach
+
+## Agent Tool Definitions
+
+```lua
+tools = {
+  read_file = { path: string },
+  edit_file = { path: string, find: string, replace: string },
+  write_file = { path: string, content: string },
+  bash = { command: string, timeout?: number },
+}
+```
+
+## Code Injection Strategies
+
+1. **Refactor**: Replace entire file content
+2. **Add**: Insert at cursor position in target file
+3. **Document**: Insert above current function/class
+4. **Generic**: Prompt user for action
 
 ## File Naming Convention
 
@@ -103,62 +316,13 @@ require("codetyper").setup({
 
 Pattern: `name.coder.extension`
 
-## Configuration Schema
-
-```lua
-{
-  llm = {
-    provider = "claude",  -- "claude" | "ollama"
-    claude = {
-      api_key = nil,      -- string, uses ANTHROPIC_API_KEY env if nil
-      model = "claude-sonnet-4-20250514",
-    },
-    ollama = {
-      host = "http://localhost:11434",
-      model = "codellama",
-    },
-  },
-  window = {
-    width = 0.4,          -- number (percentage if <=1, columns if >1)
-    position = "left",    -- "left" | "right"
-    border = "rounded",   -- border style for floating windows
-  },
-  patterns = {
-    open_tag = "/@",      -- string
-    close_tag = "@/",     -- string
-    file_pattern = "*.coder.*",
-  },
-  auto_gitignore = true,  -- boolean
-}
-```
-
-## LLM Integration
-
-### Claude API
-- Endpoint: `https://api.anthropic.com/v1/messages`
-- Uses `x-api-key` header for authentication
-- Requires `anthropic-version: 2023-06-01` header
-
-### Ollama API
-- Endpoint: `{host}/api/generate`
-- No authentication required for local instances
-- Health check via `/api/tags` endpoint
-
-## Code Injection Strategies
-
-1. **Refactor**: Replace entire file content
-2. **Add**: Insert at cursor position in target file
-3. **Document**: Insert above current function/class
-4. **Generic**: Prompt user for action (replace/insert/append/clipboard)
-
 ## Dependencies
 
 - **Required**: Neovim >= 0.8.0, curl
-- **Optional**: telescope.nvim (enhanced file picker)
+- **Optional**: telescope.nvim (enhanced file picker), copilot.lua or copilot.vim (for Copilot provider)
 
 ## Contact
 
 - Author: cargdev
 - Email: carlos.gutierrez@carg.dev
 - Website: https://cargdev.io
-- Blog: https://blog.cargdev.io

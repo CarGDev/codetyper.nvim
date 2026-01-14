@@ -1,531 +1,501 @@
----Reference implementation:
----https://github.com/zbirenbaum/copilot.lua/blob/master/lua/copilot/auth.lua config file
----https://github.com/zed-industries/zed/blob/ad43bbbf5eda59eba65309735472e0be58b4f7dd/crates/copilot/src/copilot_chat.rs#L272 for authorization
----
----@class CopilotToken
----@field annotations_enabled boolean
----@field chat_enabled boolean
----@field chat_jetbrains_enabled boolean
----@field code_quote_enabled boolean
----@field codesearch boolean
----@field copilotignore_enabled boolean
----@field endpoints {api: string, ["origin-tracker"]: string, proxy: string, telemetry: string}
----@field expires_at integer
----@field individual boolean
----@field nes_enabled boolean
----@field prompt_8k boolean
----@field public_suggestions string
----@field refresh_in integer
----@field sku string
----@field snippy_load_test_enabled boolean
----@field telemetry string
----@field token string
----@field tracking_id string
----@field vsc_electron_fetcher boolean
----@field xcode boolean
----@field xcode_chat boolean
+---@mod codetyper.llm.copilot GitHub Copilot API client for Codetyper.nvim
 
-local curl = require("plenary.curl")
-
-local Path = require("plenary.path")
-local Utils = require("avante.utils")
-local Providers = require("avante.providers")
-local OpenAI = require("avante.providers").openai
-
-local H = {}
-
----@class AvanteProviderFunctor
 local M = {}
 
-local copilot_path = vim.fn.stdpath("data") .. "/avante/github-copilot.json"
-local lockfile_path = vim.fn.stdpath("data") .. "/avante/copilot-timer.lock"
+local utils = require("codetyper.utils")
+local llm = require("codetyper.llm")
 
--- Lockfile management
-local function is_process_running(pid)
-	local result = vim.uv.kill(pid, 0)
-	if result ~= nil and result == 0 then
-		return true
-	else
-		return false
-	end
-end
+--- Copilot API endpoints
+local AUTH_URL = "https://api.github.com/copilot_internal/v2/token"
 
-local function try_acquire_timer_lock()
-	local lockfile = Path:new(lockfile_path)
+--- Cached state
+---@class CopilotState
+---@field oauth_token string|nil
+---@field github_token table|nil
+M.state = nil
 
-	local tmp_lockfile = lockfile_path .. ".tmp." .. vim.fn.getpid()
-
-	Path:new(tmp_lockfile):write(tostring(vim.fn.getpid()), "w")
-
-	-- Check existing lock
-	if lockfile:exists() then
-		local content = lockfile:read()
-		local pid = tonumber(content)
-		if pid and is_process_running(pid) then
-			os.remove(tmp_lockfile)
-			return false -- Another instance is already managing
-		end
-	end
-
-	-- Attempt to take ownership
-	local success = os.rename(tmp_lockfile, lockfile_path)
-	if not success then
-		os.remove(tmp_lockfile)
-		return false
-	end
-
-	return true
-end
-
-local function start_manager_check_timer()
-	if M._manager_check_timer then
-		M._manager_check_timer:stop()
-		M._manager_check_timer:close()
-	end
-
-	M._manager_check_timer = vim.uv.new_timer()
-	M._manager_check_timer:start(
-		30000,
-		30000,
-		vim.schedule_wrap(function()
-			if not M._refresh_timer and try_acquire_timer_lock() then
-				M.setup_timer()
-			end
-		end)
-	)
-end
-
----@class OAuthToken
----@field user string
----@field oauth_token string
----
----@return string
-function H.get_oauth_token()
+--- Get OAuth token from copilot.lua or copilot.vim config
+---@return string|nil OAuth token
+local function get_oauth_token()
 	local xdg_config = vim.fn.expand("$XDG_CONFIG_HOME")
-	local os_name = Utils.get_os_name()
-	---@type string
-	local config_dir
+	local os_name = vim.loop.os_uname().sysname:lower()
 
+	local config_dir
 	if xdg_config and vim.fn.isdirectory(xdg_config) > 0 then
 		config_dir = xdg_config
-	elseif vim.tbl_contains({ "linux", "darwin" }, os_name) then
+	elseif os_name:match("linux") or os_name:match("darwin") then
 		config_dir = vim.fn.expand("~/.config")
 	else
 		config_dir = vim.fn.expand("~/AppData/Local")
 	end
 
-	--- hosts.json (copilot.lua), apps.json (copilot.vim)
-	---@type Path[]
-	local paths = vim.iter({ "hosts.json", "apps.json" }):fold({}, function(acc, path)
-		local yason = Path:new(config_dir):joinpath("github-copilot", path)
-		if yason:exists() then
-			table.insert(acc, yason)
-		end
-		return acc
-	end)
-	if #paths == 0 then
-		error("You must setup copilot with either copilot.lua or copilot.vim", 2)
-	end
-
-	local yason = paths[1]
-	return vim
-		.iter(
-			---@type table<string, OAuthToken>
-			---@diagnostic disable-next-line: param-type-mismatch
-			vim.json.decode(yason:read())
-		)
-		:filter(function(k, _)
-			return k:match("github.com")
-		end)
-		---@param acc {oauth_token: string}
-		:fold({}, function(acc, _, v)
-			acc.oauth_token = v.oauth_token
-			return acc
-		end)
-		.oauth_token
-end
-
-H.chat_auth_url = "https://api.github.com/copilot_internal/v2/token"
-function H.chat_completion_url(base_url)
-	return Utils.url_join(base_url, "/chat/completions")
-end
-function H.response_url(base_url)
-	return Utils.url_join(base_url, "/responses")
-end
-
-function H.refresh_token(async, force)
-	if not M.state then
-		error("internal initialization error")
-	end
-
-	async = async == nil and true or async
-	force = force or false
-
-	-- Do not refresh token if not forced or not expired
-	if
-		not force
-		and M.state.github_token
-		and M.state.github_token.expires_at
-		and M.state.github_token.expires_at > math.floor(os.time())
-	then
-		return false
-	end
-
-	local provider_conf = Providers.get_config("copilot")
-
-	local curl_opts = {
-		headers = {
-			["Authorization"] = "token " .. M.state.oauth_token,
-			["Accept"] = "application/json",
-		},
-		timeout = provider_conf.timeout,
-		proxy = provider_conf.proxy,
-		insecure = provider_conf.allow_insecure,
-	}
-
-	local function handle_response(response)
-		if response.status == 200 then
-			M.state.github_token = vim.json.decode(response.body)
-			local file = Path:new(copilot_path)
-			file:write(vim.json.encode(M.state.github_token), "w")
-			if not vim.g.avante_login then
-				vim.g.avante_login = true
-			end
-
-			-- If triggered synchronously, reset timer
-			if not async and M._refresh_timer then
-				M.setup_timer()
-			end
-
-			return true
-		else
-			error("Failed to get success response: " .. vim.inspect(response))
-			return false
-		end
-	end
-
-	if async then
-		curl.get(
-			H.chat_auth_url,
-			vim.tbl_deep_extend("force", {
-				callback = handle_response,
-			}, curl_opts)
-		)
-	else
-		local response = curl.get(H.chat_auth_url, curl_opts)
-		handle_response(response)
-	end
-end
-
----@private
----@class AvanteCopilotState
----@field oauth_token string
----@field github_token CopilotToken?
-M.state = nil
-
-M.api_key_name = ""
-M.tokenizer_id = "gpt-4o"
-M.role_map = {
-	user = "user",
-	assistant = "assistant",
-}
-
-function M:is_disable_stream()
-	return false
-end
-
-setmetatable(M, { __index = OpenAI })
-
-function M:list_models()
-	if M._model_list_cache then
-		return M._model_list_cache
-	end
-	if not M._is_setup then
-		M.setup()
-	end
-	-- refresh token synchronously, only if it has expired
-	-- (this should rarely happen, as we refresh the token in the background)
-	H.refresh_token(false, false)
-	local provider_conf = Providers.parse_config(self)
-	local headers = self:build_headers()
-	local curl_opts = {
-		headers = Utils.tbl_override(headers, self.extra_headers),
-		timeout = provider_conf.timeout,
-		proxy = provider_conf.proxy,
-		insecure = provider_conf.allow_insecure,
-	}
-
-	local function handle_response(response)
-		if response.status == 200 then
-			local body = vim.json.decode(response.body)
-			-- ref: https://github.com/CopilotC-Nvim/CopilotChat.nvim/blob/16d897fd43d07e3b54478ccdb2f8a16e4df4f45a/lua/CopilotChat/config/providers.lua#L171-L187
-			local models = vim.iter(body.data)
-				:filter(function(model)
-					return model.capabilities.type == "chat" and not vim.endswith(model.id, "paygo")
-				end)
-				:map(function(model)
-					return {
-						id = model.id,
-						display_name = model.name,
-						name = "copilot/" .. model.name .. " (" .. model.id .. ")",
-						provider_name = "copilot",
-						tokenizer = model.capabilities.tokenizer,
-						max_input_tokens = model.capabilities.limits.max_prompt_tokens,
-						max_output_tokens = model.capabilities.limits.max_output_tokens,
-						policy = not model["policy"] or model["policy"]["state"] == "enabled",
-						version = model.version,
-					}
-				end)
-				:totable()
-			M._model_list_cache = models
-			return models
-		else
-			error("Failed to get success response: " .. vim.inspect(response))
-			return {}
-		end
-	end
-
-	local response = curl.get((M.state.github_token.endpoints.api or "") .. "/models", curl_opts)
-	return handle_response(response)
-end
-
-function M:build_headers()
-	return {
-		["Authorization"] = "Bearer " .. M.state.github_token.token,
-		["User-Agent"] = "GitHubCopilotChat/0.26.7",
-		["Editor-Version"] = "vscode/1.105.1",
-		["Editor-Plugin-Version"] = "copilot-chat/0.26.7",
-		["Copilot-Integration-Id"] = "vscode-chat",
-		["Openai-Intent"] = "conversation-edits",
-	}
-end
-
-function M:parse_curl_args(prompt_opts)
-	-- refresh token synchronously, only if it has expired
-	-- (this should rarely happen, as we refresh the token in the background)
-	H.refresh_token(false, false)
-
-	local provider_conf, request_body = Providers.parse_config(self)
-	local use_response_api = Providers.resolve_use_response_api(provider_conf, prompt_opts)
-	local disable_tools = provider_conf.disable_tools or false
-
-	-- Apply OpenAI's set_allowed_params for Response API compatibility
-	OpenAI.set_allowed_params(provider_conf, request_body)
-
-	local use_ReAct_prompt = provider_conf.use_ReAct_prompt == true
-
-	local tools = nil
-	if not disable_tools and prompt_opts.tools and not use_ReAct_prompt then
-		tools = {}
-		for _, tool in ipairs(prompt_opts.tools) do
-			local transformed_tool = OpenAI:transform_tool(tool)
-			-- Response API uses flattened tool structure
-			if use_response_api then
-				if transformed_tool.type == "function" and transformed_tool["function"] then
-					transformed_tool = {
-						type = "function",
-						name = transformed_tool["function"].name,
-						description = transformed_tool["function"].description,
-						parameters = transformed_tool["function"].parameters,
-					}
+	-- Try hosts.json (copilot.lua) and apps.json (copilot.vim)
+	local paths = { "hosts.json", "apps.json" }
+	for _, filename in ipairs(paths) do
+		local path = config_dir .. "/github-copilot/" .. filename
+		if vim.fn.filereadable(path) == 1 then
+			local content = vim.fn.readfile(path)
+			if content and #content > 0 then
+				local ok, data = pcall(vim.json.decode, table.concat(content, "\n"))
+				if ok and data then
+					for key, value in pairs(data) do
+						if key:match("github.com") and value.oauth_token then
+							return value.oauth_token
+						end
+					end
 				end
 			end
-			table.insert(tools, transformed_tool)
 		end
 	end
 
-	local headers = self:build_headers()
-
-	if prompt_opts.messages and #prompt_opts.messages > 0 then
-		local last_message = prompt_opts.messages[#prompt_opts.messages]
-		local initiator = last_message.role == "user" and "user" or "agent"
-		headers["X-Initiator"] = initiator
-	end
-
-	local parsed_messages = self:parse_messages(prompt_opts)
-
-	-- Build base body
-	local base_body = {
-		model = provider_conf.model,
-		stream = true,
-		tools = tools,
-	}
-
-	-- Response API uses 'input' instead of 'messages'
-	-- NOTE: Copilot doesn't support previous_response_id, always send full history
-	if use_response_api then
-		base_body.input = parsed_messages
-
-		-- Response API uses max_output_tokens instead of max_tokens/max_completion_tokens
-		if request_body.max_completion_tokens then
-			request_body.max_output_tokens = request_body.max_completion_tokens
-			request_body.max_completion_tokens = nil
-		end
-		if request_body.max_tokens then
-			request_body.max_output_tokens = request_body.max_tokens
-			request_body.max_tokens = nil
-		end
-		-- Response API doesn't use stream_options
-		base_body.stream_options = nil
-		base_body.include = { "reasoning.encrypted_content" }
-		base_body.reasoning = {
-			summary = "detailed",
-		}
-		base_body.truncation = "disabled"
-	else
-		base_body.messages = parsed_messages
-		base_body.stream_options = {
-			include_usage = true,
-		}
-	end
-
-	local base_url = M.state.github_token.endpoints.api or provider_conf.endpoint
-	local build_url = use_response_api and H.response_url or H.chat_completion_url
-
-	return {
-		url = build_url(base_url),
-		timeout = provider_conf.timeout,
-		proxy = provider_conf.proxy,
-		insecure = provider_conf.allow_insecure,
-		headers = Utils.tbl_override(headers, self.extra_headers),
-		body = vim.tbl_deep_extend("force", base_body, request_body),
-	}
+	return nil
 end
 
-M._refresh_timer = nil
-
-function M.setup_timer()
-	if M._refresh_timer then
-		M._refresh_timer:stop()
-		M._refresh_timer:close()
-	end
-
-	-- Calculate time until token expires
-	local now = math.floor(os.time())
-	local expires_at = M.state.github_token and M.state.github_token.expires_at or now
-	local time_until_expiry = math.max(0, expires_at - now)
-	-- Refresh 2 minutes before expiration
-	local initial_interval = math.max(0, (time_until_expiry - 120) * 1000)
-	-- Regular interval of 28 minutes after the first refresh
-	local repeat_interval = 28 * 60 * 1000
-
-	M._refresh_timer = vim.uv.new_timer()
-	M._refresh_timer:start(
-		initial_interval,
-		repeat_interval,
-		vim.schedule_wrap(function()
-			H.refresh_token(true, true)
-		end)
-	)
+--- Get model from config
+---@return string Model name
+local function get_model()
+	local codetyper = require("codetyper")
+	local config = codetyper.get_config()
+	return config.llm.copilot.model
 end
 
-function M.setup_file_watcher()
-	if M._file_watcher then
+--- Refresh GitHub token using OAuth token
+---@param callback fun(token: table|nil, error: string|nil)
+local function refresh_token(callback)
+	if not M.state or not M.state.oauth_token then
+		callback(nil, "No OAuth token available")
 		return
 	end
 
-	local copilot_token_file = Path:new(copilot_path)
-	M._file_watcher = vim.uv.new_fs_event()
+	-- Check if current token is still valid
+	if M.state.github_token and M.state.github_token.expires_at then
+		if M.state.github_token.expires_at > os.time() then
+			callback(M.state.github_token, nil)
+			return
+		end
+	end
 
-	M._file_watcher:start(
-		copilot_path,
-		{},
-		vim.schedule_wrap(function()
-			-- Reload token from file
-			if copilot_token_file:exists() then
-				local ok, token = pcall(vim.json.decode, copilot_token_file:read())
-				if ok then
-					M.state.github_token = token
-				end
+	local cmd = {
+		"curl",
+		"-s",
+		"-X",
+		"GET",
+		AUTH_URL,
+		"-H",
+		"Authorization: token " .. M.state.oauth_token,
+		"-H",
+		"Accept: application/json",
+	}
+
+	vim.fn.jobstart(cmd, {
+		stdout_buffered = true,
+		on_stdout = function(_, data)
+			if not data or #data == 0 or (data[1] == "" and #data == 1) then
+				return
 			end
-		end)
-	)
+
+			local response_text = table.concat(data, "\n")
+			local ok, token = pcall(vim.json.decode, response_text)
+
+			if not ok then
+				vim.schedule(function()
+					callback(nil, "Failed to parse token response")
+				end)
+				return
+			end
+
+			if token.error then
+				vim.schedule(function()
+					callback(nil, token.error_description or "Token refresh failed")
+				end)
+				return
+			end
+
+			M.state.github_token = token
+			vim.schedule(function()
+				callback(token, nil)
+			end)
+		end,
+		on_stderr = function(_, data)
+			if data and #data > 0 and data[1] ~= "" then
+				vim.schedule(function()
+					callback(nil, "Token refresh failed: " .. table.concat(data, "\n"))
+				end)
+			end
+		end,
+		on_exit = function(_, code)
+			if code ~= 0 then
+				vim.schedule(function()
+					callback(nil, "Token refresh failed with code: " .. code)
+				end)
+			end
+		end,
+	})
 end
 
-M._is_setup = false
-
-function M.is_env_set()
-	local ok = pcall(function()
-		H.get_oauth_token()
-	end)
-	return ok
+--- Build request headers
+---@param token table GitHub token
+---@return table Headers
+local function build_headers(token)
+	return {
+		"Authorization: Bearer " .. token.token,
+		"Content-Type: application/json",
+		"User-Agent: GitHubCopilotChat/0.26.7",
+		"Editor-Version: vscode/1.105.1",
+		"Editor-Plugin-Version: copilot-chat/0.26.7",
+		"Copilot-Integration-Id: vscode-chat",
+		"Openai-Intent: conversation-edits",
+	}
 end
 
-function M.setup()
-	local copilot_token_file = Path:new(copilot_path)
+--- Build request body for Copilot API
+---@param prompt string User prompt
+---@param context table Context information
+---@return table Request body
+local function build_request_body(prompt, context)
+	local system_prompt = llm.build_system_prompt(context)
 
+	return {
+		model = get_model(),
+		messages = {
+			{ role = "system", content = system_prompt },
+			{ role = "user", content = prompt },
+		},
+		max_tokens = 4096,
+		temperature = 0.2,
+		stream = false,
+	}
+end
+
+--- Make HTTP request to Copilot API
+---@param token table GitHub token
+---@param body table Request body
+---@param callback fun(response: string|nil, error: string|nil, usage: table|nil)
+local function make_request(token, body, callback)
+	local endpoint = (token.endpoints and token.endpoints.api or "https://api.githubcopilot.com")
+		.. "/chat/completions"
+	local json_body = vim.json.encode(body)
+
+	local headers = build_headers(token)
+	local cmd = {
+		"curl",
+		"-s",
+		"-X",
+		"POST",
+		endpoint,
+	}
+
+	for _, header in ipairs(headers) do
+		table.insert(cmd, "-H")
+		table.insert(cmd, header)
+	end
+
+	table.insert(cmd, "-d")
+	table.insert(cmd, json_body)
+
+	vim.fn.jobstart(cmd, {
+		stdout_buffered = true,
+		on_stdout = function(_, data)
+			if not data or #data == 0 or (data[1] == "" and #data == 1) then
+				return
+			end
+
+			local response_text = table.concat(data, "\n")
+			local ok, response = pcall(vim.json.decode, response_text)
+
+			if not ok then
+				vim.schedule(function()
+					callback(nil, "Failed to parse Copilot response", nil)
+				end)
+				return
+			end
+
+			if response.error then
+				vim.schedule(function()
+					callback(nil, response.error.message or "Copilot API error", nil)
+				end)
+				return
+			end
+
+			-- Extract usage info
+			local usage = response.usage or {}
+
+			if response.choices and response.choices[1] and response.choices[1].message then
+				local code = llm.extract_code(response.choices[1].message.content)
+				vim.schedule(function()
+					callback(code, nil, usage)
+				end)
+			else
+				vim.schedule(function()
+					callback(nil, "No content in Copilot response", nil)
+				end)
+			end
+		end,
+		on_stderr = function(_, data)
+			if data and #data > 0 and data[1] ~= "" then
+				vim.schedule(function()
+					callback(nil, "Copilot API request failed: " .. table.concat(data, "\n"), nil)
+				end)
+			end
+		end,
+		on_exit = function(_, code)
+			if code ~= 0 then
+				vim.schedule(function()
+					callback(nil, "Copilot API request failed with code: " .. code, nil)
+				end)
+			end
+		end,
+	})
+end
+
+--- Initialize Copilot state
+local function ensure_initialized()
 	if not M.state then
 		M.state = {
+			oauth_token = get_oauth_token(),
 			github_token = nil,
-			oauth_token = H.get_oauth_token(),
 		}
 	end
-
-	-- Load and validate existing token
-	if copilot_token_file:exists() then
-		local ok, token = pcall(vim.json.decode, copilot_token_file:read())
-		if ok and token.expires_at and token.expires_at > math.floor(os.time()) then
-			M.state.github_token = token
-		end
-	end
-
-	-- Setup timer management
-	local timer_lock_acquired = try_acquire_timer_lock()
-	if timer_lock_acquired then
-		M.setup_timer()
-	else
-		vim.schedule(function()
-			H.refresh_token(true, false)
-		end)
-	end
-
-	M.setup_file_watcher()
-
-	start_manager_check_timer()
-
-	require("avante.tokenizers").setup(M.tokenizer_id)
-	vim.g.avante_login = true
-	M._is_setup = true
 end
 
-function M.cleanup()
-	-- Cleanup refresh timer
-	if M._refresh_timer then
-		M._refresh_timer:stop()
-		M._refresh_timer:close()
-		M._refresh_timer = nil
+--- Generate code using Copilot API
+---@param prompt string The user's prompt
+---@param context table Context information
+---@param callback fun(response: string|nil, error: string|nil)
+function M.generate(prompt, context, callback)
+	local logs = require("codetyper.agent.logs")
 
-		-- Remove lockfile if we were the manager
-		local lockfile = Path:new(lockfile_path)
-		if lockfile:exists() then
-			local content = lockfile:read()
-			local pid = tonumber(content)
-			if pid and pid == vim.fn.getpid() then
-				lockfile:rm()
+	ensure_initialized()
+
+	if not M.state.oauth_token then
+		local err = "Copilot not authenticated. Please set up copilot.lua or copilot.vim first."
+		logs.error(err)
+		callback(nil, err)
+		return
+	end
+
+	local model = get_model()
+	logs.request("copilot", model)
+	logs.thinking("Refreshing authentication token...")
+
+	refresh_token(function(token, err)
+		if err then
+			logs.error(err)
+			utils.notify(err, vim.log.levels.ERROR)
+			callback(nil, err)
+			return
+		end
+
+		logs.thinking("Building request body...")
+		local body = build_request_body(prompt, context)
+
+		local prompt_estimate = logs.estimate_tokens(vim.json.encode(body))
+		logs.debug(string.format("Estimated prompt: ~%d tokens", prompt_estimate))
+		logs.thinking("Sending to Copilot API...")
+
+		utils.notify("Sending request to Copilot...", vim.log.levels.INFO)
+
+		make_request(token, body, function(response, request_err, usage)
+			if request_err then
+				logs.error(request_err)
+				utils.notify(request_err, vim.log.levels.ERROR)
+				callback(nil, request_err)
+			else
+				if usage then
+					logs.response(usage.prompt_tokens or 0, usage.completion_tokens or 0, "stop")
+				end
+				logs.thinking("Response received, extracting code...")
+				logs.info("Code generated successfully")
+				utils.notify("Code generated successfully", vim.log.levels.INFO)
+				callback(response, nil)
+			end
+		end)
+	end)
+end
+
+--- Check if Copilot is properly configured
+---@return boolean, string? Valid status and optional error message
+function M.validate()
+	ensure_initialized()
+	if not M.state.oauth_token then
+		return false, "Copilot not authenticated. Set up copilot.lua or copilot.vim first."
+	end
+	return true
+end
+
+--- Generate with tool use support for agentic mode
+---@param messages table[] Conversation history
+---@param context table Context information
+---@param tool_definitions table Tool definitions
+---@param callback fun(response: table|nil, error: string|nil)
+function M.generate_with_tools(messages, context, tool_definitions, callback)
+	local logs = require("codetyper.agent.logs")
+
+	ensure_initialized()
+
+	if not M.state.oauth_token then
+		local err = "Copilot not authenticated"
+		logs.error(err)
+		callback(nil, err)
+		return
+	end
+
+	local model = get_model()
+	logs.request("copilot", model)
+	logs.thinking("Refreshing authentication token...")
+
+	refresh_token(function(token, err)
+		if err then
+			logs.error(err)
+			callback(nil, err)
+			return
+		end
+
+		local tools_module = require("codetyper.agent.tools")
+		local agent_prompts = require("codetyper.prompts.agent")
+
+		-- Build system prompt with agent instructions
+		local system_prompt = llm.build_system_prompt(context)
+		system_prompt = system_prompt .. "\n\n" .. agent_prompts.system
+		system_prompt = system_prompt .. "\n\n" .. agent_prompts.tool_instructions
+
+		-- Format messages for Copilot (OpenAI-compatible format)
+		local copilot_messages = { { role = "system", content = system_prompt } }
+		for _, msg in ipairs(messages) do
+			if type(msg.content) == "string" then
+				table.insert(copilot_messages, { role = msg.role, content = msg.content })
+			elseif type(msg.content) == "table" then
+				local text_parts = {}
+				for _, part in ipairs(msg.content) do
+					if part.type == "tool_result" then
+						table.insert(text_parts, "[" .. (part.name or "tool") .. " result]: " .. (part.content or ""))
+					elseif part.type == "text" then
+						table.insert(text_parts, part.text or "")
+					end
+				end
+				if #text_parts > 0 then
+					table.insert(copilot_messages, { role = msg.role, content = table.concat(text_parts, "\n") })
+				end
 			end
 		end
-	end
 
-	-- Cleanup manager check timer
-	if M._manager_check_timer then
-		M._manager_check_timer:stop()
-		M._manager_check_timer:close()
-		M._manager_check_timer = nil
-	end
+		local body = {
+			model = get_model(),
+			messages = copilot_messages,
+			max_tokens = 4096,
+			temperature = 0.3,
+			stream = false,
+			tools = tools_module.to_openai_format(),
+		}
 
-	-- Cleanup file watcher
-	if M._file_watcher then
-		---@diagnostic disable-next-line: param-type-mismatch
-		M._file_watcher:stop()
-		M._file_watcher = nil
-	end
+		local endpoint = (token.endpoints and token.endpoints.api or "https://api.githubcopilot.com")
+			.. "/chat/completions"
+		local json_body = vim.json.encode(body)
+
+		local prompt_estimate = logs.estimate_tokens(json_body)
+		logs.debug(string.format("Estimated prompt: ~%d tokens", prompt_estimate))
+		logs.thinking("Sending to Copilot API...")
+
+		local headers = build_headers(token)
+		local cmd = {
+			"curl",
+			"-s",
+			"-X",
+			"POST",
+			endpoint,
+		}
+
+		for _, header in ipairs(headers) do
+			table.insert(cmd, "-H")
+			table.insert(cmd, header)
+		end
+
+		table.insert(cmd, "-d")
+		table.insert(cmd, json_body)
+
+		vim.fn.jobstart(cmd, {
+			stdout_buffered = true,
+			on_stdout = function(_, data)
+				if not data or #data == 0 or (data[1] == "" and #data == 1) then
+					return
+				end
+
+				local response_text = table.concat(data, "\n")
+				local ok, response = pcall(vim.json.decode, response_text)
+
+				if not ok then
+					vim.schedule(function()
+						logs.error("Failed to parse Copilot response")
+						callback(nil, "Failed to parse Copilot response")
+					end)
+					return
+				end
+
+				if response.error then
+					vim.schedule(function()
+						logs.error(response.error.message or "Copilot API error")
+						callback(nil, response.error.message or "Copilot API error")
+					end)
+					return
+				end
+
+				-- Log token usage
+				if response.usage then
+					logs.response(response.usage.prompt_tokens or 0, response.usage.completion_tokens or 0, "stop")
+				end
+
+				-- Convert to Claude-like format for parser compatibility
+				local converted = { content = {} }
+				if response.choices and response.choices[1] then
+					local choice = response.choices[1]
+					if choice.message then
+						if choice.message.content then
+							table.insert(converted.content, { type = "text", text = choice.message.content })
+							logs.thinking("Response contains text")
+						end
+						if choice.message.tool_calls then
+							for _, tc in ipairs(choice.message.tool_calls) do
+								local args = {}
+								if tc["function"] and tc["function"].arguments then
+									local ok_args, parsed = pcall(vim.json.decode, tc["function"].arguments)
+									if ok_args then
+										args = parsed
+									end
+								end
+								table.insert(converted.content, {
+									type = "tool_use",
+									id = tc.id,
+									name = tc["function"].name,
+									input = args,
+								})
+								logs.thinking("Tool call: " .. tc["function"].name)
+							end
+						end
+					end
+				end
+
+				vim.schedule(function()
+					callback(converted, nil)
+				end)
+			end,
+			on_stderr = function(_, data)
+				if data and #data > 0 and data[1] ~= "" then
+					vim.schedule(function()
+						logs.error("Copilot API request failed: " .. table.concat(data, "\n"))
+						callback(nil, "Copilot API request failed: " .. table.concat(data, "\n"))
+					end)
+				end
+			end,
+			on_exit = function(_, code)
+				if code ~= 0 then
+					vim.schedule(function()
+						logs.error("Copilot API request failed with code: " .. code)
+						callback(nil, "Copilot API request failed with code: " .. code)
+					end)
+				end
+			end,
+		})
+	end)
 end
-
--- Register cleanup on Neovim exit
-vim.api.nvim_create_autocmd("VimLeavePre", {
-	callback = function()
-		M.cleanup()
-	end,
-})
 
 return M

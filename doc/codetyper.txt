@@ -11,34 +11,41 @@ CONTENTS                                              *codetyper-contents*
   2. Requirements ............................ |codetyper-requirements|
   3. Installation ............................ |codetyper-installation|
   4. Configuration ........................... |codetyper-configuration|
-  5. Usage ................................... |codetyper-usage|
-  6. Commands ................................ |codetyper-commands|
-  7. Workflow ................................ |codetyper-workflow|
-  8. API ..................................... |codetyper-api|
+  5. LLM Providers ........................... |codetyper-providers|
+  6. Usage ................................... |codetyper-usage|
+  7. Commands ................................ |codetyper-commands|
+  8. Agent Mode .............................. |codetyper-agent|
+  9. Transform Commands ...................... |codetyper-transform|
+  10. Keymaps ................................ |codetyper-keymaps|
+  11. API .................................... |codetyper-api|
 
 ==============================================================================
 1. INTRODUCTION                                    *codetyper-introduction*
 
 Codetyper.nvim is an AI-powered coding partner that helps you write code
-faster using LLM APIs (Claude, Ollama) with a unique workflow.
-
-Instead of generating files directly, Codetyper watches what you type in
-special `.coder.*` files and generates code when you close prompt tags.
+faster using LLM APIs with a unique workflow.
 
 Key features:
 - Split view with coder file and target file side by side
 - Prompt-based code generation using /@ ... @/ tags
-- Support for Claude and Ollama LLM providers
-- Automatic .gitignore management for coder files and .coder/ folder
-- Intelligent code injection based on prompt type
-- Automatic project tree logging in .coder/tree.log
+- Support for Claude, OpenAI, Gemini, Copilot, and Ollama providers
+- Agent mode with autonomous tool use (read, edit, write, bash)
+- Transform commands for inline prompt processing
+- Auto-index feature for automatic companion file creation
+- Automatic .gitignore management
+- Real-time logs panel with token usage tracking
 
 ==============================================================================
 2. REQUIREMENTS                                    *codetyper-requirements*
 
 - Neovim >= 0.8.0
 - curl (for API calls)
-- Claude API key (if using Claude) or Ollama running locally
+- One of:
+  - Claude API key (ANTHROPIC_API_KEY)
+  - OpenAI API key (OPENAI_API_KEY)
+  - Gemini API key (GEMINI_API_KEY)
+  - GitHub Copilot (via copilot.lua or copilot.vim)
+  - Ollama running locally
 
 ==============================================================================
 3. INSTALLATION                                    *codetyper-installation*
@@ -50,10 +57,7 @@ Using lazy.nvim: >lua
     config = function()
       require("codetyper").setup({
         llm = {
-          provider = "claude", -- or "ollama"
-          claude = {
-            api_key = vim.env.ANTHROPIC_API_KEY,
-          },
+          provider = "claude", -- or "openai", "gemini", "copilot", "ollama"
         },
       })
     end,
@@ -75,19 +79,31 @@ Default configuration: >lua
 
   require("codetyper").setup({
     llm = {
-      provider = "claude", -- "claude" or "ollama"
+      provider = "claude", -- "claude", "openai", "gemini", "copilot", "ollama"
       claude = {
         api_key = nil, -- Uses ANTHROPIC_API_KEY env var if nil
         model = "claude-sonnet-4-20250514",
       },
+      openai = {
+        api_key = nil, -- Uses OPENAI_API_KEY env var if nil
+        model = "gpt-4o",
+        endpoint = nil, -- Custom endpoint (Azure, OpenRouter, etc.)
+      },
+      gemini = {
+        api_key = nil, -- Uses GEMINI_API_KEY env var if nil
+        model = "gemini-2.0-flash",
+      },
+      copilot = {
+        model = "gpt-4o", -- Uses OAuth from copilot.lua/copilot.vim
+      },
       ollama = {
         host = "http://localhost:11434",
-        model = "codellama",
+        model = "deepseek-coder:6.7b",
       },
     },
     window = {
-      width = 0.4, -- 40% of screen width
-      position = "left", -- "left" or "right"
+      width = 25, -- Percentage of screen width (25 = 25%)
+      position = "left",
       border = "rounded",
     },
     patterns = {
@@ -96,10 +112,67 @@ Default configuration: >lua
       file_pattern = "*.coder.*",
     },
     auto_gitignore = true,
+    auto_open_ask = true,
+    auto_index = false, -- Auto-create coder companion files
   })
 <
 ==============================================================================
-5. USAGE                                                  *codetyper-usage*
+5. LLM PROVIDERS                                      *codetyper-providers*
+
+                                                    *codetyper-claude*
+Claude (Anthropic)~
+Best for complex reasoning and code generation.
+>lua
+  llm = {
+    provider = "claude",
+    claude = { model = "claude-sonnet-4-20250514" },
+  }
+<
+                                                    *codetyper-openai*
+OpenAI~
+Supports custom endpoints for Azure, OpenRouter, etc.
+>lua
+  llm = {
+    provider = "openai",
+    openai = {
+      model = "gpt-4o",
+      endpoint = nil, -- optional custom endpoint
+    },
+  }
+<
+                                                    *codetyper-gemini*
+Google Gemini~
+Fast and capable.
+>lua
+  llm = {
+    provider = "gemini",
+    gemini = { model = "gemini-2.0-flash" },
+  }
+<
+                                                    *codetyper-copilot*
+GitHub Copilot~
+Uses your existing Copilot subscription.
+Requires copilot.lua or copilot.vim to be configured.
+>lua
+  llm = {
+    provider = "copilot",
+    copilot = { model = "gpt-4o" },
+  }
+<
+                                                    *codetyper-ollama*
+Ollama (Local)~
+Run models locally with no API costs.
+>lua
+  llm = {
+    provider = "ollama",
+    ollama = {
+      host = "http://localhost:11434",
+      model = "deepseek-coder:6.7b",
+    },
+  }
+<
+==============================================================================
+6. USAGE                                                  *codetyper-usage*
 
 1. Open any file (e.g., `index.ts`)
 2. Run `:Coder open` to create/open the corresponding coder file
@@ -113,8 +186,17 @@ Default configuration: >lua
    - Generate the code
    - Inject it into the target file
 
+Prompt Types~
+
+The plugin detects the type of request from your prompt:
+
+- "refactor" / "rewrite" - Modifies existing code
+- "add" / "create" / "implement" - Adds new code
+- "document" / "comment" - Adds documentation
+- "explain" - Provides explanations (no code injection)
+
 ==============================================================================
-6. COMMANDS                                            *codetyper-commands*
+7. COMMANDS                                            *codetyper-commands*
 
                                                               *:Coder*
 :Coder [subcommand]
@@ -143,8 +225,55 @@ Default configuration: >lua
 
                                                        *:CoderProcess*
 :CoderProcess
-    Process the last prompt in the current coder buffer and
-    inject generated code into the target file.
+    Process the last prompt in the current coder buffer.
+
+                                                           *:CoderAsk*
+:CoderAsk
+    Open the Ask panel for questions and explanations.
+
+                                                     *:CoderAskToggle*
+:CoderAskToggle
+    Toggle the Ask panel.
+
+                                                      *:CoderAskClear*
+:CoderAskClear
+    Clear Ask panel chat history.
+
+                                                         *:CoderAgent*
+:CoderAgent
+    Open the Agent panel for autonomous coding tasks.
+
+                                                   *:CoderAgentToggle*
+:CoderAgentToggle
+    Toggle the Agent panel.
+
+                                                     *:CoderAgentStop*
+:CoderAgentStop
+    Stop the currently running agent.
+
+                                                     *:CoderTransform*
+:CoderTransform
+    Transform all /@ @/ tags in the current file.
+
+                                               *:CoderTransformCursor*
+:CoderTransformCursor
+    Transform the /@ @/ tag at cursor position.
+
+                                               *:CoderTransformVisual*
+:CoderTransformVisual
+    Transform selected /@ @/ tags (visual mode).
+
+                                                         *:CoderIndex*
+:CoderIndex
+    Open coder companion file for current source file.
+
+                                                          *:CoderLogs*
+:CoderLogs
+    Toggle the logs panel showing LLM request details.
+
+                                                          *:CoderType*
+:CoderType
+    Show mode switcher UI (Ask/Agent).
 
                                                           *:CoderTree*
 :CoderTree
@@ -155,54 +284,83 @@ Default configuration: >lua
     Open the tree.log file in a vertical split for viewing.
 
 ==============================================================================
-7. WORKFLOW                                            *codetyper-workflow*
+8. AGENT MODE                                            *codetyper-agent*
 
-The Coder Workflow~
+Agent mode provides an autonomous coding assistant with tool access.
 
-1. Target File: Your actual source file (e.g., `src/utils.ts`)
-2. Coder File: A companion file (e.g., `src/utils.coder.ts`)
+Available Tools~
 
-The coder file mirrors your target file's location and extension.
-When you write prompts in the coder file and close them, the
-generated code appears in the target file.
+- read_file   Read file contents at a path
+- edit_file   Edit files with find/replace
+- write_file  Create or overwrite files
+- bash        Execute shell commands
 
-Prompt Types~
+Using Agent Mode~
 
-The plugin detects the type of request from your prompt:
+1. Open the agent panel: `:CoderAgent` or `<leader>ca`
+2. Describe what you want to accomplish
+3. The agent will use tools to complete the task
+4. Review changes before they're applied
 
-- "refactor" - Modifies existing code
-- "add" / "create" / "implement" - Adds new code
-- "document" / "comment" - Adds documentation
-- "explain" - Provides explanations (no code injection)
+Agent Keymaps~
 
-Example Prompts~
->
-   /@ Refactor this function to use async/await @/
-
-   /@ Add input validation to the form handler @/
-
-   /@ Add JSDoc comments to all exported functions @/
-
-   /@ Create a React hook for managing form state
-   with validation support @/
-<
-Project Tree Logging~
-
-Codetyper automatically maintains a .coder/ folder with a tree.log file:
->
-   .coder/
-   └── tree.log    # Auto-updated project structure
-<
-The tree.log is updated whenever you:
-- Create a new file
-- Save a file
-- Delete a file
-- Change directories
-
-View the tree anytime with `:Coder tree-view` or refresh with `:Coder tree`.
+<CR>       Submit message
+Ctrl+c     Stop agent execution
+q          Close agent panel
 
 ==============================================================================
-8. API                                                      *codetyper-api*
+9. TRANSFORM COMMANDS                                *codetyper-transform*
+
+Transform commands allow you to process /@ @/ tags inline without
+opening the split view.
+
+                                                   *:CoderTransform*
+:CoderTransform
+    Find and transform all /@ @/ tags in the current buffer.
+    Each tag is replaced with generated code.
+
+                                             *:CoderTransformCursor*
+:CoderTransformCursor
+    Transform the /@ @/ tag at the current cursor position.
+    Useful for processing a single prompt.
+
+                                             *:CoderTransformVisual*
+:'<,'>CoderTransformVisual
+    Transform /@ @/ tags within the visual selection.
+    Select lines containing tags and run this command.
+
+Example~
+>
+   // In your source file:
+   /@ Add input validation for email @/
+
+   // After running :CoderTransformCursor:
+   function validateEmail(email) {
+     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+   }
+<
+==============================================================================
+10. KEYMAPS                                            *codetyper-keymaps*
+
+Default keymaps (auto-configured):
+
+<leader>ctt    (Normal)  Transform tag at cursor
+<leader>ctt    (Visual)  Transform selected tags
+<leader>ctT    (Normal)  Transform all tags in file
+<leader>ca     (Normal)  Toggle Agent panel
+<leader>ci     (Normal)  Open coder companion (index)
+
+Ask Panel keymaps:
+
+@              Attach/reference a file
+Ctrl+Enter     Submit question
+Ctrl+n         Start new chat
+Ctrl+f         Add current file as context
+q              Close panel
+Y              Copy last response
+
+==============================================================================
+11. API                                                      *codetyper-api*
 
                                                   *codetyper.setup()*
 codetyper.setup({opts})

@@ -1,128 +1,177 @@
----@mod codetyper.prompts.ask Ask/explanation prompts for Codetyper.nvim
+---@mod codetyper.prompts.ask Ask / explanation prompts for Codetyper.nvim
 ---
---- These prompts are used for the Ask panel and code explanations.
+--- These prompts are used for the Ask panel and non-destructive explanations.
 
 local M = {}
 
 --- Prompt for explaining code
-M.explain_code = [[Please explain the following code:
-
-{{code}}
-
-Provide:
-1. A high-level overview of what it does
-2. Explanation of key parts
-3. Any potential issues or improvements
-]]
-
---- Prompt for explaining a specific function
-M.explain_function = [[Explain this function in detail:
-
-{{code}}
-
-Include:
-1. What the function does
-2. Parameters and their purposes
-3. Return value
-4. Any side effects
-5. Usage examples
-]]
-
---- Prompt for explaining an error
-M.explain_error = [[I'm getting this error:
-
-{{error}}
-
-In this code:
-
-{{code}}
-
-Please explain:
-1. What the error means
-2. Why it's happening
-3. How to fix it
-]]
-
---- Prompt for code review
-M.code_review = [[Please review this code:
-
-{{code}}
-
-Provide feedback on:
-1. Code quality and readability
-2. Potential bugs or issues
-3. Performance considerations
-4. Security concerns (if applicable)
-5. Suggested improvements
-]]
-
---- Prompt for explaining a concept
-M.explain_concept = [[Explain the following programming concept:
-
-{{concept}}
-
-Include:
-1. Definition and purpose
-2. When and why to use it
-3. Simple code examples
-4. Common pitfalls to avoid
-]]
-
---- Prompt for comparing approaches
-M.compare_approaches = [[Compare these different approaches:
-
-{{approaches}}
-
-Analyze:
-1. Pros and cons of each
-2. Performance implications
-3. Maintainability
-4. When to use each approach
-]]
-
---- Prompt for debugging help
-M.debug_help = [[Help me debug this issue:
-
-Problem: {{problem}}
+M.explain_code = [[You are explaining EXISTING code to a developer.
 
 Code:
 {{code}}
 
-What I've tried:
+Instructions:
+- Start with a concise high-level overview
+- Explain important logic and structure
+- Point out noteworthy implementation details
+- Mention potential issues or limitations ONLY if clearly visible
+- Do NOT speculate about missing context
+
+Format the response in markdown.
+]]
+
+--- Prompt for explaining a specific function
+M.explain_function = [[You are explaining an EXISTING function.
+
+Function code:
+{{code}}
+
+Explain:
+- What the function does and when it is used
+- The purpose of each parameter
+- The return value, if any
+- Side effects or assumptions
+- A brief usage example if appropriate
+
+Format the response in markdown.
+Do NOT suggest refactors unless explicitly asked.
+]]
+
+--- Prompt for explaining an error
+M.explain_error = [[You are helping diagnose a real error.
+
+Error message:
+{{error}}
+
+Relevant code:
+{{code}}
+
+Instructions:
+- Explain what the error message means
+- Identify the most likely cause based on the code
+- Suggest concrete fixes or next debugging steps
+- If multiple causes are possible, say so clearly
+
+Format the response in markdown.
+Do NOT invent missing stack traces or context.
+]]
+
+--- Prompt for code review
+M.code_review = [[You are performing a code review on EXISTING code.
+
+Code:
+{{code}}
+
+Review criteria:
+- Readability and clarity
+- Correctness and potential bugs
+- Performance considerations where relevant
+- Security concerns only if applicable
+- Practical improvement suggestions
+
+Guidelines:
+- Be constructive and specific
+- Do NOT nitpick style unless it impacts clarity
+- Do NOT suggest large refactors unless justified
+
+Format the response in markdown.
+]]
+
+--- Prompt for explaining a programming concept
+M.explain_concept = [[Explain the following programming concept to a developer:
+
+Concept:
+{{concept}}
+
+Include:
+- A clear definition and purpose
+- When and why it is used
+- A simple illustrative example
+- Common pitfalls or misconceptions
+
+Format the response in markdown.
+Avoid unnecessary jargon.
+]]
+
+--- Prompt for comparing approaches
+M.compare_approaches = [[Compare the following approaches:
+
+{{approaches}}
+
+Analysis guidelines:
+- Describe strengths and weaknesses of each
+- Discuss performance or complexity tradeoffs if relevant
+- Compare maintainability and clarity
+- Explain when one approach is preferable over another
+
+Format the response in markdown.
+Base comparisons on general principles unless specific code is provided.
+]]
+
+--- Prompt for debugging help
+M.debug_help = [[You are helping debug a concrete issue.
+
+Problem description:
+{{problem}}
+
+Code:
+{{code}}
+
+What has already been tried:
 {{attempts}}
 
-Please help identify the issue and suggest a solution.
+Instructions:
+- Identify likely root causes
+- Explain why the issue may be occurring
+- Suggest specific debugging steps or fixes
+- Call out missing information if needed
+
+Format the response in markdown.
+Do NOT guess beyond the provided information.
 ]]
 
 --- Prompt for architecture advice
-M.architecture_advice = [[I need advice on this architecture decision:
+M.architecture_advice = [[You are providing architecture guidance.
 
+Question:
 {{question}}
 
 Context:
 {{context}}
 
-Please provide:
-1. Recommended approach
-2. Reasoning
-3. Potential alternatives
-4. Things to consider
+Instructions:
+- Recommend a primary approach
+- Explain the reasoning and tradeoffs
+- Mention viable alternatives when relevant
+- Highlight risks or constraints to consider
+
+Format the response in markdown.
+Avoid dogmatic or one-size-fits-all answers.
 ]]
 
 --- Generic ask prompt
-M.generic = [[USER QUESTION: {{question}}
+M.generic = [[You are answering a developer's question.
+
+Question:
+{{question}}
 
 {{#if files}}
-ATTACHED FILE CONTENTS:
+Relevant file contents:
 {{files}}
 {{/if}}
 
 {{#if context}}
-ADDITIONAL CONTEXT:
+Additional context:
 {{context}}
 {{/if}}
 
-Please provide a helpful, accurate response.
+Instructions:
+- Be accurate and grounded in the provided information
+- Clearly state assumptions or uncertainty
+- Prefer clarity over verbosity
+- Do NOT output raw code intended for insertion unless explicitly asked
+
+Format the response in markdown.
 ]]
 
 return M
