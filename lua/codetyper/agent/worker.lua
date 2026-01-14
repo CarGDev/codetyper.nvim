@@ -31,6 +31,137 @@ local confidence = require("codetyper.agent.confidence")
 --- Worker ID counter
 local worker_counter = 0
 
+--- Patterns that indicate LLM needs more context (must be near start of response)
+local context_needed_patterns = {
+	"^%s*i need more context",
+	"^%s*i'm sorry.-i need more",
+	"^%s*i apologize.-i need more",
+	"^%s*could you provide more context",
+	"^%s*could you please provide more",
+	"^%s*can you clarify",
+	"^%s*please provide more context",
+	"^%s*more information needed",
+	"^%s*not enough context",
+	"^%s*i don't have enough",
+	"^%s*unclear what you",
+	"^%s*what do you mean by",
+}
+
+--- Check if response indicates need for more context
+--- Only triggers if the response primarily asks for context (no substantial code)
+---@param response string
+---@return boolean
+local function needs_more_context(response)
+	if not response then
+		return false
+	end
+
+	-- If response has substantial code (more than 5 lines with code-like content), don't ask for context
+	local lines = vim.split(response, "\n")
+	local code_lines = 0
+	for _, line in ipairs(lines) do
+		-- Count lines that look like code (have programming constructs)
+		if line:match("[{}();=]") or line:match("function") or line:match("def ")
+			or line:match("class ") or line:match("return ") or line:match("import ")
+			or line:match("public ") or line:match("private ") or line:match("local ") then
+			code_lines = code_lines + 1
+		end
+	end
+
+	-- If there's substantial code, don't trigger context request
+	if code_lines >= 3 then
+		return false
+	end
+
+	-- Check if the response STARTS with a context-needed phrase
+	local lower = response:lower()
+	for _, pattern in ipairs(context_needed_patterns) do
+		if lower:match(pattern) then
+			return true
+		end
+	end
+	return false
+end
+
+--- Clean LLM response to extract only code
+---@param response string Raw LLM response
+---@param filetype string|nil File type for language detection
+---@return string Cleaned code
+local function clean_response(response, filetype)
+	if not response then
+		return ""
+	end
+
+	local cleaned = response
+
+	-- Remove the original prompt tags /@ ... @/ if they appear in output
+	-- Use [%s%S] to match any character including newlines (Lua's . doesn't match newlines)
+	cleaned = cleaned:gsub("/@[%s%S]-@/", "")
+
+	-- Try to extract code from markdown code blocks
+	-- Match ```language\n...\n``` or just ```\n...\n```
+	local code_block = cleaned:match("```[%w]*\n(.-)\n```")
+	if not code_block then
+		-- Try without newline after language
+		code_block = cleaned:match("```[%w]*(.-)\n```")
+	end
+	if not code_block then
+		-- Try single line code block
+		code_block = cleaned:match("```(.-)```")
+	end
+
+	if code_block then
+		cleaned = code_block
+	else
+		-- No code block found, try to remove common prefixes/suffixes
+		-- Remove common apology/explanation phrases at the start
+		local explanation_starts = {
+			"^[Ii]'m sorry.-\n",
+			"^[Ii] apologize.-\n",
+			"^[Hh]ere is.-:\n",
+			"^[Hh]ere's.-:\n",
+			"^[Tt]his is.-:\n",
+			"^[Bb]ased on.-:\n",
+			"^[Ss]ure.-:\n",
+			"^[Oo][Kk].-:\n",
+			"^[Cc]ertainly.-:\n",
+		}
+		for _, pattern in ipairs(explanation_starts) do
+			cleaned = cleaned:gsub(pattern, "")
+		end
+
+		-- Remove trailing explanations
+		local explanation_ends = {
+			"\n[Tt]his code.-$",
+			"\n[Tt]his function.-$",
+			"\n[Tt]his is a.-$",
+			"\n[Ii] hope.-$",
+			"\n[Ll]et me know.-$",
+			"\n[Ff]eel free.-$",
+			"\n[Nn]ote:.-$",
+			"\n[Pp]lease replace.-$",
+			"\n[Pp]lease note.-$",
+			"\n[Yy]ou might want.-$",
+			"\n[Yy]ou may want.-$",
+			"\n[Mm]ake sure.-$",
+			"\n[Aa]lso,.-$",
+			"\n[Rr]emember.-$",
+		}
+		for _, pattern in ipairs(explanation_ends) do
+			cleaned = cleaned:gsub(pattern, "")
+		end
+	end
+
+	-- Remove any remaining markdown artifacts
+	cleaned = cleaned:gsub("^```[%w]*\n?", "")
+	cleaned = cleaned:gsub("\n?```$", "")
+
+	-- Trim whitespace
+	cleaned = cleaned:match("^%s*(.-)%s*$") or cleaned
+
+	return cleaned
+end
+
 --- Active workers
 ---@type table<string, Worker>
 local active_workers = {}
@@ -63,6 +194,28 @@ local function get_client(worker_type)
 	return nil, "Unknown provider: " .. worker_type
 end
 
+--- Format attached files for inclusion in prompt
+---@param attached_files table[]|nil
+---@return string
+local function format_attached_files(attached_files)
+	if not attached_files or #attached_files == 0 then
+		return ""
+	end
+
+	local parts = { "\n\n--- Referenced Files ---" }
+	for _, file in ipairs(attached_files) do
+		local ext = vim.fn.fnamemodify(file.path, ":e")
+		table.insert(parts, string.format(
+			"\n\nFile: %s\n```%s\n%s\n```",
+			file.path,
+			ext,
+			file.content:sub(1, 3000) -- Limit each file to 3000 chars
+		))
+	end
+
+	return table.concat(parts, "")
+end
+
 --- Build prompt for code generation
 ---@param event table PromptEvent
 ---@return string prompt
@@ -83,6 +236,9 @@ local function build_prompt(event)
 
 	local filetype = vim.fn.fnamemodify(event.target_path or "", ":e")
 
+	-- Format attached files
+	local attached_content = format_attached_files(event.attached_files)
+
 	-- Build context with scope information
 	local context = {
 		target_path = event.target_path,
@@ -92,6 +248,7 @@ local function build_prompt(event)
 		scope_text = event.scope_text,
 		scope_range = event.scope_range,
 		intent = event.intent,
+		attached_files = event.attached_files,
 	}
 
 	-- Build the actual prompt based on intent and scope
@@ -115,7 +272,7 @@ local function build_prompt(event)
 ```%s
 %s
 ```
-
+%s
 User request: %s
 
 Return the complete transformed %s. Output only code, no explanations.]],
@@ -124,6 +281,7 @@ Return the complete transformed %s. Output only code, no explanations.]],
 				filetype,
 				filetype,
 				event.scope_text,
+				attached_content,
 				event.prompt_content,
 				scope_type
 			)
@@ -135,7 +293,7 @@ Return the complete transformed %s. Output only code, no explanations.]],
 ```%s
 %s
 ```
-
+%s
 User request: %s
 
 Output only the code to insert, no explanations.]],
@@ -143,6 +301,7 @@ Output only the code to insert, no explanations.]],
 				scope_name,
 				filetype,
 				event.scope_text,
+				attached_content,
 				event.prompt_content
 			)
 		end
@@ -154,7 +313,7 @@ Output only the code to insert, no explanations.]],
 ```%s
 %s
 ```
-
+%s
 User request: %s
 
 Output only code, no explanations.]],
@@ -162,6 +321,7 @@ Output only code, no explanations.]],
 			filetype,
 			filetype,
 			target_content:sub(1, 4000), -- Limit context size
+			attached_content,
 			event.prompt_content
 		)
 	end
@@ -303,8 +463,40 @@ function M.complete(worker, response, error, usage)
 		return
 	end
 
-	-- Score confidence
-	local conf_score, breakdown = confidence.score(response, worker.event.prompt_content)
+	-- Check if LLM needs more context
+	if needs_more_context(response) then
+		worker.status = "needs_context"
+		active_workers[worker.id] = nil
+
+		pcall(function()
+			local logs = require("codetyper.agent.logs")
+			logs.add({
+				type = "info",
+				message = string.format("Worker %s: LLM needs more context", worker.id),
+			})
+		end)
+
+		worker.callback({
+			success = false,
+			response = response,
+			error = nil,
+			needs_context = true,
+			original_event = worker.event,
+			confidence = 0,
+			confidence_breakdown = {},
+			duration = duration,
+			worker_type = worker.worker_type,
+			usage = usage,
+		})
+		return
+	end
+
+	-- Clean the response (remove markdown, explanations, etc.)
+	local filetype = vim.fn.fnamemodify(worker.event.target_path or "", ":e")
+	local cleaned_response = clean_response(response, filetype)
+
+	-- Score confidence on cleaned response
+	local conf_score, breakdown = confidence.score(cleaned_response, worker.event.prompt_content)
 
 	worker.status = "completed"
 	active_workers[worker.id] = nil
@@ -326,7 +518,7 @@ function M.complete(worker, response, error, usage)
 
 	worker.callback({
 		success = true,
-		response = response,
+		response = cleaned_response,
 		error = nil,
 		confidence = conf_score,
 		confidence_breakdown = breakdown,

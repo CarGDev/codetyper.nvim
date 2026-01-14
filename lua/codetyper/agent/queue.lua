@@ -6,6 +6,11 @@
 
 local M = {}
 
+---@class AttachedFile
+---@field path string Relative path as referenced in prompt
+---@field full_path string Absolute path to the file
+---@field content string File content
+
 ---@class PromptEvent
 ---@field id string Unique event ID
 ---@field bufnr number Source buffer number
@@ -16,7 +21,7 @@ local M = {}
 ---@field prompt_content string Cleaned prompt text
 ---@field target_path string Target file for injection
 ---@field priority number Priority (1=high, 2=normal, 3=low)
----@field status string "pending"|"processing"|"completed"|"escalated"|"cancelled"
+---@field status string "pending"|"processing"|"completed"|"escalated"|"cancelled"|"needs_context"|"failed"
 ---@field attempt_count number Number of processing attempts
 ---@field worker_type string|nil LLM provider used ("ollama"|"claude"|etc)
 ---@field created_at number System time when created
@@ -24,6 +29,7 @@ local M = {}
 ---@field scope ScopeInfo|nil Resolved scope (function/class/file)
 ---@field scope_text string|nil Text of the resolved scope
 ---@field scope_range {start_line: number, end_line: number}|nil Range of scope in target
+---@field attached_files AttachedFile[]|nil Files attached via @filename syntax
 
 --- Internal state
 ---@type PromptEvent[]
@@ -383,16 +389,21 @@ function M.clear(status)
 	notify_listeners("update", nil)
 end
 
---- Cleanup completed/cancelled events older than max_age seconds
+--- Cleanup completed/cancelled/failed events older than max_age seconds
 ---@param max_age number Maximum age in seconds (default: 300)
 function M.cleanup(max_age)
 	max_age = max_age or 300
 	local now = os.time()
+	local terminal_statuses = {
+		completed = true,
+		cancelled = true,
+		failed = true,
+		needs_context = true,
+	}
 	local i = 1
 	while i <= #queue do
 		local event = queue[i]
-		if (event.status == "completed" or event.status == "cancelled")
-			and (now - event.created_at) > max_age then
+		if terminal_statuses[event.status] and (now - event.created_at) > max_age then
 			table.remove(queue, i)
 		else
 			i = i + 1
@@ -410,6 +421,8 @@ function M.stats()
 		completed = 0,
 		cancelled = 0,
 		escalated = 0,
+		failed = 0,
+		needs_context = 0,
 	}
 	for _, event in ipairs(queue) do
 		local s = event.status

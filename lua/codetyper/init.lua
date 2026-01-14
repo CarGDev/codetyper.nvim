@@ -30,12 +30,16 @@ function M.setup(opts)
   local gitignore = require("codetyper.gitignore")
   local autocmds = require("codetyper.autocmds")
   local tree = require("codetyper.tree")
+  local completion = require("codetyper.completion")
 
   -- Register commands
   commands.setup()
 
   -- Setup autocommands
   autocmds.setup()
+
+  -- Setup file reference completion
+  completion.setup()
 
   -- Ensure .gitignore has coder files excluded
   gitignore.ensure_ignored()

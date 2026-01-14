@@ -10,6 +10,7 @@ local queue = require("codetyper.agent.queue")
 local patch = require("codetyper.agent.patch")
 local worker = require("codetyper.agent.worker")
 local confidence_mod = require("codetyper.agent.confidence")
+local context_modal = require("codetyper.agent.context_modal")
 
 --- Scheduler state
 local state = {
@@ -118,10 +119,59 @@ local function get_primary_provider()
 	return "claude"
 end
 
+--- Retry event with additional context
+---@param original_event table Original prompt event
+---@param additional_context string Additional context from user
+local function retry_with_context(original_event, additional_context)
+	-- Create new prompt content combining original + additional
+	local combined_prompt = string.format(
+		"%s\n\nAdditional context:\n%s",
+		original_event.prompt_content,
+		additional_context
+	)
+
+	-- Create a new event with the combined prompt
+	local new_event = vim.deepcopy(original_event)
+	new_event.id = nil -- Will be assigned a new ID
+	new_event.prompt_content = combined_prompt
+	new_event.attempt_count = 0
+	new_event.status = nil
+
+	-- Log the retry
+	pcall(function()
+		local logs = require("codetyper.agent.logs")
+		logs.add({
+			type = "info",
+			message = string.format("Retrying with additional context (original: %s)", original_event.id),
+		})
+	end)
+
+	-- Queue the new event
+	queue.enqueue(new_event)
+end
+
 --- Process worker result and decide next action
 ---@param event table PromptEvent
 ---@param result table WorkerResult
 local function handle_worker_result(event, result)
+	-- Check if LLM needs more context
+	if result.needs_context then
+		pcall(function()
+			local logs = require("codetyper.agent.logs")
+			logs.add({
+				type = "info",
+				message = string.format("Event %s: LLM needs more context, opening modal", event.id),
+			})
+		end)
+
+		-- Open the context modal
+		context_modal.open(result.original_event or event, result.response or "", retry_with_context)
+
+		-- Mark original event as needing context (not failed)
+		queue.update_status(event.id, "needs_context", { response = result.response })
+		return
+	end
+
 	if not result.success then
 		-- Failed - try escalation if this was ollama
 		if result.worker_type == "ollama" and event.attempt_count < 2 then

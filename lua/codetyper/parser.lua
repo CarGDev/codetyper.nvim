@@ -4,6 +4,25 @@ local M = {}
 
 local utils = require("codetyper.utils")
 
+--- Get config with safe fallback
+---@return table config
+local function get_config_safe()
+  local ok, codetyper = pcall(require, "codetyper")
+  if ok and codetyper.get_config then
+    local config = codetyper.get_config()
+    if config and config.patterns then
+      return config
+    end
+  end
+  -- Fallback defaults
+  return {
+    patterns = {
+      open_tag = "/@",
+      close_tag = "@/",
+    }
+  }
+end
+
 --- Find all prompts in buffer content
 ---@param content string Buffer content
 ---@param open_tag string Opening tag
@@ -72,8 +91,7 @@ end
 ---@param bufnr number Buffer number
 ---@return CoderPrompt[] List of found prompts
 function M.find_prompts_in_buffer(bufnr)
-  local codetyper = require("codetyper")
-  local config = codetyper.get_config()
+  local config = get_config_safe()
 
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
   local content = table.concat(lines, "\n")
@@ -165,8 +183,7 @@ end
 ---@return boolean
 function M.has_unclosed_prompts(bufnr)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
-  local codetyper = require("codetyper")
-  local config = codetyper.get_config()
+  local config = get_config_safe()
 
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
   local content = table.concat(lines, "\n")
@@ -178,6 +195,94 @@ function M.has_unclosed_prompts(bufnr)
   local _, close_count = content:gsub(escaped_close, "")
 
   return open_count > close_count
+end
+
+--- Extract file references from prompt content
+--- Matches @filename patterns but NOT @/ (closing tag)
+---@param content string Prompt content
+---@return string[] List of file references
+function M.extract_file_references(content)
+  local files = {}
+  -- Pattern: @ followed by word char, dot, underscore, or dash as FIRST char
+  -- Then optionally more path characters including /
+  -- This ensures @/ is NOT matched (/ cannot be first char)
+  for file in content:gmatch("@([%w%._%-][%w%._%-/]*)") do
+    if file ~= "" then
+      table.insert(files, file)
+    end
+  end
+  return files
+end
+
+--- Remove file references from prompt content (for clean prompt text)
+---@param content string Prompt content
+---@return string Cleaned content without file references
+function M.strip_file_references(content)
+  -- Remove @filename patterns but preserve @/ closing tag
+  -- Pattern requires first char after @ to be word char, dot, underscore, or dash (NOT /)
+  return content:gsub("@([%w%._%-][%w%._%-/]*)", "")
+end
+
+--- Check if cursor is inside an unclosed prompt tag
+---@param bufnr? number Buffer number (default: current)
+---@return boolean is_inside Whether cursor is inside an open tag
+---@return number|nil start_line Line where the open tag starts
+function M.is_cursor_in_open_tag(bufnr)
+  bufnr = bufnr or vim.api.nvim_get_current_buf()
+  local config = get_config_safe()
+
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  local cursor_line = cursor[1]
+
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, cursor_line, false)
+  local escaped_open = utils.escape_pattern(config.patterns.open_tag)
+  local escaped_close = utils.escape_pattern(config.patterns.close_tag)
+
+  local open_count = 0
+  local close_count = 0
+  local last_open_line = nil
+
+  for line_num, line in ipairs(lines) do
+    -- Count opens on this line
+    for _ in line:gmatch(escaped_open) do
+      open_count = open_count + 1
+      last_open_line = line_num
+    end
+    -- Count closes on this line
+    for _ in line:gmatch(escaped_close) do
+      close_count = close_count + 1
+    end
+  end
+
+  local is_inside = open_count > close_count
+  return is_inside, is_inside and last_open_line or nil
+end
+
+--- Get the word being typed after @ symbol
+---@param bufnr? number Buffer number
+---@return string|nil prefix The text after @ being typed, or nil if not typing a file ref
+function M.get_file_ref_prefix(bufnr)
+  bufnr = bufnr or vim.api.nvim_get_current_buf()
+
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  local line = vim.api.nvim_buf_get_lines(bufnr, cursor[1] - 1, cursor[1], false)[1]
+  if not line then
+    return nil
+  end
+
+  local col = cursor[2]
+  local before_cursor = line:sub(1, col)
+
+  -- Check if we're typing after @ but not @/
+  -- Match @ followed by optional path characters at end of string
+  local prefix = before_cursor:match("@([%w%._%-/]*)$")
+
+  -- Make sure it's not the closing tag pattern
+  if prefix and before_cursor:sub(-2) == "@/" then
+    return nil
+  end
+
+  return prefix
 end
 
 return M

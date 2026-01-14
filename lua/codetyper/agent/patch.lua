@@ -231,6 +231,8 @@ function M.create_from_event(event, generated_code, confidence, strategy)
 		created_at = os.time(),
 		intent = event.intent,
 		scope = event.scope,
+		-- Store the prompt tag range so we can delete it after applying
+		prompt_tag_range = event.range,
 	}
 end
 
@@ -312,6 +314,89 @@ function M.mark_rejected(id, reason)
 	return false
 end
 
+--- Remove /@ @/ prompt tags from buffer
+---@param bufnr number Buffer number
+---@return number Number of tag regions removed
+local function remove_prompt_tags(bufnr)
+	if not vim.api.nvim_buf_is_valid(bufnr) then
+		return 0
+	end
+
+	local removed = 0
+	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+
+	-- Find and remove all /@ ... @/ regions (can be multiline)
+	local i = 1
+	while i <= #lines do
+		local line = lines[i]
+		local open_start = line:find("/@")
+
+		if open_start then
+			-- Found an opening tag, look for closing tag
+			local close_end = nil
+			local close_line = i
+
+			-- Check if closing tag is on same line
+			local after_open = line:sub(open_start + 2)
+			local same_line_close = after_open:find("@/")
+			if same_line_close then
+				-- Single line tag - remove just this portion
+				local before = line:sub(1, open_start - 1)
+				local after = line:sub(open_start + 2 + same_line_close + 1)
+				lines[i] = before .. after
+				-- If line is now empty or just whitespace, remove it
+				if lines[i]:match("^%s*$") then
+					table.remove(lines, i)
+				else
+					i = i + 1
+				end
+				removed = removed + 1
+			else
+				-- Multi-line tag - find the closing line
+				for j = i, #lines do
+					if lines[j]:find("@/") then
+						close_line = j
+						close_end = lines[j]:find("@/")
+						break
+					end
+				end
+
+				if close_end then
+					-- Remove lines from i to close_line
+					-- Keep content before /@ on first line and after @/ on last line
+					local before = lines[i]:sub(1, open_start - 1)
+					local after = lines[close_line]:sub(close_end + 2)
+
+					-- Remove the lines containing the tag
+					for _ = i, close_line do
+						table.remove(lines, i)
+					end
+
+					-- If there's content to keep, insert it back
+					local remaining = (before .. after):match("^%s*(.-)%s*$")
+					if remaining and remaining ~= "" then
+						table.insert(lines, i, remaining)
+						i = i + 1
+					end
+
+					removed = removed + 1
+				else
+					-- No closing tag found, skip this line
+					i = i + 1
+				end
+			end
+		else
+			i = i + 1
+		end
+	end
+
+	if removed > 0 then
+		vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+	end
+
+	return removed
+end
+
 --- Apply a patch to the target buffer
 ---@param patch PatchCandidate
 ---@return boolean success
@@ -349,29 +434,34 @@ function M.apply(patch)
 	-- Prepare code lines
 	local code_lines = vim.split(patch.generated_code, "\n", { plain = true })
 
+	-- FIRST: Remove the prompt tags from the buffer before applying code
+	-- This prevents the infinite loop where tags stay and get re-detected
+	local tags_removed = remove_prompt_tags(target_bufnr)
+
+	pcall(function()
+		if tags_removed > 0 then
+			local logs = require("codetyper.agent.logs")
+			logs.add({
+				type = "info",
+				message = string.format("Removed %d prompt tag(s) from buffer", tags_removed),
+			})
+		end
+	end)
+
+	-- Recalculate line count after tag removal
+	local line_count = vim.api.nvim_buf_line_count(target_bufnr)
+
 	-- Apply based on strategy
 	local ok, err = pcall(function()
 		if patch.injection_strategy == "replace" and patch.injection_range then
-			-- Replace specific range
-			vim.api.nvim_buf_set_lines(
-				target_bufnr,
-				patch.injection_range.start_line - 1,
-				patch.injection_range.end_line,
-				false,
-				code_lines
-			)
+			-- For replace, we need to adjust the range since we removed tags
+			-- Just append to end since the original context might have shifted
+			vim.api.nvim_buf_set_lines(target_bufnr, line_count, line_count, false, code_lines)
 		elseif patch.injection_strategy == "insert" and patch.injection_range then
-			-- Insert at specific line
-			vim.api.nvim_buf_set_lines(
-				target_bufnr,
-				patch.injection_range.start_line - 1,
-				patch.injection_range.start_line - 1,
-				false,
-				code_lines
-			)
+			-- Insert at end since original position might have shifted
+			vim.api.nvim_buf_set_lines(target_bufnr, line_count, line_count, false, code_lines)
 		else
 			-- Default: append to end
-			local line_count = vim.api.nvim_buf_line_count(target_bufnr)
 			vim.api.nvim_buf_set_lines(target_bufnr, line_count, line_count, false, code_lines)
 		end
 	end)

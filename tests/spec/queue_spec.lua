@@ -49,7 +49,7 @@ describe("queue", function()
 
 			local enqueued = queue.enqueue(event)
 
-			assert.is_not.nil(enqueued.id)
+			assert.is_not_nil(enqueued.id)
 			assert.equals("pending", enqueued.status)
 			assert.equals(1, queue.size())
 		end)
@@ -98,7 +98,7 @@ describe("queue", function()
 
 			local enqueued = queue.enqueue(event)
 
-			assert.is_not.nil(enqueued.content_hash)
+			assert.is_not_nil(enqueued.content_hash)
 		end)
 	end)
 
@@ -118,7 +118,7 @@ describe("queue", function()
 
 			local event = queue.dequeue()
 
-			assert.is_not.nil(event)
+			assert.is_not_nil(event)
 			assert.equals("processing", event.status)
 		end)
 
@@ -157,7 +157,7 @@ describe("queue", function()
 			local event1 = queue.peek()
 			local event2 = queue.peek()
 
-			assert.is_not.nil(event1)
+			assert.is_not_nil(event1)
 			assert.equals(event1.id, event2.id)
 			assert.equals("pending", event1.status)
 		end)
@@ -174,7 +174,7 @@ describe("queue", function()
 
 			local event = queue.get(enqueued.id)
 
-			assert.is_not.nil(event)
+			assert.is_not_nil(event)
 			assert.equals(enqueued.id, event.id)
 		end)
 

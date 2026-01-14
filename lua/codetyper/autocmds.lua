@@ -40,19 +40,61 @@ end
 function M.setup()
 	local group = vim.api.nvim_create_augroup(AUGROUP, { clear = true })
 
-	-- Auto-save coder file when leaving insert mode
+	-- Auto-check for closed prompts when leaving insert mode (works on ALL files)
 	vim.api.nvim_create_autocmd("InsertLeave", {
 		group = group,
-		pattern = "*.coder.*",
+		pattern = "*",
 		callback = function()
-			-- Auto-save the coder file
-			if vim.bo.modified then
+			-- Skip special buffers
+			local buftype = vim.bo.buftype
+			if buftype ~= "" then
+				return
+			end
+			-- Auto-save coder files only
+			local filepath = vim.fn.expand("%:p")
+			if utils.is_coder_file(filepath) and vim.bo.modified then
 				vim.cmd("silent! write")
 			end
 			-- Check for closed prompts and auto-process
 			M.check_for_closed_prompt()
 		end,
-		desc = "Auto-save and check for closed prompt tags",
+		desc = "Check for closed prompt tags on InsertLeave",
+	})
+
+	-- Auto-process prompts when entering normal mode (works on ALL files)
+	vim.api.nvim_create_autocmd("ModeChanged", {
+		group = group,
+		pattern = "*:n",
+		callback = function()
+			-- Skip special buffers
+			local buftype = vim.bo.buftype
+			if buftype ~= "" then
+				return
+			end
+			-- Slight delay to let buffer settle
+			vim.defer_fn(function()
+				M.check_all_prompts()
+			end, 50)
+		end,
+		desc = "Auto-process closed prompts when entering normal mode",
+	})
+
+	-- Also check on CursorHold as backup (works on ALL files)
+	vim.api.nvim_create_autocmd("CursorHold", {
+		group = group,
+		pattern = "*",
+		callback = function()
+			-- Skip special buffers
+			local buftype = vim.bo.buftype
+			if buftype ~= "" then
+				return
+			end
+			local mode = vim.api.nvim_get_mode().mode
+			if mode == "n" then
+				M.check_all_prompts()
+			end
+		end,
+		desc = "Auto-process closed prompts when idle in normal mode",
 	})
 
 	-- Auto-set filetype for coder files based on extension
@@ -172,12 +214,59 @@ local function get_config_safe()
 	return config
 end
 
---- Check if the buffer has a newly closed prompt and auto-process
+--- Read attached files from prompt content
+---@param prompt_content string Prompt content
+---@param base_path string Base path to resolve relative file paths
+---@return table[] attached_files List of {path, content} tables
+local function read_attached_files(prompt_content, base_path)
+	local parser = require("codetyper.parser")
+	local file_refs = parser.extract_file_references(prompt_content)
+	local attached = {}
+	local cwd = vim.fn.getcwd()
+	local base_dir = vim.fn.fnamemodify(base_path, ":h")
+
+	for _, ref in ipairs(file_refs) do
+		local file_path = nil
+
+		-- Try resolving relative to cwd first
+		local cwd_path = cwd .. "/" .. ref
+		if utils.file_exists(cwd_path) then
+			file_path = cwd_path
+		else
+			-- Try resolving relative to base file directory
+			local rel_path = base_dir .. "/" .. ref
+			if utils.file_exists(rel_path) then
+				file_path = rel_path
+			end
+		end
+
+		if file_path then
+			local content = utils.read_file(file_path)
+			if content then
+				table.insert(attached, {
+					path = ref,
+					full_path = file_path,
+					content = content,
+				})
+			end
+		end
+	end
+
+	return attached
+end
+
+--- Check if the buffer has a newly closed prompt and auto-process (works on ANY file)
 function M.check_for_closed_prompt()
 	local config = get_config_safe()
 	local parser = require("codetyper.parser")
 
 	local bufnr = vim.api.nvim_get_current_buf()
+	local current_file = vim.fn.expand("%:p")
+
+	-- Skip if no file
+	if current_file == "" then
+		return
+	end
 
 	-- Get current line
 	local cursor = vim.api.nvim_win_get_cursor(0)
@@ -218,6 +307,10 @@ function M.check_for_closed_prompt()
 					local patch_mod = require("codetyper.agent.patch")
 					local intent_mod = require("codetyper.agent.intent")
 					local scope_mod = require("codetyper.agent.scope")
+					local logs_panel = require("codetyper.logs_panel")
+
+					-- Open logs panel to show progress
+					logs_panel.ensure_open()
 
 					-- Take buffer snapshot
 					local snapshot = patch_mod.snapshot_buffer(bufnr, {
@@ -225,33 +318,40 @@ function M.check_for_closed_prompt()
 						end_line = prompt.end_line,
 					})
 
-					-- Get target path
-					local current_file = vim.fn.expand("%:p")
-					local target_path = utils.get_target_path(current_file)
+					-- Get target path - for coder files, get the target; for regular files, use self
+					local target_path
+					if utils.is_coder_file(current_file) then
+						target_path = utils.get_target_path(current_file)
+					else
+						target_path = current_file
+					end
 
-					-- Clean prompt content
-					local cleaned = parser.clean_prompt(prompt.content)
+					-- Read attached files before cleaning
+					local attached_files = read_attached_files(prompt.content, current_file)
+
+					-- Clean prompt content (strip file references)
+					local cleaned = parser.clean_prompt(parser.strip_file_references(prompt.content))
 
 					-- Detect intent from prompt
 					local intent = intent_mod.detect(cleaned)
 
 					-- Resolve scope in target file (use prompt position to find enclosing scope)
 					local target_bufnr = vim.fn.bufnr(target_path)
+					if target_bufnr == -1 then
+						target_bufnr = bufnr
+					end
+
 					local scope = nil
 					local scope_text = nil
 					local scope_range = nil
 
-					if target_bufnr ~= -1 then
-						-- Find scope at the corresponding line in target
-						-- Use the prompt's line position as reference
-						scope = scope_mod.resolve_scope(target_bufnr, prompt.start_line, 1)
-						if scope and scope.type ~= "file" then
-							scope_text = scope.text
-							scope_range = {
-								start_line = scope.range.start_row,
-								end_line = scope.range.end_row,
-							}
-						end
+					scope = scope_mod.resolve_scope(target_bufnr, prompt.start_line, 1)
+					if scope and scope.type ~= "file" then
+						scope_text = scope.text
+						scope_range = {
+							start_line = scope.range.start_row,
+							end_line = scope.range.end_row,
+						}
 					end
 
 					-- Determine priority based on intent
@@ -279,6 +379,7 @@ function M.check_for_closed_prompt()
 						scope = scope,
 						scope_text = scope_text,
 						scope_range = scope_range,
+						attached_files = attached_files,
 					})
 
 					local scope_info = scope and scope.type ~= "file"
@@ -296,6 +397,141 @@ function M.check_for_closed_prompt()
 					vim.cmd("CoderProcess")
 				end)
 			end
+		end
+	end
+end
+
+--- Check and process all closed prompts in the buffer (works on ANY file)
+function M.check_all_prompts()
+	local parser = require("codetyper.parser")
+	local bufnr = vim.api.nvim_get_current_buf()
+	local current_file = vim.fn.expand("%:p")
+
+	-- Skip if no file
+	if current_file == "" then
+		return
+	end
+
+	-- Find all prompts in buffer
+	local prompts = parser.find_prompts_in_buffer(bufnr)
+
+	if #prompts == 0 then
+		return
+	end
+
+	-- Check if scheduler is enabled
+	local codetyper = require("codetyper")
+	local ct_config = codetyper.get_config()
+	local scheduler_enabled = ct_config and ct_config.scheduler and ct_config.scheduler.enabled
+
+	if not scheduler_enabled then
+		return
+	end
+
+	for _, prompt in ipairs(prompts) do
+		if prompt.content and prompt.content ~= "" then
+			-- Generate unique key for this prompt
+			local prompt_key = get_prompt_key(bufnr, prompt)
+
+			-- Skip if already processed
+			if processed_prompts[prompt_key] then
+				goto continue
+			end
+
+			-- Mark as processed
+			processed_prompts[prompt_key] = true
+
+			-- Process this prompt
+			vim.schedule(function()
+				local queue = require("codetyper.agent.queue")
+				local patch_mod = require("codetyper.agent.patch")
+				local intent_mod = require("codetyper.agent.intent")
+				local scope_mod = require("codetyper.agent.scope")
+				local logs_panel = require("codetyper.logs_panel")
+
+				-- Open logs panel to show progress
+				logs_panel.ensure_open()
+
+				-- Take buffer snapshot
+				local snapshot = patch_mod.snapshot_buffer(bufnr, {
+					start_line = prompt.start_line,
+					end_line = prompt.end_line,
+				})
+
+				-- Get target path - for coder files, get the target; for regular files, use self
+				local target_path
+				if utils.is_coder_file(current_file) then
+					target_path = utils.get_target_path(current_file)
+				else
+					target_path = current_file
+				end
+
+				-- Read attached files before cleaning
+				local attached_files = read_attached_files(prompt.content, current_file)
+
+				-- Clean prompt content (strip file references)
+				local cleaned = parser.clean_prompt(parser.strip_file_references(prompt.content))
+
+				-- Detect intent from prompt
+				local intent = intent_mod.detect(cleaned)
+
+				-- Resolve scope in target file
+				local target_bufnr = vim.fn.bufnr(target_path)
+				if target_bufnr == -1 then
+					target_bufnr = bufnr -- Use current buffer if target not loaded
+				end
+
+				local scope = nil
+				local scope_text = nil
+				local scope_range = nil
+
+				scope = scope_mod.resolve_scope(target_bufnr, prompt.start_line, 1)
+				if scope and scope.type ~= "file" then
+					scope_text = scope.text
+					scope_range = {
+						start_line = scope.range.start_row,
+						end_line = scope.range.end_row,
+					}
+				end
+
+				-- Determine priority based on intent
+				local priority = 2
+				if intent.type == "fix" or intent.type == "complete" then
+					priority = 1
+				elseif intent.type == "test" or intent.type == "document" then
+					priority = 3
+				end
+
+				-- Enqueue the event
+				queue.enqueue({
+					id = queue.generate_id(),
+					bufnr = bufnr,
+					range = { start_line = prompt.start_line, end_line = prompt.end_line },
+					timestamp = os.clock(),
+					changedtick = snapshot.changedtick,
+					content_hash = snapshot.content_hash,
+					prompt_content = cleaned,
+					target_path = target_path,
+					priority = priority,
+					status = "pending",
+					attempt_count = 0,
+					intent = intent,
+					scope = scope,
+					scope_text = scope_text,
+					scope_range = scope_range,
+					attached_files = attached_files,
+				})
+
+				local scope_info = scope and scope.type ~= "file"
+					and string.format(" [%s: %s]", scope.type, scope.name or "anonymous")
+					or ""
+				utils.notify(
+					string.format("Prompt queued: %s%s", intent.type, scope_info),
+					vim.log.levels.INFO
+				)
+			end)
+
+			::continue::
 		end
 	end
 end

@@ -293,6 +293,60 @@ local function cmd_logs_toggle()
   logs_panel.toggle()
 end
 
+--- Show scheduler status and queue info
+local function cmd_queue_status()
+  local scheduler = require("codetyper.agent.scheduler")
+  local queue = require("codetyper.agent.queue")
+  local parser = require("codetyper.parser")
+
+  local status = scheduler.status()
+  local bufnr = vim.api.nvim_get_current_buf()
+  local filepath = vim.fn.expand("%:p")
+
+  local lines = {
+    "Scheduler Status",
+    "================",
+    "",
+    "Running: " .. (status.running and "yes" or "NO"),
+    "Paused: " .. (status.paused and "yes" or "no"),
+    "Active Workers: " .. status.active_workers,
+    "",
+    "Queue Stats:",
+    "  Pending: " .. status.queue_stats.pending,
+    "  Processing: " .. status.queue_stats.processing,
+    "  Completed: " .. status.queue_stats.completed,
+    "  Cancelled: " .. status.queue_stats.cancelled,
+    "",
+  }
+
+  -- Check current buffer for prompts
+  if filepath ~= "" then
+    local prompts = parser.find_prompts_in_buffer(bufnr)
+    table.insert(lines, "Current Buffer: " .. vim.fn.fnamemodify(filepath, ":t"))
+    table.insert(lines, "  Prompts found: " .. #prompts)
+    for i, p in ipairs(prompts) do
+      local preview = p.content:sub(1, 30):gsub("\n", " ")
+      table.insert(lines, string.format("    %d. Line %d: %s...", i, p.start_line, preview))
+    end
+  end
+
+  utils.notify(table.concat(lines, "\n"))
+end
+
+--- Manually trigger queue processing for current buffer
+local function cmd_queue_process()
+  local autocmds = require("codetyper.autocmds")
+  local logs_panel = require("codetyper.logs_panel")
+
+  -- Open logs panel to show progress
+  logs_panel.open()
+
+  -- Check all prompts in current buffer
+  autocmds.check_all_prompts()
+
+  utils.notify("Triggered queue processing for current buffer")
+end
+
 --- Switch focus between coder and target windows
 local function cmd_focus()
   if not window.is_open() then
@@ -685,6 +739,8 @@ local function coder_cmd(args)
     ["agent-stop"] = cmd_agent_stop,
     ["type-toggle"] = cmd_type_toggle,
     ["logs-toggle"] = cmd_logs_toggle,
+    ["queue-status"] = cmd_queue_status,
+    ["queue-process"] = cmd_queue_process,
   }
 
   local cmd_fn = commands[subcommand]
@@ -707,6 +763,7 @@ function M.setup()
         "transform", "transform-cursor",
         "agent", "agent-close", "agent-toggle", "agent-stop",
         "type-toggle", "logs-toggle",
+        "queue-status", "queue-process",
       }
     end,
     desc = "Codetyper.nvim commands",
@@ -793,6 +850,15 @@ function M.setup()
     local autocmds = require("codetyper.autocmds")
     autocmds.open_coder_companion()
   end, { desc = "Open coder companion for current file" })
+
+  -- Queue commands
+  vim.api.nvim_create_user_command("CoderQueueStatus", function()
+    cmd_queue_status()
+  end, { desc = "Show scheduler and queue status" })
+
+  vim.api.nvim_create_user_command("CoderQueueProcess", function()
+    cmd_queue_process()
+  end, { desc = "Manually trigger queue processing" })
 
   -- Setup default keymaps
   M.setup_keymaps()

@@ -163,7 +163,7 @@ describe("patch", function()
 
 			local found = patch.get(p.id)
 
-			assert.is_not.nil(found)
+			assert.is_not_nil(found)
 			assert.equals(p.id, found.id)
 		end)
 

@@ -5,25 +5,34 @@
 local M = {}
 
 local logs = require("codetyper.agent.logs")
+local queue = require("codetyper.agent.queue")
 
 ---@class LogsPanelState
----@field buf number|nil Buffer
----@field win number|nil Window
+---@field buf number|nil Logs buffer
+---@field win number|nil Logs window
+---@field queue_buf number|nil Queue buffer
+---@field queue_win number|nil Queue window
 ---@field is_open boolean Whether the panel is open
 ---@field listener_id number|nil Listener ID for logs
+---@field queue_listener_id number|nil Listener ID for queue
 
 local state = {
   buf = nil,
   win = nil,
+  queue_buf = nil,
+  queue_win = nil,
   is_open = false,
   listener_id = nil,
+  queue_listener_id = nil,
 }
 
 --- Namespace for highlights
 local ns_logs = vim.api.nvim_create_namespace("codetyper_logs_panel")
+local ns_queue = vim.api.nvim_create_namespace("codetyper_queue_panel")
 
---- Fixed width
+--- Fixed dimensions
 local LOGS_WIDTH = 60
+local QUEUE_HEIGHT = 8
 
 --- Add a log entry to the buffer
 ---@param entry table Log entry
@@ -52,10 +61,10 @@ local function add_log_entry(entry)
     vim.bo[state.buf].modifiable = true
 
     local formatted = logs.format_entry(entry)
-    local lines = vim.api.nvim_buf_get_lines(state.buf, 0, -1, false)
-    local line_num = #lines
+    local formatted_lines = vim.split(formatted, "\n", { plain = true })
+    local line_count = vim.api.nvim_buf_line_count(state.buf)
 
-    vim.api.nvim_buf_set_lines(state.buf, -1, -1, false, { formatted })
+    vim.api.nvim_buf_set_lines(state.buf, -1, -1, false, formatted_lines)
 
     -- Apply highlighting based on level
     local hl_map = {
@@ -68,7 +77,9 @@ local function add_log_entry(entry)
     }
 
     local hl = hl_map[entry.level] or "Normal"
-    vim.api.nvim_buf_add_highlight(state.buf, ns_logs, hl, line_num, 0, -1)
+    for i = 0, #formatted_lines - 1 do
+      vim.api.nvim_buf_add_highlight(state.buf, ns_logs, hl, line_count + i, 0, -1)
+    end
 
     vim.bo[state.buf].modifiable = false
 
@@ -97,6 +108,77 @@ local function update_title()
   end
 end
 
+--- Update the queue display
+local function update_queue_display()
+  if not state.queue_buf or not vim.api.nvim_buf_is_valid(state.queue_buf) then
+    return
+  end
+
+  vim.schedule(function()
+    if not state.queue_buf or not vim.api.nvim_buf_is_valid(state.queue_buf) then
+      return
+    end
+
+    vim.bo[state.queue_buf].modifiable = true
+
+    local lines = {
+      "Queue",
+      string.rep("─", LOGS_WIDTH - 2),
+    }
+
+    -- Get all events (pending and processing)
+    local pending = queue.get_pending()
+    local processing = queue.get_processing()
+
+    -- Add processing events first
+    for _, event in ipairs(processing) do
+      local filename = vim.fn.fnamemodify(event.target_path or "", ":t")
+      local line_num = event.range and event.range.start_line or 0
+      local prompt_preview = (event.prompt_content or ""):sub(1, 25):gsub("\n", " ")
+      if #(event.prompt_content or "") > 25 then
+        prompt_preview = prompt_preview .. "..."
+      end
+      table.insert(lines, string.format("▶ %s:%d %s", filename, line_num, prompt_preview))
+    end
+
+    -- Add pending events
+    for _, event in ipairs(pending) do
+      local filename = vim.fn.fnamemodify(event.target_path or "", ":t")
+      local line_num = event.range and event.range.start_line or 0
+      local prompt_preview = (event.prompt_content or ""):sub(1, 25):gsub("\n", " ")
+      if #(event.prompt_content or "") > 25 then
+        prompt_preview = prompt_preview .. "..."
+      end
+      table.insert(lines, string.format("○ %s:%d %s", filename, line_num, prompt_preview))
+    end
+
+    if #pending == 0 and #processing == 0 then
+      table.insert(lines, "  (empty)")
+    end
+
+    vim.api.nvim_buf_set_lines(state.queue_buf, 0, -1, false, lines)
+
+    -- Apply highlights
+    vim.api.nvim_buf_clear_namespace(state.queue_buf, ns_queue, 0, -1)
+    vim.api.nvim_buf_add_highlight(state.queue_buf, ns_queue, "Title", 0, 0, -1)
+    vim.api.nvim_buf_add_highlight(state.queue_buf, ns_queue, "Comment", 1, 0, -1)
+
+    local line_idx = 2
+    for _ = 1, #processing do
+      vim.api.nvim_buf_add_highlight(state.queue_buf, ns_queue, "DiagnosticWarn", line_idx, 0, 1)
+      vim.api.nvim_buf_add_highlight(state.queue_buf, ns_queue, "String", line_idx, 2, -1)
+      line_idx = line_idx + 1
+    end
+    for _ = 1, #pending do
+      vim.api.nvim_buf_add_highlight(state.queue_buf, ns_queue, "Comment", line_idx, 0, 1)
+      vim.api.nvim_buf_add_highlight(state.queue_buf, ns_queue, "Normal", line_idx, 2, -1)
+      line_idx = line_idx + 1
+    end
+
+    vim.bo[state.queue_buf].modifiable = false
+  end)
+end
+
 --- Open the logs panel
 function M.open()
   if state.is_open then
@@ -106,7 +188,7 @@ function M.open()
   -- Clear previous logs
   logs.clear()
 
-  -- Create buffer
+  -- Create logs buffer
   state.buf = vim.api.nvim_create_buf(false, true)
   vim.bo[state.buf].buftype = "nofile"
   vim.bo[state.buf].bufhidden = "hide"
@@ -118,7 +200,7 @@ function M.open()
   vim.api.nvim_win_set_buf(state.win, state.buf)
   vim.api.nvim_win_set_width(state.win, LOGS_WIDTH)
 
-  -- Window options
+  -- Window options for logs
   vim.wo[state.win].number = false
   vim.wo[state.win].relativenumber = false
   vim.wo[state.win].signcolumn = "no"
@@ -127,7 +209,7 @@ function M.open()
   vim.wo[state.win].winfixwidth = true
   vim.wo[state.win].cursorline = false
 
-  -- Set initial content
+  -- Set initial content for logs
   vim.bo[state.buf].modifiable = true
   vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, {
     "Generation Logs",
@@ -136,10 +218,36 @@ function M.open()
   })
   vim.bo[state.buf].modifiable = false
 
-  -- Setup keymaps
+  -- Create queue buffer
+  state.queue_buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[state.queue_buf].buftype = "nofile"
+  vim.bo[state.queue_buf].bufhidden = "hide"
+  vim.bo[state.queue_buf].swapfile = false
+
+  -- Create queue window as horizontal split at bottom of logs window
+  vim.cmd("belowright split")
+  state.queue_win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(state.queue_win, state.queue_buf)
+  vim.api.nvim_win_set_height(state.queue_win, QUEUE_HEIGHT)
+
+  -- Window options for queue
+  vim.wo[state.queue_win].number = false
+  vim.wo[state.queue_win].relativenumber = false
+  vim.wo[state.queue_win].signcolumn = "no"
+  vim.wo[state.queue_win].wrap = true
+  vim.wo[state.queue_win].linebreak = true
+  vim.wo[state.queue_win].winfixheight = true
+  vim.wo[state.queue_win].cursorline = false
+
+  -- Setup keymaps for logs buffer
   local opts = { buffer = state.buf, noremap = true, silent = true }
   vim.keymap.set("n", "q", M.close, opts)
   vim.keymap.set("n", "<Esc>", M.close, opts)
+
+  -- Setup keymaps for queue buffer
+  local queue_opts = { buffer = state.queue_buf, noremap = true, silent = true }
+  vim.keymap.set("n", "q", M.close, queue_opts)
+  vim.keymap.set("n", "<Esc>", M.close, queue_opts)
 
   -- Register log listener
   state.listener_id = logs.add_listener(function(entry)
@@ -148,6 +256,14 @@ function M.open()
       vim.schedule(update_title)
     end
   end)
+
+  -- Register queue listener
+  state.queue_listener_id = queue.add_listener(function()
+    update_queue_display()
+  end)
+
+  -- Initial queue display
+  update_queue_display()
 
   state.is_open = true
 
@@ -169,7 +285,18 @@ function M.close()
     state.listener_id = nil
   end
 
-  -- Close window
+  -- Remove queue listener
+  if state.queue_listener_id then
+    queue.remove_listener(state.queue_listener_id)
+    state.queue_listener_id = nil
+  end
+
+  -- Close queue window
+  if state.queue_win and vim.api.nvim_win_is_valid(state.queue_win) then
+    pcall(vim.api.nvim_win_close, state.queue_win, true)
+  end
+
+  -- Close logs window
   if state.win and vim.api.nvim_win_is_valid(state.win) then
     pcall(vim.api.nvim_win_close, state.win, true)
   end
@@ -177,6 +304,8 @@ function M.close()
   -- Reset state
   state.buf = nil
   state.win = nil
+  state.queue_buf = nil
+  state.queue_win = nil
   state.is_open = false
 end
 

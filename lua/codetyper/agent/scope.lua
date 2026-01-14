@@ -75,17 +75,43 @@ local block_nodes = {
 ---@param bufnr number
 ---@return boolean
 function M.has_treesitter(bufnr)
-	local ok, parsers = pcall(require, "nvim-treesitter.parsers")
-	if not ok then
-		return false
+	-- Try to get the language for this buffer
+	local lang = nil
+
+	-- Method 1: Use vim.treesitter (Neovim 0.9+)
+	if vim.treesitter and vim.treesitter.language then
+		local ft = vim.bo[bufnr].filetype
+		if vim.treesitter.language.get_lang then
+			lang = vim.treesitter.language.get_lang(ft)
+		else
+			lang = ft
+		end
 	end
 
-	local lang = parsers.get_buf_lang(bufnr)
+	-- Method 2: Try nvim-treesitter parsers module
 	if not lang then
+		local ok, parsers = pcall(require, "nvim-treesitter.parsers")
+		if ok and parsers then
+			if parsers.get_buf_lang then
+				lang = parsers.get_buf_lang(bufnr)
+			elseif parsers.ft_to_lang then
+				lang = parsers.ft_to_lang(vim.bo[bufnr].filetype)
+			end
+		end
+	end
+
+	-- Fallback to filetype
+	if not lang then
+		lang = vim.bo[bufnr].filetype
+	end
+
+	if not lang or lang == "" then
 		return false
 	end
 
-	return parsers.has_parser(lang)
+	-- Check if parser is available
+	local has_parser = pcall(vim.treesitter.get_parser, bufnr, lang)
+	return has_parser
 end
 
 --- Get Tree-sitter node at position
