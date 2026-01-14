@@ -741,6 +741,29 @@ local function coder_cmd(args)
     ["logs-toggle"] = cmd_logs_toggle,
     ["queue-status"] = cmd_queue_status,
     ["queue-process"] = cmd_queue_process,
+    ["auto-toggle"] = function()
+      local preferences = require("codetyper.preferences")
+      preferences.toggle_auto_process()
+    end,
+    ["auto-set"] = function(args)
+      local preferences = require("codetyper.preferences")
+      local arg = (args[1] or ""):lower()
+      if arg == "auto" or arg == "automatic" or arg == "on" then
+        preferences.set_auto_process(true)
+        utils.notify("Set to automatic mode", vim.log.levels.INFO)
+      elseif arg == "manual" or arg == "off" then
+        preferences.set_auto_process(false)
+        utils.notify("Set to manual mode", vim.log.levels.INFO)
+      else
+        local auto = preferences.is_auto_process_enabled()
+        if auto == nil then
+          utils.notify("Mode not set yet (will ask on first prompt)", vim.log.levels.INFO)
+        else
+          local mode = auto and "automatic" or "manual"
+          utils.notify("Currently in " .. mode .. " mode", vim.log.levels.INFO)
+        end
+      end
+    end,
   }
 
   local cmd_fn = commands[subcommand]
@@ -764,6 +787,7 @@ function M.setup()
         "agent", "agent-close", "agent-toggle", "agent-stop",
         "type-toggle", "logs-toggle",
         "queue-status", "queue-process",
+        "auto-toggle", "auto-set",
       }
     end,
     desc = "Codetyper.nvim commands",
@@ -859,6 +883,39 @@ function M.setup()
   vim.api.nvim_create_user_command("CoderQueueProcess", function()
     cmd_queue_process()
   end, { desc = "Manually trigger queue processing" })
+
+  -- Preferences commands
+  vim.api.nvim_create_user_command("CoderAutoToggle", function()
+    local preferences = require("codetyper.preferences")
+    preferences.toggle_auto_process()
+  end, { desc = "Toggle automatic/manual prompt processing" })
+
+  vim.api.nvim_create_user_command("CoderAutoSet", function(opts)
+    local preferences = require("codetyper.preferences")
+    local arg = opts.args:lower()
+    if arg == "auto" or arg == "automatic" or arg == "on" then
+      preferences.set_auto_process(true)
+      vim.notify("Codetyper: Set to automatic mode", vim.log.levels.INFO)
+    elseif arg == "manual" or arg == "off" then
+      preferences.set_auto_process(false)
+      vim.notify("Codetyper: Set to manual mode", vim.log.levels.INFO)
+    else
+      -- Show current mode
+      local auto = preferences.is_auto_process_enabled()
+      if auto == nil then
+        vim.notify("Codetyper: Mode not set yet (will ask on first prompt)", vim.log.levels.INFO)
+      else
+        local mode = auto and "automatic" or "manual"
+        vim.notify("Codetyper: Currently in " .. mode .. " mode", vim.log.levels.INFO)
+      end
+    end
+  end, {
+    desc = "Set prompt processing mode (auto/manual)",
+    nargs = "?",
+    complete = function()
+      return { "auto", "manual" }
+    end,
+  })
 
   -- Setup default keymaps
   M.setup_keymaps()

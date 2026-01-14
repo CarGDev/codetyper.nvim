@@ -12,25 +12,46 @@ local utils = require("codetyper.utils")
 ---@return table[] List of completion items
 local function get_file_completions(prefix)
   local cwd = vim.fn.getcwd()
+  local current_file = vim.fn.expand("%:p")
+  local current_dir = vim.fn.fnamemodify(current_file, ":h")
   local files = {}
 
   -- Use vim.fn.glob to find files matching the prefix
   local pattern = prefix .. "*"
 
-  -- Search in current directory
-  local matches = vim.fn.glob(cwd .. "/" .. pattern, false, true)
+  -- Determine base directory - use current file's directory if outside cwd
+  local base_dir = cwd
+  if current_dir ~= "" and not current_dir:find(cwd, 1, true) then
+    -- File is outside project, use its directory as base
+    base_dir = current_dir
+  end
+
+  -- Search in base directory
+  local matches = vim.fn.glob(base_dir .. "/" .. pattern, false, true)
 
   -- Search with ** for all subdirectories
-  local deep_matches = vim.fn.glob(cwd .. "/**/" .. pattern, false, true)
+  local deep_matches = vim.fn.glob(base_dir .. "/**/" .. pattern, false, true)
   for _, m in ipairs(deep_matches) do
     table.insert(matches, m)
+  end
+
+  -- Also search in cwd if different from base_dir
+  if base_dir ~= cwd then
+    local cwd_matches = vim.fn.glob(cwd .. "/" .. pattern, false, true)
+    for _, m in ipairs(cwd_matches) do
+      table.insert(matches, m)
+    end
+    local cwd_deep = vim.fn.glob(cwd .. "/**/" .. pattern, false, true)
+    for _, m in ipairs(cwd_deep) do
+      table.insert(matches, m)
+    end
   end
 
   -- Also search specific directories if prefix doesn't have path
   if not prefix:find("/") then
     local search_dirs = { "src", "lib", "lua", "app", "components", "utils", "tests" }
     for _, dir in ipairs(search_dirs) do
-      local dir_path = cwd .. "/" .. dir
+      local dir_path = base_dir .. "/" .. dir
       if vim.fn.isdirectory(dir_path) == 1 then
         local dir_matches = vim.fn.glob(dir_path .. "/**/" .. pattern, false, true)
         for _, m in ipairs(dir_matches) do
@@ -43,7 +64,16 @@ local function get_file_completions(prefix)
   -- Convert to relative paths and deduplicate
   local seen = {}
   for _, match in ipairs(matches) do
-    local rel_path = match:sub(#cwd + 2) -- Remove cwd/ prefix
+    -- Convert to relative path based on which base it came from
+    local rel_path
+    if match:find(base_dir, 1, true) == 1 then
+      rel_path = match:sub(#base_dir + 2)
+    elseif match:find(cwd, 1, true) == 1 then
+      rel_path = match:sub(#cwd + 2)
+    else
+      rel_path = vim.fn.fnamemodify(match, ":t") -- Just filename if can't make relative
+    end
+
     -- Skip directories, coder files, and hidden/generated files
     if vim.fn.isdirectory(match) == 0
       and not utils.is_coder_file(match)

@@ -15,6 +15,9 @@ local TREE_UPDATE_DEBOUNCE_MS = 1000 -- 1 second debounce
 ---@type table<string, boolean>
 local processed_prompts = {}
 
+--- Track if we're currently asking for preferences
+local asking_preference = false
+
 --- Generate a unique key for a prompt
 ---@param bufnr number Buffer number
 ---@param prompt table Prompt object
@@ -55,8 +58,8 @@ function M.setup()
 			if utils.is_coder_file(filepath) and vim.bo.modified then
 				vim.cmd("silent! write")
 			end
-			-- Check for closed prompts and auto-process
-			M.check_for_closed_prompt()
+			-- Check for closed prompts and auto-process (respects preferences)
+			M.check_for_closed_prompt_with_preference()
 		end,
 		desc = "Check for closed prompt tags on InsertLeave",
 	})
@@ -73,7 +76,7 @@ function M.setup()
 			end
 			-- Slight delay to let buffer settle
 			vim.defer_fn(function()
-				M.check_all_prompts()
+				M.check_all_prompts_with_preference()
 			end, 50)
 		end,
 		desc = "Auto-process closed prompts when entering normal mode",
@@ -91,7 +94,7 @@ function M.setup()
 			end
 			local mode = vim.api.nvim_get_mode().mode
 			if mode == "n" then
-				M.check_all_prompts()
+				M.check_all_prompts_with_preference()
 			end
 		end,
 		desc = "Auto-process closed prompts when idle in normal mode",
@@ -564,6 +567,101 @@ function M.check_all_prompts()
 			::continue::
 		end
 	end
+end
+
+--- Check for closed prompt with preference check
+--- If user hasn't chosen auto/manual mode, ask them first
+function M.check_for_closed_prompt_with_preference()
+	local preferences = require("codetyper.preferences")
+	local parser = require("codetyper.parser")
+
+	-- First check if there are any prompts to process
+	local bufnr = vim.api.nvim_get_current_buf()
+	local prompts = parser.find_prompts_in_buffer(bufnr)
+	if #prompts == 0 then
+		return
+	end
+
+	-- Check user preference
+	local auto_process = preferences.is_auto_process_enabled()
+
+	if auto_process == nil then
+		-- Not yet decided - ask the user (but only once per session)
+		if not asking_preference then
+			asking_preference = true
+			preferences.ask_auto_process_preference(function(enabled)
+				asking_preference = false
+				if enabled then
+					-- User chose automatic - process now
+					M.check_for_closed_prompt()
+				else
+					-- User chose manual - show hint
+					utils.notify("Use :CoderProcess to process prompt tags manually", vim.log.levels.INFO)
+				end
+			end)
+		end
+		return
+	end
+
+	if auto_process then
+		-- Automatic mode - process prompts
+		M.check_for_closed_prompt()
+	end
+	-- Manual mode - do nothing, user will run :CoderProcess
+end
+
+--- Check all prompts with preference check
+function M.check_all_prompts_with_preference()
+	local preferences = require("codetyper.preferences")
+	local parser = require("codetyper.parser")
+
+	-- First check if there are any prompts to process
+	local bufnr = vim.api.nvim_get_current_buf()
+	local prompts = parser.find_prompts_in_buffer(bufnr)
+	if #prompts == 0 then
+		return
+	end
+
+	-- Check if any prompts are unprocessed
+	local has_unprocessed = false
+	for _, prompt in ipairs(prompts) do
+		local prompt_key = get_prompt_key(bufnr, prompt)
+		if not processed_prompts[prompt_key] then
+			has_unprocessed = true
+			break
+		end
+	end
+
+	if not has_unprocessed then
+		return
+	end
+
+	-- Check user preference
+	local auto_process = preferences.is_auto_process_enabled()
+
+	if auto_process == nil then
+		-- Not yet decided - ask the user (but only once per session)
+		if not asking_preference then
+			asking_preference = true
+			preferences.ask_auto_process_preference(function(enabled)
+				asking_preference = false
+				if enabled then
+					-- User chose automatic - process now
+					M.check_all_prompts()
+				else
+					-- User chose manual - show hint
+					utils.notify("Use :CoderProcess to process prompt tags manually", vim.log.levels.INFO)
+				end
+			end)
+		end
+		return
+	end
+
+	if auto_process then
+		-- Automatic mode - process prompts
+		M.check_all_prompts()
+	end
+	-- Manual mode - do nothing, user will run :CoderProcess
 end
 
 --- Reset processed prompts for a buffer (useful for re-processing)
