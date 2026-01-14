@@ -24,6 +24,8 @@ local state = {
 	referenced_files = {},
 	target_width = nil, -- Store the target width to maintain it
 	agent_mode = false, -- Whether agent mode is enabled (can make file changes)
+	log_listener_id = nil, -- Listener ID for LLM logs
+	show_logs = true, -- Whether to show LLM logs in chat
 }
 
 --- Get the ask window configuration
@@ -59,6 +61,7 @@ local function create_output_buffer()
 		"║ C-Enter → send                  ║",
 		"║ C-n → new chat                  ║",
 		"║ C-f → add current file          ║",
+		"║ L → toggle LLM logs             ║",
 		"║ :CoderType → switch mode        ║",
 		"║ q → close │ K/J → jump          ║",
 		"╚═════════════════════════════════╝",
@@ -195,6 +198,11 @@ local function setup_output_keymaps(buf)
 		M.copy_last_response()
 	end, opts)
 
+	-- Toggle LLM logs with L
+	vim.keymap.set("n", "L", function()
+		M.toggle_logs()
+	end, opts)
+
 	-- Jump to input with i or J
 	vim.keymap.set("n", "i", function()
 		M.focus_input()
@@ -276,6 +284,88 @@ local function setup_width_autocmd()
 	})
 end
 
+--- Append log entry to output buffer
+---@param entry table Log entry from agent/logs
+local function append_log_to_output(entry)
+	if not state.show_logs then
+		return
+	end
+
+	if not state.output_buf or not vim.api.nvim_buf_is_valid(state.output_buf) then
+		return
+	end
+
+	-- Skip clear events
+	if entry.level == "clear" then
+		return
+	end
+
+	-- Format the log entry with icons
+	local icons = {
+		info = "ℹ️",
+		debug = "🔍",
+		request = "📤",
+		response = "📥",
+		tool = "🔧",
+		error = "❌",
+		warning = "⚠️",
+	}
+
+	local icon = icons[entry.level] or "•"
+	local formatted = string.format("[%s] %s %s", entry.timestamp, icon, entry.message)
+
+	vim.schedule(function()
+		if not state.output_buf or not vim.api.nvim_buf_is_valid(state.output_buf) then
+			return
+		end
+
+		vim.bo[state.output_buf].modifiable = true
+
+		local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+
+		-- Add a subtle log line
+		table.insert(lines, "  " .. formatted)
+
+		vim.api.nvim_buf_set_lines(state.output_buf, 0, -1, false, lines)
+		vim.bo[state.output_buf].modifiable = false
+
+		-- Scroll to bottom
+		if state.output_win and vim.api.nvim_win_is_valid(state.output_win) then
+			local line_count = vim.api.nvim_buf_line_count(state.output_buf)
+			pcall(vim.api.nvim_win_set_cursor, state.output_win, { line_count, 0 })
+		end
+	end)
+end
+
+--- Setup log listener for LLM logs
+local function setup_log_listener()
+	-- Remove existing listener if any
+	if state.log_listener_id then
+		pcall(function()
+			local logs = require("codetyper.agent.logs")
+			logs.remove_listener(state.log_listener_id)
+		end)
+		state.log_listener_id = nil
+	end
+
+	-- Add new listener
+	local ok, logs = pcall(require, "codetyper.agent.logs")
+	if ok then
+		state.log_listener_id = logs.add_listener(append_log_to_output)
+	end
+end
+
+--- Remove log listener
+local function remove_log_listener()
+	if state.log_listener_id then
+		pcall(function()
+			local logs = require("codetyper.agent.logs")
+			logs.remove_listener(state.log_listener_id)
+		end)
+		state.log_listener_id = nil
+	end
+end
+
 --- Open the ask panel
 function M.open()
 	-- Use the is_open() function which validates window state
@@ -335,6 +425,9 @@ function M.open()
 
 	state.is_open = true
 
+	-- Setup log listener for LLM logs
+	setup_log_listener()
+
 	-- Setup autocmd to maintain width
 	setup_width_autocmd()
 
@@ -365,6 +458,9 @@ function M.open()
 					state.output_win = nil
 					state.is_open = false
 					state.target_width = nil
+
+					-- Remove log listener
+					remove_log_listener()
 
 					-- Clean up autocmd groups
 					pcall(vim.api.nvim_del_augroup_by_id, close_group)
@@ -466,6 +562,9 @@ end
 
 --- Close the ask panel
 function M.close()
+	-- Remove the log listener
+	remove_log_listener()
+
 	-- Remove the width maintenance autocmd first
 	if ask_augroup then
 		pcall(vim.api.nvim_del_augroup_by_id, ask_augroup)
@@ -796,6 +895,7 @@ function M.clear_history()
 			"║ C-Enter → send                  ║",
 			"║ C-n → new chat                  ║",
 			"║ C-f → add current file          ║",
+			"║ L → toggle LLM logs             ║",
 			"║ :CoderType → switch mode        ║",
 			"║ q → close │ K/J → jump          ║",
 			"╚═════════════════════════════════╝",
@@ -879,6 +979,20 @@ end
 ---@return table History
 function M.get_history()
 	return state.history
+end
+
+--- Toggle LLM log visibility in chat
+---@return boolean New state
+function M.toggle_logs()
+	state.show_logs = not state.show_logs
+	utils.notify("LLM logs " .. (state.show_logs and "enabled" or "disabled"))
+	return state.show_logs
+end
+
+--- Check if logs are enabled
+---@return boolean
+function M.logs_enabled()
+	return state.show_logs
 end
 
 return M

@@ -147,6 +147,24 @@ function M.error(message, data)
   M.log("error", "ERROR: " .. message, data)
 end
 
+--- Log warning
+---@param message string
+---@param data? table
+function M.warning(message, data)
+  M.log("warning", "WARN: " .. message, data)
+end
+
+--- Add log entry (compatibility function for scheduler)
+--- Accepts {type = "info", message = "..."} format
+---@param entry table Log entry with type and message
+function M.add(entry)
+  if entry.type == "clear" then
+    M.clear()
+    return
+  end
+  M.log(entry.type or "info", entry.message or "", entry.data)
+end
+
 --- Log thinking/reasoning step
 ---@param step string Description of what's happening
 function M.thinking(step)
