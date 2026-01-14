@@ -44,7 +44,7 @@ end
 
 --- Make HTTP request to Ollama API
 ---@param body table Request body
----@param callback fun(response: string|nil, error: string|nil) Callback function
+---@param callback fun(response: string|nil, error: string|nil, usage: table|nil) Callback function
 local function make_request(body, callback)
   local host = get_host()
   local url = host .. "/api/generate"
@@ -71,40 +71,46 @@ local function make_request(body, callback)
 
       if not ok then
         vim.schedule(function()
-          callback(nil, "Failed to parse Ollama response")
+          callback(nil, "Failed to parse Ollama response", nil)
         end)
         return
       end
 
       if response.error then
         vim.schedule(function()
-          callback(nil, response.error or "Ollama API error")
+          callback(nil, response.error or "Ollama API error", nil)
         end)
         return
       end
 
+      -- Extract usage info
+      local usage = {
+        prompt_tokens = response.prompt_eval_count or 0,
+        response_tokens = response.eval_count or 0,
+      }
+
       if response.response then
         local code = llm.extract_code(response.response)
         vim.schedule(function()
-          callback(code, nil)
+          callback(code, nil, usage)
         end)
       else
         vim.schedule(function()
-          callback(nil, "No response from Ollama")
+          callback(nil, "No response from Ollama", nil)
         end)
       end
     end,
     on_stderr = function(_, data)
       if data and #data > 0 and data[1] ~= "" then
         vim.schedule(function()
-          callback(nil, "Ollama API request failed: " .. table.concat(data, "\n"))
+          callback(nil, "Ollama API request failed: " .. table.concat(data, "\n"), nil)
         end)
       end
     end,
     on_exit = function(_, code)
       if code ~= 0 then
         vim.schedule(function()
-          callback(nil, "Ollama API request failed with code: " .. code)
+          callback(nil, "Ollama API request failed with code: " .. code, nil)
         end)
       end
     end,
@@ -116,14 +122,38 @@ end
 ---@param context table Context information
 ---@param callback fun(response: string|nil, error: string|nil) Callback function
 function M.generate(prompt, context, callback)
-  utils.notify("Sending request to Ollama...", vim.log.levels.INFO)
+  local logs = require("codetyper.agent.logs")
+  local model = get_model()
+
+  -- Log the request
+  logs.request("ollama", model)
+  logs.thinking("Building request body...")
 
   local body = build_request_body(prompt, context)
-  make_request(body, function(response, err)
+
+  -- Estimate prompt tokens
+  local prompt_estimate = logs.estimate_tokens(vim.json.encode(body))
+  logs.debug(string.format("Estimated prompt: ~%d tokens", prompt_estimate))
+  logs.thinking("Sending to Ollama API...")
+
+  utils.notify("Sending request to Ollama...", vim.log.levels.INFO)
+
+  make_request(body, function(response, err, usage)
     if err then
+      logs.error(err)
       utils.notify(err, vim.log.levels.ERROR)
       callback(nil, err)
     else
+      -- Log token usage
+      if usage then
+        logs.response(
+          usage.prompt_tokens or 0,
+          usage.response_tokens or 0,
+          "end_turn"
+        )
+      end
+      logs.thinking("Response received, extracting code...")
+      logs.info("Code generated successfully")
       utils.notify("Code generated successfully", vim.log.levels.INFO)
       callback(response, nil)
     end

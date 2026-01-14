@@ -287,6 +287,12 @@ local function cmd_type_toggle()
   switcher.show()
 end
 
+--- Toggle logs panel
+local function cmd_logs_toggle()
+  local logs_panel = require("codetyper.logs_panel")
+  logs_panel.toggle()
+end
+
 --- Switch focus between coder and target windows
 local function cmd_focus()
   if not window.is_open() then
@@ -307,6 +313,8 @@ end
 local function cmd_transform()
   local parser = require("codetyper.parser")
   local llm = require("codetyper.llm")
+  local logs_panel = require("codetyper.logs_panel")
+  local logs = require("codetyper.agent.logs")
 
   local bufnr = vim.api.nvim_get_current_buf()
   local filepath = vim.fn.expand("%:p")
@@ -323,6 +331,10 @@ local function cmd_transform()
     utils.notify("No /@ @/ tags found in current file", vim.log.levels.INFO)
     return
   end
+
+  -- Open the logs panel to show generation progress
+  logs_panel.open()
+  logs.info("Transform started: " .. #prompts .. " prompt(s)")
 
   utils.notify("Found " .. #prompts .. " prompt(s) to transform...", vim.log.levels.INFO)
 
@@ -355,11 +367,13 @@ local function cmd_transform()
     enhanced_prompt = enhanced_prompt .. "- Match the coding style of the existing file exactly\n"
     enhanced_prompt = enhanced_prompt .. "- Output must be ready to insert directly into the file\n"
 
+    logs.info("Processing: " .. clean_prompt:sub(1, 40) .. "...")
     utils.notify("Processing: " .. clean_prompt:sub(1, 40) .. "...", vim.log.levels.INFO)
 
     -- Generate code for this prompt
     llm.generate(enhanced_prompt, context, function(response, err)
       if err then
+        logs.error("Failed: " .. err)
         utils.notify("Failed: " .. err, vim.log.levels.ERROR)
         errors = errors + 1
       elseif response then
@@ -411,10 +425,9 @@ local function cmd_transform()
 
           completed = completed + 1
           if completed + errors >= pending then
-            utils.notify(
-              "Transform complete: " .. completed .. " succeeded, " .. errors .. " failed",
-              errors > 0 and vim.log.levels.WARN or vim.log.levels.INFO
-            )
+            local msg = "Transform complete: " .. completed .. " succeeded, " .. errors .. " failed"
+            logs.info(msg)
+            utils.notify(msg, errors > 0 and vim.log.levels.WARN or vim.log.levels.INFO)
           end
         end)
       end
@@ -428,6 +441,8 @@ end
 local function cmd_transform_range(start_line, end_line)
   local parser = require("codetyper.parser")
   local llm = require("codetyper.llm")
+  local logs_panel = require("codetyper.logs_panel")
+  local logs = require("codetyper.agent.logs")
 
   local bufnr = vim.api.nvim_get_current_buf()
   local filepath = vim.fn.expand("%:p")
@@ -452,6 +467,10 @@ local function cmd_transform_range(start_line, end_line)
     utils.notify("No /@ @/ tags found in selection (lines " .. start_line .. "-" .. end_line .. ")", vim.log.levels.INFO)
     return
   end
+
+  -- Open the logs panel to show generation progress
+  logs_panel.open()
+  logs.info("Transform selection: " .. #prompts .. " prompt(s)")
 
   utils.notify("Found " .. #prompts .. " prompt(s) in selection to transform...", vim.log.levels.INFO)
 
@@ -479,10 +498,12 @@ local function cmd_transform_range(start_line, end_line)
     enhanced_prompt = enhanced_prompt .. "- Match the coding style of the existing file exactly\n"
     enhanced_prompt = enhanced_prompt .. "- Output must be ready to insert directly into the file\n"
 
+    logs.info("Processing: " .. clean_prompt:sub(1, 40) .. "...")
     utils.notify("Processing: " .. clean_prompt:sub(1, 40) .. "...", vim.log.levels.INFO)
 
     llm.generate(enhanced_prompt, context, function(response, err)
       if err then
+        logs.error("Failed: " .. err)
         utils.notify("Failed: " .. err, vim.log.levels.ERROR)
         errors = errors + 1
       elseif response then
@@ -525,10 +546,9 @@ local function cmd_transform_range(start_line, end_line)
 
           completed = completed + 1
           if completed + errors >= pending then
-            utils.notify(
-              "Transform complete: " .. completed .. " succeeded, " .. errors .. " failed",
-              errors > 0 and vim.log.levels.WARN or vim.log.levels.INFO
-            )
+            local msg = "Transform complete: " .. completed .. " succeeded, " .. errors .. " failed"
+            logs.info(msg)
+            utils.notify(msg, errors > 0 and vim.log.levels.WARN or vim.log.levels.INFO)
           end
         end)
       end
@@ -548,6 +568,8 @@ end
 local function cmd_transform_at_cursor()
   local parser = require("codetyper.parser")
   local llm = require("codetyper.llm")
+  local logs_panel = require("codetyper.logs_panel")
+  local logs = require("codetyper.agent.logs")
 
   local bufnr = vim.api.nvim_get_current_buf()
   local filepath = vim.fn.expand("%:p")
@@ -565,8 +587,13 @@ local function cmd_transform_at_cursor()
     return
   end
 
+  -- Open the logs panel to show generation progress
+  logs_panel.open()
+
   local clean_prompt = parser.clean_prompt(prompt.content)
   local context = llm.build_context(filepath, "code_generation")
+
+  logs.info("Transform cursor: " .. clean_prompt:sub(1, 40) .. "...")
 
   -- Build enhanced user prompt
   local enhanced_prompt = "TASK: " .. clean_prompt .. "\n\n"
@@ -581,6 +608,7 @@ local function cmd_transform_at_cursor()
 
   llm.generate(enhanced_prompt, context, function(response, err)
     if err then
+      logs.error("Transform failed: " .. err)
       utils.notify("Transform failed: " .. err, vim.log.levels.ERROR)
       return
     end
@@ -622,6 +650,7 @@ local function cmd_transform_at_cursor()
         end
 
         vim.api.nvim_buf_set_lines(bufnr, start_line - 1, end_line, false, replacement_lines)
+        logs.info("Transform complete!")
         utils.notify("Transform complete!", vim.log.levels.INFO)
       end)
     end
@@ -655,6 +684,7 @@ local function coder_cmd(args)
     ["agent-toggle"] = cmd_agent_toggle,
     ["agent-stop"] = cmd_agent_stop,
     ["type-toggle"] = cmd_type_toggle,
+    ["logs-toggle"] = cmd_logs_toggle,
   }
 
   local cmd_fn = commands[subcommand]
@@ -676,7 +706,7 @@ function M.setup()
         "ask", "ask-close", "ask-toggle", "ask-clear",
         "transform", "transform-cursor",
         "agent", "agent-close", "agent-toggle", "agent-stop",
-        "type-toggle",
+        "type-toggle", "logs-toggle",
       }
     end,
     desc = "Codetyper.nvim commands",
@@ -752,6 +782,11 @@ function M.setup()
   vim.api.nvim_create_user_command("CoderType", function()
     cmd_type_toggle()
   end, { desc = "Show Ask/Agent mode switcher" })
+
+  -- Logs panel command
+  vim.api.nvim_create_user_command("CoderLogs", function()
+    cmd_logs_toggle()
+  end, { desc = "Toggle logs panel" })
 
   -- Setup default keymaps
   M.setup_keymaps()
