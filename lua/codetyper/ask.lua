@@ -50,19 +50,18 @@ local function create_output_buffer()
 
 	-- Set initial content
 	local header = {
-		"╔═════════════════════════════╗",
-		"║      🤖 CODETYPER ASK       ║",
-		"╠═════════════════════════════╣",
-		"║ Ask about code or concepts  ║",
-		"║                             ║",
-		"║ 💡 Keymaps:                 ║",
-		"║ @ → attach file             ║",
-		"║ C-Enter → send              ║",
-		"║ C-n → new chat              ║",
-		"║ C-f → add current file      ║",
-		"║ C-h/j/k/l → navigate        ║",
-		"║ q → close │ K/J → jump      ║",
-		"╚═════════════════════════════╝",
+		"╔═════════════════════════════════╗",
+		"║       [ASK MODE] Q&A Chat       ║",
+		"╠═════════════════════════════════╣",
+		"║ Ask about code or concepts      ║",
+		"║                                 ║",
+		"║ @ → attach file                 ║",
+		"║ C-Enter → send                  ║",
+		"║ C-n → new chat                  ║",
+		"║ C-f → add current file          ║",
+		"║ :CoderType → switch mode        ║",
+		"║ q → close │ K/J → jump          ║",
+		"╚═════════════════════════════════╝",
 		"",
 	}
 	vim.api.nvim_buf_set_lines(buf, 0, -1, false, header)
@@ -788,19 +787,18 @@ function M.clear_history()
 
 	if state.output_buf and vim.api.nvim_buf_is_valid(state.output_buf) then
 		local header = {
-			"╔═══════════════════════════════════╗",
-			"║      🤖 CODETYPER ASK             ║",
-			"╠═══════════════════════════════════╣",
-			"║ Ask about code or concepts        ║",
-			"║                                   ║",
-			"║ 💡 Keymaps:                       ║",
-			"║ @ → attach file                   ║",
-			"║ C-Enter → send                    ║",
-			"║ C-n → new chat                    ║",
-			"║ C-f → add current file            ║",
-			"║ C-h/j/k/l → navigate              ║",
-			"║ q → close │ K/J → jump            ║",
-			"╚═══════════════════════════════════╝",
+			"╔═════════════════════════════════╗",
+			"║       [ASK MODE] Q&A Chat       ║",
+			"╠═════════════════════════════════╣",
+			"║ Ask about code or concepts      ║",
+			"║                                 ║",
+			"║ @ → attach file                 ║",
+			"║ C-Enter → send                  ║",
+			"║ C-n → new chat                  ║",
+			"║ C-f → add current file          ║",
+			"║ :CoderType → switch mode        ║",
+			"║ q → close │ K/J → jump          ║",
+			"╚═════════════════════════════════╝",
 			"",
 		}
 		vim.bo[state.output_buf].modifiable = true
@@ -845,6 +843,12 @@ function M.copy_last_response()
 		end
 	end
 	utils.notify("No response to copy", vim.log.levels.WARN)
+end
+
+--- Show chat mode switcher modal
+function M.show_chat_switcher()
+	local switcher = require("codetyper.chat_switcher")
+	switcher.show()
 end
 --- Check if ask panel is open (validates window state)
 ---@return boolean

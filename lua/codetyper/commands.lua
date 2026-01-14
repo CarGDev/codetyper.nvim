@@ -252,6 +252,41 @@ local function cmd_ask_clear()
   ask.clear_history()
 end
 
+--- Open agent panel
+local function cmd_agent()
+  local agent_ui = require("codetyper.agent.ui")
+  agent_ui.open()
+end
+
+--- Close agent panel
+local function cmd_agent_close()
+  local agent_ui = require("codetyper.agent.ui")
+  agent_ui.close()
+end
+
+--- Toggle agent panel
+local function cmd_agent_toggle()
+  local agent_ui = require("codetyper.agent.ui")
+  agent_ui.toggle()
+end
+
+--- Stop running agent
+local function cmd_agent_stop()
+  local agent = require("codetyper.agent")
+  if agent.is_running() then
+    agent.stop()
+    utils.notify("Agent stopped")
+  else
+    utils.notify("No agent running", vim.log.levels.INFO)
+  end
+end
+
+--- Show chat type switcher modal (Ask/Agent)
+local function cmd_type_toggle()
+  local switcher = require("codetyper.chat_switcher")
+  switcher.show()
+end
+
 --- Switch focus between coder and target windows
 local function cmd_focus()
   if not window.is_open() then
@@ -615,6 +650,11 @@ local function coder_cmd(args)
     gitignore = cmd_gitignore,
     transform = cmd_transform,
     ["transform-cursor"] = cmd_transform_at_cursor,
+    agent = cmd_agent,
+    ["agent-close"] = cmd_agent_close,
+    ["agent-toggle"] = cmd_agent_toggle,
+    ["agent-stop"] = cmd_agent_stop,
+    ["type-toggle"] = cmd_type_toggle,
   }
 
   local cmd_fn = commands[subcommand]
@@ -635,6 +675,8 @@ function M.setup()
         "tree", "tree-view", "reset", "gitignore",
         "ask", "ask-close", "ask-toggle", "ask-clear",
         "transform", "transform-cursor",
+        "agent", "agent-close", "agent-toggle", "agent-stop",
+        "type-toggle",
       }
     end,
     desc = "Codetyper.nvim commands",
@@ -693,6 +735,24 @@ function M.setup()
     cmd_transform_range(start_line, end_line)
   end, { range = true, desc = "Transform /@ @/ tags in visual selection" })
 
+  -- Agent commands
+  vim.api.nvim_create_user_command("CoderAgent", function()
+    cmd_agent()
+  end, { desc = "Open Agent panel" })
+
+  vim.api.nvim_create_user_command("CoderAgentToggle", function()
+    cmd_agent_toggle()
+  end, { desc = "Toggle Agent panel" })
+
+  vim.api.nvim_create_user_command("CoderAgentStop", function()
+    cmd_agent_stop()
+  end, { desc = "Stop running agent" })
+
+  -- Chat type switcher command
+  vim.api.nvim_create_user_command("CoderType", function()
+    cmd_type_toggle()
+  end, { desc = "Show Ask/Agent mode switcher" })
+
   -- Setup default keymaps
   M.setup_keymaps()
 end
@@ -712,9 +772,15 @@ function M.setup_keymaps()
   })
 
   -- Normal mode: transform all tags in file
-  vim.keymap.set("n", "<leader>ctT", "<cmd>CoderTransform<CR>", { 
-    silent = true, 
-    desc = "Coder: Transform all tags in file" 
+  vim.keymap.set("n", "<leader>ctT", "<cmd>CoderTransform<CR>", {
+    silent = true,
+    desc = "Coder: Transform all tags in file"
+  })
+
+  -- Agent keymaps
+  vim.keymap.set("n", "<leader>ca", "<cmd>CoderAgentToggle<CR>", {
+    silent = true,
+    desc = "Coder: Toggle Agent panel"
   })
 end
 
