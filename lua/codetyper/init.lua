@@ -1,7 +1,7 @@
 ---@mod codetyper Codetyper.nvim - AI-powered coding partner
 ---@brief [[
 --- Codetyper.nvim is a Neovim plugin that acts as your coding partner.
---- It uses LLM APIs (Claude, OpenAI, Gemini, Copilot, Ollama) to help you
+--- It uses LLM APIs (OpenAI, Gemini, Copilot, Ollama) to help you
 --- write code faster using special `.coder.*` files and inline prompt tags.
 --- Features an event-driven scheduler with confidence scoring and
 --- completion-aware injection timing.
@@ -50,6 +50,24 @@ function M.setup(opts)
 
   -- Initialize tree logging (creates .coder folder and initial tree.log)
   tree.setup()
+
+  -- Initialize project indexer if enabled
+  if M.config.indexer and M.config.indexer.enabled then
+    local indexer = require("codetyper.indexer")
+    indexer.setup(M.config.indexer)
+  end
+
+  -- Initialize brain learning system if enabled
+  if M.config.brain and M.config.brain.enabled then
+    local brain = require("codetyper.brain")
+    brain.setup(M.config.brain)
+  end
+
+  -- Setup inline ghost text suggestions (Copilot-style)
+  if M.config.suggestion and M.config.suggestion.enabled then
+    local suggestion = require("codetyper.suggestion")
+    suggestion.setup(M.config.suggestion)
+  end
 
   -- Start the event-driven scheduler if enabled
   if M.config.scheduler and M.config.scheduler.enabled then

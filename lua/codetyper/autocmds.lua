@@ -155,10 +155,28 @@ function M.setup()
 			if filepath:match("%.coder%.") or filepath:match("tree%.log$") then
 				return
 			end
+			-- Skip non-project files
+			if filepath:match("node_modules") or filepath:match("%.git/") or filepath:match("%.coder/") then
+				return
+			end
 			-- Schedule tree update with debounce
 			schedule_tree_update()
+
+			-- Trigger incremental indexing if enabled
+			local ok_indexer, indexer = pcall(require, "codetyper.indexer")
+			if ok_indexer then
+				indexer.schedule_index_file(filepath)
+			end
+
+			-- Update brain with file patterns
+			local ok_brain, brain = pcall(require, "codetyper.brain")
+			if ok_brain and brain.is_initialized and brain.is_initialized() then
+				vim.defer_fn(function()
+					M.update_brain_from_file(filepath)
+				end, 500) -- Debounce brain updates
+			end
 		end,
-		desc = "Update tree.log on file creation/save",
+		desc = "Update tree.log, index, and brain on file creation/save",
 	})
 
 	-- Update tree.log when files are deleted (via netrw or file explorer)
@@ -186,6 +204,19 @@ function M.setup()
 		desc = "Update tree.log on directory change",
 	})
 
+	-- Shutdown brain on Vim exit
+	vim.api.nvim_create_autocmd("VimLeavePre", {
+		group = group,
+		pattern = "*",
+		callback = function()
+			local ok, brain = pcall(require, "codetyper.brain")
+			if ok and brain.is_initialized and brain.is_initialized() then
+				brain.shutdown()
+			end
+		end,
+		desc = "Shutdown brain and flush pending changes",
+	})
+
 	-- Auto-index: Create/open coder companion file when opening source files
 	vim.api.nvim_create_autocmd("BufEnter", {
 		group = group,
@@ -211,7 +242,7 @@ local function get_config_safe()
 				open_tag = "/@",
 				close_tag = "@/",
 				file_pattern = "*.coder.*",
-			}
+			},
 		}
 	end
 	return config
@@ -400,13 +431,11 @@ function M.check_for_closed_prompt()
 						attached_files = attached_files,
 					})
 
-					local scope_info = scope and scope.type ~= "file"
-						and string.format(" [%s: %s]", scope.type, scope.name or "anonymous")
+					local scope_info = scope
+							and scope.type ~= "file"
+							and string.format(" [%s: %s]", scope.type, scope.name or "anonymous")
 						or ""
-					utils.notify(
-						string.format("Prompt queued: %s%s", intent.type, scope_info),
-						vim.log.levels.INFO
-					)
+					utils.notify(string.format("Prompt queued: %s%s", intent.type, scope_info), vim.log.levels.INFO)
 				end)
 			else
 				-- Legacy: direct processing
@@ -555,13 +584,11 @@ function M.check_all_prompts()
 					attached_files = attached_files,
 				})
 
-				local scope_info = scope and scope.type ~= "file"
-					and string.format(" [%s: %s]", scope.type, scope.name or "anonymous")
+				local scope_info = scope
+						and scope.type ~= "file"
+						and string.format(" [%s: %s]", scope.type, scope.name or "anonymous")
 					or ""
-				utils.notify(
-					string.format("Prompt queued: %s%s", intent.type, scope_info),
-					vim.log.levels.INFO
-				)
+				utils.notify(string.format("Prompt queued: %s%s", intent.type, scope_info), vim.log.levels.INFO)
 			end)
 
 			::continue::
@@ -822,15 +849,138 @@ function M.clear()
 	vim.api.nvim_del_augroup_by_name(AUGROUP)
 end
 
+--- Debounce timers for brain updates per file
+---@type table<string, uv_timer_t>
+local brain_update_timers = {}
+
+--- Update brain with patterns from a file
+---@param filepath string
+function M.update_brain_from_file(filepath)
+	local ok_brain, brain = pcall(require, "codetyper.brain")
+	if not ok_brain or not brain.is_initialized() then
+		return
+	end
+
+	-- Read file content
+	local content = utils.read_file(filepath)
+	if not content or content == "" then
+		return
+	end
+
+	local ext = vim.fn.fnamemodify(filepath, ":e")
+	local lines = vim.split(content, "\n")
+
+	-- Extract key patterns from the file
+	local functions = {}
+	local classes = {}
+	local imports = {}
+
+	for i, line in ipairs(lines) do
+		-- Functions
+		local func = line:match("^%s*function%s+([%w_:%.]+)%s*%(")
+			or line:match("^%s*local%s+function%s+([%w_]+)%s*%(")
+			or line:match("^%s*def%s+([%w_]+)%s*%(")
+			or line:match("^%s*func%s+([%w_]+)%s*%(")
+			or line:match("^%s*async%s+function%s+([%w_]+)%s*%(")
+			or line:match("^%s*public%s+.*%s+([%w_]+)%s*%(")
+			or line:match("^%s*private%s+.*%s+([%w_]+)%s*%(")
+		if func then
+			table.insert(functions, { name = func, line = i })
+		end
+
+		-- Classes
+		local class = line:match("^%s*class%s+([%w_]+)")
+			or line:match("^%s*public%s+class%s+([%w_]+)")
+			or line:match("^%s*interface%s+([%w_]+)")
+			or line:match("^%s*struct%s+([%w_]+)")
+		if class then
+			table.insert(classes, { name = class, line = i })
+		end
+
+		-- Imports
+		local imp = line:match("import%s+.*%s+from%s+[\"']([^\"']+)[\"']")
+			or line:match("require%([\"']([^\"']+)[\"']%)")
+			or line:match("from%s+([%w_.]+)%s+import")
+		if imp then
+			table.insert(imports, imp)
+		end
+	end
+
+	-- Only store if file has meaningful content
+	if #functions == 0 and #classes == 0 then
+		return
+	end
+
+	-- Build summary
+	local parts = {}
+	if #functions > 0 then
+		local func_names = {}
+		for i, f in ipairs(functions) do
+			if i <= 5 then
+				table.insert(func_names, f.name)
+			end
+		end
+		table.insert(parts, "functions: " .. table.concat(func_names, ", "))
+	end
+	if #classes > 0 then
+		local class_names = {}
+		for _, c in ipairs(classes) do
+			table.insert(class_names, c.name)
+		end
+		table.insert(parts, "classes: " .. table.concat(class_names, ", "))
+	end
+
+	local summary = vim.fn.fnamemodify(filepath, ":t") .. " - " .. table.concat(parts, "; ")
+
+	-- Learn this pattern
+	brain.learn({
+		type = "pattern",
+		file = filepath,
+		content = {
+			summary = summary,
+			detail = #functions .. " functions, " .. #classes .. " classes",
+			code = nil,
+		},
+		context = {
+			file = filepath,
+			language = ext,
+			functions = functions,
+			classes = classes,
+		},
+	})
+end
+
 --- Track buffers that have been auto-indexed
 ---@type table<number, boolean>
 local auto_indexed_buffers = {}
 
 --- Supported file extensions for auto-indexing
 local supported_extensions = {
-	"ts", "tsx", "js", "jsx", "py", "lua", "go", "rs", "rb",
-	"java", "c", "cpp", "cs", "json", "yaml", "yml", "md",
-	"html", "css", "scss", "vue", "svelte", "php", "sh", "zsh",
+	"ts",
+	"tsx",
+	"js",
+	"jsx",
+	"py",
+	"lua",
+	"go",
+	"rs",
+	"rb",
+	"java",
+	"c",
+	"cpp",
+	"cs",
+	"json",
+	"yaml",
+	"yml",
+	"md",
+	"html",
+	"css",
+	"scss",
+	"vue",
+	"svelte",
+	"php",
+	"sh",
+	"zsh",
 }
 
 --- Check if extension is supported
@@ -968,14 +1118,23 @@ function M.open_coder_companion(open_split)
 %s @/%s
 
 ]],
-			comment_prefix, filename, close_comment,
-			comment_prefix, close_comment,
-			comment_prefix, close_comment,
-			comment_prefix, close_comment,
-			comment_prefix, close_comment,
-			comment_prefix, close_comment,
-			comment_prefix, close_comment,
-			comment_prefix, close_comment
+			comment_prefix,
+			filename,
+			close_comment,
+			comment_prefix,
+			close_comment,
+			comment_prefix,
+			close_comment,
+			comment_prefix,
+			close_comment,
+			comment_prefix,
+			close_comment,
+			comment_prefix,
+			close_comment,
+			comment_prefix,
+			close_comment,
+			comment_prefix,
+			close_comment
 		)
 		utils.write_file(coder_path, template)
 	end

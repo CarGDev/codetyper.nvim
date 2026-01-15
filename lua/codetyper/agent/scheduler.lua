@@ -28,7 +28,7 @@ local state = {
 		max_concurrent = 2,
 		completion_delay_ms = 100,
 		apply_delay_ms = 5000, -- Wait before applying code
-		remote_provider = "claude", -- Default fallback provider
+		remote_provider = "copilot", -- Default fallback provider
 	},
 }
 
@@ -90,9 +90,7 @@ local function get_remote_provider()
 			-- If current provider is ollama, use configured remote
 			if config.llm.provider == "ollama" then
 				-- Check which remote provider is configured
-				if config.llm.claude and config.llm.claude.api_key then
-					return "claude"
-				elseif config.llm.openai and config.llm.openai.api_key then
+				if config.llm.openai and config.llm.openai.api_key then
 					return "openai"
 				elseif config.llm.gemini and config.llm.gemini.api_key then
 					return "gemini"
@@ -120,7 +118,7 @@ local function get_primary_provider()
 			return config.llm.provider
 		end
 	end
-	return "claude"
+	return "ollama"
 end
 
 --- Retry event with additional context

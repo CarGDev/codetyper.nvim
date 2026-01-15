@@ -9,7 +9,20 @@ local M = {}
 ---@param callback fun(approved: boolean) Called with user decision
 function M.show_diff(diff_data, callback)
   local original_lines = vim.split(diff_data.original, "\n", { plain = true })
-  local modified_lines = vim.split(diff_data.modified, "\n", { plain = true })
+  local modified_lines
+
+  -- For delete operations, show a clear message
+  if diff_data.operation == "delete" then
+    modified_lines = {
+      "",
+      "  FILE WILL BE DELETED",
+      "",
+      "  Reason: " .. (diff_data.reason or "No reason provided"),
+      "",
+    }
+  else
+    modified_lines = vim.split(diff_data.modified, "\n", { plain = true })
+  end
 
   -- Calculate window dimensions
   local width = math.floor(vim.o.columns * 0.8)
@@ -59,7 +72,7 @@ function M.show_diff(diff_data, callback)
     col = col + half_width + 1,
     style = "minimal",
     border = "rounded",
-    title = " MODIFIED [" .. diff_data.operation .. "] ",
+    title = diff_data.operation == "delete" and " ⚠️ DELETE " or (" MODIFIED [" .. diff_data.operation .. "] "),
     title_pos = "center",
   })
 
@@ -157,26 +170,52 @@ function M.show_diff(diff_data, callback)
   }, false, {})
 end
 
---- Show approval dialog for bash commands
+---@alias BashApprovalResult {approved: boolean, permission_level: string|nil}
+
+--- Show approval dialog for bash commands with permission levels
 ---@param command string The bash command to approve
----@param callback fun(approved: boolean) Called with user decision
+---@param callback fun(result: BashApprovalResult) Called with user decision
 function M.show_bash_approval(command, callback)
-  -- Create a simple floating window for bash approval
+  local permissions = require("codetyper.agent.permissions")
+
+  -- Check if command is auto-approved
+  local perm_result = permissions.check_bash_permission(command)
+  if perm_result.auto and perm_result.allowed then
+    vim.schedule(function()
+      callback({ approved = true, permission_level = "auto" })
+    end)
+    return
+  end
+
+  -- Create approval dialog with options
   local lines = {
     "",
     "  BASH COMMAND APPROVAL",
-    "  " .. string.rep("-", 50),
+    "  " .. string.rep("─", 56),
     "",
     "  Command:",
     "  $ " .. command,
     "",
-    "  " .. string.rep("-", 50),
-    "  Press [y] or [Enter] to execute",
-    "  Press [n], [q], or [Esc] to cancel",
-    "",
   }
 
-  local width = math.max(60, #command + 10)
+  -- Add warning for dangerous commands
+  if not perm_result.allowed and perm_result.reason ~= "Requires approval" then
+    table.insert(lines, "  ⚠️  WARNING: " .. perm_result.reason)
+    table.insert(lines, "")
+  end
+
+  table.insert(lines, "  " .. string.rep("─", 56))
+  table.insert(lines, "")
+  table.insert(lines, "  [y] Allow once           - Execute this command")
+  table.insert(lines, "  [s] Allow this session   - Auto-allow until restart")
+  table.insert(lines, "  [a] Add to allow list    - Always allow this command")
+  table.insert(lines, "  [n] Reject               - Cancel execution")
+  table.insert(lines, "")
+  table.insert(lines, "  " .. string.rep("─", 56))
+  table.insert(lines, "  Press key to choose | [q] or [Esc] to cancel")
+  table.insert(lines, "")
+
+  local width = math.max(65, #command + 15)
   local height = #lines
 
   local buf = vim.api.nvim_create_buf(false, true)
@@ -196,45 +235,84 @@ function M.show_bash_approval(command, callback)
     title_pos = "center",
   })
 
-  -- Apply some highlighting
+  -- Apply highlighting
   vim.api.nvim_buf_add_highlight(buf, -1, "Title", 1, 0, -1)
   vim.api.nvim_buf_add_highlight(buf, -1, "String", 5, 0, -1)
 
+  -- Highlight options
+  for i, line in ipairs(lines) do
+    if line:match("^%s+%[y%]") then
+      vim.api.nvim_buf_add_highlight(buf, -1, "DiagnosticOk", i - 1, 0, -1)
+    elseif line:match("^%s+%[s%]") then
+      vim.api.nvim_buf_add_highlight(buf, -1, "DiagnosticInfo", i - 1, 0, -1)
+    elseif line:match("^%s+%[a%]") then
+      vim.api.nvim_buf_add_highlight(buf, -1, "DiagnosticHint", i - 1, 0, -1)
+    elseif line:match("^%s+%[n%]") then
+      vim.api.nvim_buf_add_highlight(buf, -1, "DiagnosticError", i - 1, 0, -1)
+    elseif line:match("⚠️") then
+      vim.api.nvim_buf_add_highlight(buf, -1, "DiagnosticWarn", i - 1, 0, -1)
+    end
+  end
+
   local callback_called = false
 
-  local function close_and_respond(approved)
+  local function close_and_respond(approved, permission_level)
     if callback_called then
       return
     end
     callback_called = true
 
+    -- Grant permission if approved with session or list level
+    if approved and permission_level then
+      permissions.grant_permission(command, permission_level)
+    end
+
     pcall(vim.api.nvim_win_close, win, true)
 
     vim.schedule(function()
-      callback(approved)
+      callback({ approved = approved, permission_level = permission_level })
     end)
   end
 
   local keymap_opts = { buffer = buf, noremap = true, silent = true, nowait = true }
 
-  -- Approve
+  -- Allow once
   vim.keymap.set("n", "y", function()
-    close_and_respond(true)
+    close_and_respond(true, "allow")
   end, keymap_opts)
   vim.keymap.set("n", "<CR>", function()
-    close_and_respond(true)
+    close_and_respond(true, "allow")
+  end, keymap_opts)
+
+  -- Allow this session
+  vim.keymap.set("n", "s", function()
+    close_and_respond(true, "allow_session")
+  end, keymap_opts)
+
+  -- Add to allow list
+  vim.keymap.set("n", "a", function()
+    close_and_respond(true, "allow_list")
   end, keymap_opts)
 
   -- Reject
   vim.keymap.set("n", "n", function()
-    close_and_respond(false)
+    close_and_respond(false, nil)
   end, keymap_opts)
   vim.keymap.set("n", "q", function()
-    close_and_respond(false)
+    close_and_respond(false, nil)
   end, keymap_opts)
   vim.keymap.set("n", "<Esc>", function()
-    close_and_respond(false)
+    close_and_respond(false, nil)
   end, keymap_opts)
+end
+
+--- Show approval dialog for bash commands (simple version for backward compatibility)
+---@param command string The bash command to approve
+---@param callback fun(approved: boolean) Called with user decision
+function M.show_bash_approval_simple(command, callback)
+  M.show_bash_approval(command, function(result)
+    callback(result.approved)
+  end)
 end
 
 return M

@@ -10,9 +10,7 @@ function M.get_client()
 	local codetyper = require("codetyper")
 	local config = codetyper.get_config()
 
-	if config.llm.provider == "claude" then
-		return require("codetyper.llm.claude")
-	elseif config.llm.provider == "ollama" then
+	if config.llm.provider == "ollama" then
 		return require("codetyper.llm.ollama")
 	elseif config.llm.provider == "openai" then
 		return require("codetyper.llm.openai")
@@ -50,7 +48,49 @@ function M.build_system_prompt(context)
 	system = system:gsub("{{language}}", context.language or "unknown")
 	system = system:gsub("{{filepath}}", context.file_path or "unknown")
 
-	-- Add file content with analysis hints
+	-- For agent mode, include project context
+	if prompt_type == "agent" then
+		local project_info = "\n\n## PROJECT CONTEXT\n"
+
+		if context.project_root then
+			project_info = project_info .. "- Project root: " .. context.project_root .. "\n"
+		end
+		if context.cwd then
+			project_info = project_info .. "- Working directory: " .. context.cwd .. "\n"
+		end
+		if context.project_type then
+			project_info = project_info .. "- Project type: " .. context.project_type .. "\n"
+		end
+		if context.project_stats then
+			project_info = project_info
+				.. string.format(
+					"- Stats: %d files, %d functions, %d classes\n",
+					context.project_stats.files or 0,
+					context.project_stats.functions or 0,
+					context.project_stats.classes or 0
+				)
+		end
+		if context.file_path then
+			project_info = project_info .. "- Current file: " .. context.file_path .. "\n"
+		end
+
+		system = system .. project_info
+		return system
+	end
+
+	-- For "ask" or "explain" mode, don't add code generation instructions
+	if prompt_type == "ask" or prompt_type == "explain" then
+		-- Just add context about the file if available
+		if context.file_path then
+			system = system .. "\n\nContext: The user is working with " .. context.file_path
+			if context.language then
+				system = system .. " (" .. context.language .. ")"
+			end
+		end
+		return system
+	end
+
+	-- Add file content with analysis hints (for code generation modes)
 	if context.file_content and context.file_content ~= "" then
 		system = system .. "\n\n===== EXISTING FILE CONTENT (analyze and match this style) =====\n"
 		system = system .. context.file_content
@@ -74,13 +114,34 @@ function M.build_context(target_path, prompt_type)
 	local content = utils.read_file(target_path)
 	local ext = vim.fn.fnamemodify(target_path, ":e")
 
-	return {
+	local context = {
 		file_content = content,
 		language = lang_map[ext] or ext,
 		extension = ext,
 		prompt_type = prompt_type,
 		file_path = target_path,
 	}
+
+	-- For agent mode, include additional project context
+	if prompt_type == "agent" then
+		local project_root = utils.get_project_root()
+		context.project_root = project_root
+
+		-- Try to get project info from indexer
+		local ok_indexer, indexer = pcall(require, "codetyper.indexer")
+		if ok_indexer then
+			local status = indexer.get_status()
+			if status.indexed then
+				context.project_type = status.project_type
+				context.project_stats = status.stats
+			end
+		end
+
+		-- Include working directory
+		context.cwd = vim.fn.getcwd()
+	end
+
+	return context
 end
 
 --- Parse LLM response and extract code

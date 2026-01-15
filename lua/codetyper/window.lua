@@ -18,14 +18,14 @@ M._target_buf = nil
 
 --- Calculate window width based on configuration
 ---@param config CoderConfig Plugin configuration
----@return number Width in columns
+---@return number Width in columns (minimum 30)
 local function calculate_width(config)
   local width = config.window.width
   if width <= 1 then
-    -- Percentage of total width
-    return math.floor(vim.o.columns * width)
+    -- Percentage of total width (1/4 of screen with minimum 30)
+    return math.max(math.floor(vim.o.columns * width), 30)
   end
-  return math.floor(width)
+  return math.max(math.floor(width), 30)
 end
 
 --- Open the coder split view

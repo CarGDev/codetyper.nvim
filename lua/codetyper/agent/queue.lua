@@ -23,7 +23,7 @@ local M = {}
 ---@field priority number Priority (1=high, 2=normal, 3=low)
 ---@field status string "pending"|"processing"|"completed"|"escalated"|"cancelled"|"needs_context"|"failed"
 ---@field attempt_count number Number of processing attempts
----@field worker_type string|nil LLM provider used ("ollama"|"claude"|etc)
+---@field worker_type string|nil LLM provider used ("ollama"|"openai"|"gemini"|"copilot")
 ---@field created_at number System time when created
 ---@field intent Intent|nil Detected intent from prompt
 ---@field scope ScopeInfo|nil Resolved scope (function/class/file)

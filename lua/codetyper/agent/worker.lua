@@ -178,8 +178,7 @@ local active_workers = {}
 --- Default timeouts by provider type
 local default_timeouts = {
 	ollama = 30000,   -- 30s for local
-	claude = 60000,   -- 60s for remote
-	openai = 60000,
+	openai = 60000,   -- 60s for remote
 	gemini = 60000,
 	copilot = 60000,
 }
@@ -225,6 +224,54 @@ local function format_attached_files(attached_files)
 	return table.concat(parts, "")
 end
 
+--- Format indexed project context for inclusion in prompt
+---@param indexed_context table|nil
+---@return string
+local function format_indexed_context(indexed_context)
+	if not indexed_context then
+		return ""
+	end
+
+	local parts = {}
+
+	-- Project type
+	if indexed_context.project_type and indexed_context.project_type ~= "unknown" then
+		table.insert(parts, "Project type: " .. indexed_context.project_type)
+	end
+
+	-- Relevant symbols
+	if indexed_context.relevant_symbols then
+		local symbol_list = {}
+		for symbol, files in pairs(indexed_context.relevant_symbols) do
+			if #files > 0 then
+				table.insert(symbol_list, symbol .. " (in " .. files[1] .. ")")
+			end
+		end
+		if #symbol_list > 0 then
+			table.insert(parts, "Relevant symbols: " .. table.concat(symbol_list, ", "))
+		end
+	end
+
+	-- Learned patterns
+	if indexed_context.patterns and #indexed_context.patterns > 0 then
+		local pattern_list = {}
+		for i, p in ipairs(indexed_context.patterns) do
+			if i <= 3 then
+				table.insert(pattern_list, p.content or "")
+			end
+		end
+		if #pattern_list > 0 then
+			table.insert(parts, "Project conventions: " .. table.concat(pattern_list, "; "))
+		end
+	end
+
+	if #parts == 0 then
+		return ""
+	end
+
+	return "\n\n--- Project Context ---\n" .. table.concat(parts, "\n")
+end
+
 --- Build prompt for code generation
 ---@param event table PromptEvent
 ---@return string prompt
@@ -245,8 +292,25 @@ local function build_prompt(event)
 
 	local filetype = vim.fn.fnamemodify(event.target_path or "", ":e")
 
+	-- Get indexed project context
+	local indexed_context = nil
+	local indexed_content = ""
+	pcall(function()
+		local indexer = require("codetyper.indexer")
+		indexed_context = indexer.get_context_for({
+			file = event.target_path,
+			intent = event.intent,
+			prompt = event.prompt_content,
+			scope = event.scope_text,
+		})
+		indexed_content = format_indexed_context(indexed_context)
+	end)
+
 	-- Format attached files
 	local attached_content = format_attached_files(event.attached_files)
+
+	-- Combine attached files and indexed context
+	local extra_context = attached_content .. indexed_content
 
 	-- Build context with scope information
 	local context = {
@@ -258,6 +322,7 @@ local function build_prompt(event)
 		scope_range = event.scope_range,
 		intent = event.intent,
 		attached_files = event.attached_files,
+		indexed_context = indexed_context,
 	}
 
 	-- Build the actual prompt based on intent and scope
@@ -296,7 +361,7 @@ Return ONLY the complete %s with implementation. No explanations, no duplicates.
 				scope_type,
 				filetype,
 				event.scope_text,
-				attached_content,
+				extra_context,
 				event.prompt_content,
 				scope_type
 			)
@@ -317,7 +382,7 @@ Return the complete transformed %s. Output only code, no explanations.]],
 				filetype,
 				filetype,
 				event.scope_text,
-				attached_content,
+				extra_context,
 				event.prompt_content,
 				scope_type
 			)
@@ -337,7 +402,7 @@ Output only the code to insert, no explanations.]],
 				scope_name,
 				filetype,
 				event.scope_text,
-				attached_content,
+				extra_context,
 				event.prompt_content
 			)
 		end
@@ -357,7 +422,7 @@ Output only code, no explanations.]],
 			filetype,
 			filetype,
 			target_content:sub(1, 4000), -- Limit context size
-			attached_content,
+			extra_context,
 			event.prompt_content
 		)
 	end

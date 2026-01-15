@@ -45,10 +45,13 @@ GUIDELINES:
 6. Focus on practical understanding and tradeoffs
 
 IMPORTANT:
-- Do NOT output raw code intended for insertion
+- Do NOT refuse to explain code - that IS your purpose in this mode
 - Do NOT assume missing context
-- Do NOT speculate beyond the provided information
+- Provide helpful, detailed explanations when asked
 ]]
+
+-- Alias for backward compatibility
+M.explain = M.ask
 
 --- System prompt for scoped refactoring
 M.refactor = [[You are an expert refactoring assistant integrated into Neovim via Codetyper.nvim.
@@ -120,5 +123,9 @@ Language: {{language}}
 
 REMEMBER: Output ONLY valid {{language}} test code.
 ]]
+
+--- Base prompt for agent mode (full prompt is in agent.lua)
+--- This provides minimal context; the agent prompts module adds tool instructions
+M.agent = [[]]
 
 return M

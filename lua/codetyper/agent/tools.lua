@@ -81,6 +81,67 @@ M.definitions = {
       required = { "command" },
     },
   },
+
+  delete_file = {
+    name = "delete_file",
+    description = "Delete a file from the filesystem. Use with caution - requires explicit user approval.",
+    parameters = {
+      type = "object",
+      properties = {
+        path = {
+          type = "string",
+          description = "Path to the file to delete",
+        },
+        reason = {
+          type = "string",
+          description = "Reason for deleting this file (shown to user for approval)",
+        },
+      },
+      required = { "path", "reason" },
+    },
+  },
+
+  list_directory = {
+    name = "list_directory",
+    description = "List files and directories in a path. Use to explore project structure.",
+    parameters = {
+      type = "object",
+      properties = {
+        path = {
+          type = "string",
+          description = "Path to the directory to list (defaults to current directory)",
+        },
+        recursive = {
+          type = "boolean",
+          description = "Whether to list recursively (default: false, max depth: 3)",
+        },
+      },
+      required = {},
+    },
+  },
+
+  search_files = {
+    name = "search_files",
+    description = "Search for files by name pattern or content. Use to find relevant files in the project.",
+    parameters = {
+      type = "object",
+      properties = {
+        pattern = {
+          type = "string",
+          description = "Glob pattern for file names (e.g., '*.lua', 'test_*.py')",
+        },
+        content = {
+          type = "string",
+          description = "Search for files containing this text",
+        },
+        path = {
+          type = "string",
+          description = "Directory to search in (defaults to project root)",
+        },
+      },
+      required = {},
+    },
+  },
 }
 
 --- Convert tool definitions to Claude API format

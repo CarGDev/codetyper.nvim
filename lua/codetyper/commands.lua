@@ -164,13 +164,19 @@ local function cmd_status()
     "Provider: " .. config.llm.provider,
   }
 
-  if config.llm.provider == "claude" then
-    local has_key = (config.llm.claude.api_key or vim.env.ANTHROPIC_API_KEY) ~= nil
-    table.insert(status, "Claude API Key: " .. (has_key and "configured" or "NOT SET"))
-    table.insert(status, "Claude Model: " .. config.llm.claude.model)
-  else
+  if config.llm.provider == "ollama" then
     table.insert(status, "Ollama Host: " .. config.llm.ollama.host)
     table.insert(status, "Ollama Model: " .. config.llm.ollama.model)
+  elseif config.llm.provider == "openai" then
+    local has_key = (config.llm.openai.api_key or vim.env.OPENAI_API_KEY) ~= nil
+    table.insert(status, "OpenAI API Key: " .. (has_key and "configured" or "NOT SET"))
+    table.insert(status, "OpenAI Model: " .. config.llm.openai.model)
+  elseif config.llm.provider == "gemini" then
+    local has_key = (config.llm.gemini.api_key or vim.env.GEMINI_API_KEY) ~= nil
+    table.insert(status, "Gemini API Key: " .. (has_key and "configured" or "NOT SET"))
+    table.insert(status, "Gemini Model: " .. config.llm.gemini.model)
+  elseif config.llm.provider == "copilot" then
+    table.insert(status, "Copilot Model: " .. config.llm.copilot.model)
   end
 
   table.insert(status, "")
@@ -618,6 +624,131 @@ local function cmd_transform_visual()
   cmd_transform_range(start_line, end_line)
 end
 
+--- Index the entire project
+local function cmd_index_project()
+  local indexer = require("codetyper.indexer")
+
+  utils.notify("Indexing project...", vim.log.levels.INFO)
+
+  indexer.index_project(function(index)
+    if index then
+      local msg = string.format(
+        "Indexed: %d files, %d functions, %d classes, %d exports",
+        index.stats.files,
+        index.stats.functions,
+        index.stats.classes,
+        index.stats.exports
+      )
+      utils.notify(msg, vim.log.levels.INFO)
+    else
+      utils.notify("Failed to index project", vim.log.levels.ERROR)
+    end
+  end)
+end
+
+--- Show index status
+local function cmd_index_status()
+  local indexer = require("codetyper.indexer")
+  local memory = require("codetyper.indexer.memory")
+
+  local status = indexer.get_status()
+  local mem_stats = memory.get_stats()
+
+  local lines = {
+    "Project Index Status",
+    "====================",
+    "",
+  }
+
+  if status.indexed then
+    table.insert(lines, "Status: Indexed")
+    table.insert(lines, "Project Type: " .. (status.project_type or "unknown"))
+    table.insert(lines, "Last Indexed: " .. os.date("%Y-%m-%d %H:%M:%S", status.last_indexed))
+    table.insert(lines, "")
+    table.insert(lines, "Stats:")
+    table.insert(lines, "  Files: " .. (status.stats.files or 0))
+    table.insert(lines, "  Functions: " .. (status.stats.functions or 0))
+    table.insert(lines, "  Classes: " .. (status.stats.classes or 0))
+    table.insert(lines, "  Exports: " .. (status.stats.exports or 0))
+  else
+    table.insert(lines, "Status: Not indexed")
+    table.insert(lines, "Run :CoderIndexProject to index")
+  end
+
+  table.insert(lines, "")
+  table.insert(lines, "Memories:")
+  table.insert(lines, "  Patterns: " .. mem_stats.patterns)
+  table.insert(lines, "  Conventions: " .. mem_stats.conventions)
+  table.insert(lines, "  Symbols: " .. mem_stats.symbols)
+
+  utils.notify(table.concat(lines, "\n"))
+end
+
+--- Show learned memories
+local function cmd_memories()
+  local memory = require("codetyper.indexer.memory")
+
+  local all = memory.get_all()
+  local lines = {
+    "Learned Memories",
+    "================",
+    "",
+    "Patterns:",
+  }
+
+  local pattern_count = 0
+  for _, mem in pairs(all.patterns) do
+    pattern_count = pattern_count + 1
+    if pattern_count <= 10 then
+      table.insert(lines, "  - " .. (mem.content or ""):sub(1, 60))
+    end
+  end
+  if pattern_count > 10 then
+    table.insert(lines, "  ... and " .. (pattern_count - 10) .. " more")
+  elseif pattern_count == 0 then
+    table.insert(lines, "  (none)")
+  end
+
+  table.insert(lines, "")
+  table.insert(lines, "Conventions:")
+
+  local conv_count = 0
+  for _, mem in pairs(all.conventions) do
+    conv_count = conv_count + 1
+    if conv_count <= 10 then
+      table.insert(lines, "  - " .. (mem.content or ""):sub(1, 60))
+    end
+  end
+  if conv_count > 10 then
+    table.insert(lines, "  ... and " .. (conv_count - 10) .. " more")
+  elseif conv_count == 0 then
+    table.insert(lines, "  (none)")
+  end
+
+  utils.notify(table.concat(lines, "\n"))
+end
+
+--- Clear memories
+---@param pattern string|nil Optional pattern to match
+local function cmd_forget(pattern)
+  local memory = require("codetyper.indexer.memory")
+
+  if not pattern or pattern == "" then
+    -- Confirm before clearing all
+    vim.ui.select({ "Yes", "No" }, {
+      prompt = "Clear all memories?",
+    }, function(choice)
+      if choice == "Yes" then
+        memory.clear()
+        utils.notify("All memories cleared", vim.log.levels.INFO)
+      end
+    end)
+  else
+    memory.clear(pattern)
+    utils.notify("Cleared memories matching: " .. pattern, vim.log.levels.INFO)
+  end
+end
+
 --- Transform a single prompt at cursor position
 local function cmd_transform_at_cursor()
   local parser = require("codetyper.parser")
@@ -741,6 +872,12 @@ local function coder_cmd(args)
     ["logs-toggle"] = cmd_logs_toggle,
     ["queue-status"] = cmd_queue_status,
     ["queue-process"] = cmd_queue_process,
+    ["index-project"] = cmd_index_project,
+    ["index-status"] = cmd_index_status,
+    memories = cmd_memories,
+    forget = function(args)
+      cmd_forget(args.fargs[2])
+    end,
     ["auto-toggle"] = function()
       local preferences = require("codetyper.preferences")
       preferences.toggle_auto_process()
@@ -787,6 +924,7 @@ function M.setup()
         "agent", "agent-close", "agent-toggle", "agent-stop",
         "type-toggle", "logs-toggle",
         "queue-status", "queue-process",
+        "index-project", "index-status", "memories", "forget",
         "auto-toggle", "auto-set",
       }
     end,
@@ -874,6 +1012,26 @@ function M.setup()
     local autocmds = require("codetyper.autocmds")
     autocmds.open_coder_companion()
   end, { desc = "Open coder companion for current file" })
+
+  -- Project indexer commands
+  vim.api.nvim_create_user_command("CoderIndexProject", function()
+    cmd_index_project()
+  end, { desc = "Index the entire project" })
+
+  vim.api.nvim_create_user_command("CoderIndexStatus", function()
+    cmd_index_status()
+  end, { desc = "Show project index status" })
+
+  vim.api.nvim_create_user_command("CoderMemories", function()
+    cmd_memories()
+  end, { desc = "Show learned memories" })
+
+  vim.api.nvim_create_user_command("CoderForget", function(opts)
+    cmd_forget(opts.args ~= "" and opts.args or nil)
+  end, {
+    desc = "Clear memories (optionally matching pattern)",
+    nargs = "?",
+  })
 
   -- Queue commands
   vim.api.nvim_create_user_command("CoderQueueStatus", function()

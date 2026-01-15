@@ -123,12 +123,14 @@ function M.agent_loop(context, callbacks)
     local config = codetyper.get_config()
     local parsed
 
-    if config.llm.provider == "claude" then
+    -- Copilot uses Claude-like response format
+    if config.llm.provider == "copilot" then
       parsed = parser.parse_claude_response(response)
-      -- For Claude, preserve the original content array for proper tool_use handling
       table.insert(state.conversation, {
         role = "assistant",
-        content = response.content, -- Keep original content blocks for Claude API
+        content = parsed.text or "",
+        tool_calls = parsed.tool_calls,
+        _raw_content = response.content,
       })
     else
       -- For Ollama, response is the text directly
@@ -200,9 +202,22 @@ function M.process_tool_calls(tool_calls, index, context, callbacks)
         show_fn = diff.show_diff
       end
 
-      show_fn(result.diff_data, function(approved)
+      show_fn(result.diff_data, function(approval_result)
+        -- Handle both old (boolean) and new (table) approval result formats
+        local approved = type(approval_result) == "table" and approval_result.approved or approval_result
+        local permission_level = type(approval_result) == "table" and approval_result.permission_level or nil
+
         if approved then
-          logs.tool(tool_call.name, "approved", "User approved")
+          local log_msg = "User approved"
+          if permission_level == "allow_session" then
+            log_msg = "Allowed for session"
+          elseif permission_level == "allow_list" then
+            log_msg = "Added to allow list"
+          elseif permission_level == "auto" then
+            log_msg = "Auto-approved"
+          end
+          logs.tool(tool_call.name, "approved", log_msg)
+
           -- Apply the change
           executor.apply_change(result.diff_data, function(apply_result)
             -- Store result for sending back to LLM
@@ -261,8 +276,9 @@ function M.continue_with_results(context, callbacks)
   local codetyper = require("codetyper")
   local config = codetyper.get_config()
 
-  if config.llm.provider == "claude" then
-    -- Claude format: tool_result blocks
+  -- Copilot uses Claude-like format for tool results
+  if config.llm.provider == "copilot" then
+    -- Claude-style tool_result blocks
     local content = {}
     for _, result in ipairs(state.pending_tool_results) do
       table.insert(content, {

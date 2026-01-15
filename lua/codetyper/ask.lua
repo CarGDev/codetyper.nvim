@@ -728,14 +728,17 @@ local function build_file_context()
 end
 
 --- Build context for the question
+---@param intent? table Detected intent from intent module
 ---@return table Context object
-local function build_context()
+local function build_context(intent)
 	local context = {
 		project_root = utils.get_project_root(),
 		current_file = nil,
 		current_content = nil,
 		language = nil,
 		referenced_files = state.referenced_files,
+		brain_context = nil,
+		indexer_context = nil,
 	}
 
 	-- Try to get current file context from the non-ask window
@@ -754,49 +757,140 @@ local function build_context()
 		end
 	end
 
+	-- Add brain context if intent needs it
+	if intent and intent.needs_brain_context then
+		local ok_brain, brain = pcall(require, "codetyper.brain")
+		if ok_brain and brain.is_initialized() then
+			context.brain_context = brain.get_context_for_llm({
+				file = context.current_file,
+				max_tokens = 1000,
+			})
+		end
+	end
+
+	-- Add indexer context if intent needs project-wide context
+	if intent and intent.needs_project_context then
+		local ok_indexer, indexer = pcall(require, "codetyper.indexer")
+		if ok_indexer then
+			context.indexer_context = indexer.get_context_for({
+				file = context.current_file,
+				prompt = "", -- Will be filled later
+				intent = intent,
+			})
+		end
+	end
+
 	return context
 end
 
---- Submit the question to LLM
-function M.submit()
-	local question = get_input_text()
-
-	if not question or question:match("^%s*$") then
-		utils.notify("Please enter a question", vim.log.levels.WARN)
-		M.focus_input()
+--- Append exploration log to output buffer
+---@param msg string
+---@param level string
+local function append_exploration_log(msg, level)
+	if not state.output_buf or not vim.api.nvim_buf_is_valid(state.output_buf) then
 		return
 	end
 
-	-- Build context BEFORE clearing input (to preserve file references)
-	local context = build_context()
-	local file_context, file_count = build_file_context()
+	vim.schedule(function()
+		if not state.output_buf or not vim.api.nvim_buf_is_valid(state.output_buf) then
+			return
+		end
 
-	-- Build display message (without full file contents)
-	local display_question = question
-	if file_count > 0 then
-		display_question = question .. "\n📎 " .. file_count .. " file(s) attached"
+		vim.bo[state.output_buf].modifiable = true
+
+		local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+
+		-- Format based on level
+		local formatted = msg
+		if level == "progress" then
+			formatted = msg
+		elseif level == "debug" then
+			formatted = msg
+		elseif level == "file" then
+			formatted = msg
+		end
+
+		table.insert(lines, formatted)
+
+		vim.api.nvim_buf_set_lines(state.output_buf, 0, -1, false, lines)
+		vim.bo[state.output_buf].modifiable = false
+
+		-- Scroll to bottom
+		if state.output_win and vim.api.nvim_win_is_valid(state.output_win) then
+			local line_count = vim.api.nvim_buf_line_count(state.output_buf)
+			pcall(vim.api.nvim_win_set_cursor, state.output_win, { line_count, 0 })
+		end
+	end)
+end
+
+--- Continue submission after exploration
+---@param question string
+---@param intent table
+---@param context table
+---@param file_context string
+---@param file_count number
+---@param exploration_result table|nil
+local function continue_submit(question, intent, context, file_context, file_count, exploration_result)
+	-- Get prompt type based on intent
+	local ok_intent, intent_module = pcall(require, "codetyper.ask.intent")
+	local prompt_type = "ask"
+	if ok_intent then
+		prompt_type = intent_module.get_prompt_type(intent)
 	end
 
-	-- Add user message to output
-	append_to_output(display_question, true)
-
-	-- Clear input and references AFTER building context
-	M.clear_input()
-
-	-- Build system prompt for ask mode using prompts module
+	-- Build system prompt using prompts module
 	local prompts = require("codetyper.prompts")
-	local system_prompt = prompts.system.ask
+	local system_prompt = prompts.system[prompt_type] or prompts.system.ask
 
 	if context.current_file then
 		system_prompt = system_prompt .. "\n\nCurrent open file: " .. context.current_file
 		system_prompt = system_prompt .. "\nLanguage: " .. (context.language or "unknown")
 	end
 
+	-- Add exploration context if available
+	if exploration_result then
+		local ok_explorer, explorer = pcall(require, "codetyper.ask.explorer")
+		if ok_explorer then
+			local explore_context = explorer.build_context(exploration_result)
+			system_prompt = system_prompt .. "\n\n=== PROJECT EXPLORATION RESULTS ===\n"
+			system_prompt = system_prompt .. explore_context
+			system_prompt = system_prompt .. "\n=== END EXPLORATION ===\n"
+		end
+	end
+
+	-- Add brain context (learned patterns, conventions)
+	if context.brain_context and context.brain_context ~= "" then
+		system_prompt = system_prompt .. "\n\n=== LEARNED PROJECT KNOWLEDGE ===\n"
+		system_prompt = system_prompt .. context.brain_context
+		system_prompt = system_prompt .. "\n=== END LEARNED KNOWLEDGE ===\n"
+	end
+
+	-- Add indexer context (project structure, symbols)
+	if context.indexer_context then
+		local idx_ctx = context.indexer_context
+		if idx_ctx.project_type and idx_ctx.project_type ~= "unknown" then
+			system_prompt = system_prompt .. "\n\nProject type: " .. idx_ctx.project_type
+		end
+		if idx_ctx.relevant_symbols and next(idx_ctx.relevant_symbols) then
+			system_prompt = system_prompt .. "\n\nRelevant symbols in project:"
+			for symbol, files in pairs(idx_ctx.relevant_symbols) do
+				system_prompt = system_prompt .. "\n  - " .. symbol .. " (in: " .. table.concat(files, ", ") .. ")"
+			end
+		end
+		if idx_ctx.patterns and #idx_ctx.patterns > 0 then
+			system_prompt = system_prompt .. "\n\nProject patterns/memories:"
+			for _, pattern in ipairs(idx_ctx.patterns) do
+				system_prompt = system_prompt .. "\n  - " .. (pattern.summary or pattern.content or "")
+			end
+		end
+	end
+
 	-- Add to history
 	table.insert(state.history, { role = "user", content = question })
 
 	-- Show loading indicator
-	append_to_output("⏳ Thinking...", false)
+	append_to_output("", false)
+	append_to_output("⏳ Generating response...", false)
 
 	-- Get LLM client and generate response
 	local ok, llm = pcall(require, "codetyper.llm")
@@ -829,10 +923,23 @@ function M.submit()
 			.. "\n```"
 	end
 
+	-- Add exploration summary to prompt if available
+	if exploration_result then
+		full_prompt = full_prompt
+			.. "\n\nPROJECT EXPLORATION COMPLETE: "
+			.. exploration_result.total_files
+			.. " files analyzed. "
+			.. "Project type: "
+			.. exploration_result.project.language
+			.. " ("
+			.. (exploration_result.project.framework or exploration_result.project.type)
+			.. ")"
+	end
+
 	local request_context = {
 		file_content = file_context ~= "" and file_context or context.current_content,
 		language = context.language,
-		prompt_type = "explain",
+		prompt_type = prompt_type,
 		file_path = context.current_file,
 	}
 
@@ -844,9 +951,9 @@ function M.submit()
 			-- Remove last few lines (the thinking message)
 			local to_remove = 0
 			for i = #lines, 1, -1 do
-				if lines[i]:match("Thinking") or lines[i]:match("^[│└┌─]") then
+				if lines[i]:match("Generating") or lines[i]:match("^[│└┌─]") or lines[i] == "" then
 					to_remove = to_remove + 1
-					if lines[i]:match("┌") then
+					if lines[i]:match("┌") or to_remove >= 5 then
 						break
 					end
 				else
@@ -877,6 +984,77 @@ function M.submit()
 		-- Focus back to input
 		M.focus_input()
 	end)
+end
+
+--- Submit the question to LLM
+function M.submit()
+	local question = get_input_text()
+
+	if not question or question:match("^%s*$") then
+		utils.notify("Please enter a question", vim.log.levels.WARN)
+		M.focus_input()
+		return
+	end
+
+	-- Detect intent from prompt
+	local ok_intent, intent_module = pcall(require, "codetyper.ask.intent")
+	local intent = nil
+	if ok_intent then
+		intent = intent_module.detect(question)
+	else
+		-- Fallback intent
+		intent = {
+			type = "ask",
+			confidence = 0.5,
+			needs_project_context = false,
+			needs_brain_context = true,
+			needs_exploration = false,
+		}
+	end
+
+	-- Build context BEFORE clearing input (to preserve file references)
+	local context = build_context(intent)
+	local file_context, file_count = build_file_context()
+
+	-- Build display message (without full file contents)
+	local display_question = question
+	if file_count > 0 then
+		display_question = question .. "\n📎 " .. file_count .. " file(s) attached"
+	end
+	-- Show detected intent if not standard ask
+	if intent.type ~= "ask" then
+		display_question = display_question .. "\n🎯 " .. intent.type:upper() .. " mode"
+	end
+	-- Show exploration indicator
+	if intent.needs_exploration then
+		display_question = display_question .. "\n🔍 Project exploration required"
+	end
+
+	-- Add user message to output
+	append_to_output(display_question, true)
+
+	-- Clear input and references AFTER building context
+	M.clear_input()
+
+	-- Check if exploration is needed
+	if intent.needs_exploration then
+		local ok_explorer, explorer = pcall(require, "codetyper.ask.explorer")
+		if ok_explorer then
+			local root = utils.get_project_root()
+			if root then
+				-- Start exploration with logging
+				append_to_output("", false)
+				explorer.explore(root, append_exploration_log, function(exploration_result)
+					-- After exploration completes, continue with LLM request
+					continue_submit(question, intent, context, file_context, file_count, exploration_result)
+				end)
+				return
+			end
+		end
+	end
+
+	-- No exploration needed, continue directly
+	continue_submit(question, intent, context, file_context, file_count, nil)
 end
 
 --- Clear chat history

@@ -36,15 +36,7 @@ function M.check()
 
     health.info("LLM Provider: " .. config.llm.provider)
 
-    if config.llm.provider == "claude" then
-      local api_key = config.llm.claude.api_key or vim.env.ANTHROPIC_API_KEY
-      if api_key and api_key ~= "" then
-        health.ok("Claude API key configured")
-      else
-        health.warn("Claude API key not set. Set ANTHROPIC_API_KEY or llm.claude.api_key")
-      end
-      health.info("Claude model: " .. config.llm.claude.model)
-    elseif config.llm.provider == "ollama" then
+    if config.llm.provider == "ollama" then
       health.info("Ollama host: " .. config.llm.ollama.host)
       health.info("Ollama model: " .. config.llm.ollama.model)
 

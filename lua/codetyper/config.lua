@@ -5,11 +5,7 @@ local M = {}
 ---@type CoderConfig
 local defaults = {
   llm = {
-    provider = "ollama", -- Options: "claude", "ollama", "openai", "gemini", "copilot"
-    claude = {
-      api_key = nil, -- Will use ANTHROPIC_API_KEY env var if nil
-      model = "claude-sonnet-4-20250514",
-    },
+    provider = "ollama", -- Options: "ollama", "openai", "gemini", "copilot"
     ollama = {
       host = "http://localhost:11434",
       model = "deepseek-coder:6.7b",
@@ -47,6 +43,48 @@ local defaults = {
     max_concurrent = 2, -- Maximum concurrent workers
     completion_delay_ms = 100, -- Wait after completion popup closes
     apply_delay_ms = 5000, -- Wait before removing tags and applying code (ms)
+  },
+  indexer = {
+    enabled = true, -- Enable project indexing
+    auto_index = true, -- Index files on save
+    index_on_open = false, -- Index project when opening
+    max_file_size = 100000, -- Skip files larger than 100KB
+    excluded_dirs = { "node_modules", "dist", "build", ".git", ".coder", "__pycache__", "vendor", "target" },
+    index_extensions = { "lua", "ts", "tsx", "js", "jsx", "py", "go", "rs", "rb", "java", "c", "cpp", "h", "hpp" },
+    memory = {
+      enabled = true, -- Enable memory persistence
+      max_memories = 1000, -- Maximum stored memories
+      prune_threshold = 0.1, -- Remove low-weight memories
+    },
+  },
+  brain = {
+    enabled = true, -- Enable brain learning system
+    auto_learn = true, -- Auto-learn from events
+    auto_commit = true, -- Auto-commit after threshold
+    commit_threshold = 10, -- Changes before auto-commit
+    max_nodes = 5000, -- Maximum nodes before pruning
+    max_deltas = 500, -- Maximum delta history
+    prune = {
+      enabled = true, -- Enable auto-pruning
+      threshold = 0.1, -- Remove nodes below this weight
+      unused_days = 90, -- Remove unused nodes after N days
+    },
+    output = {
+      max_tokens = 4000, -- Token budget for LLM context
+      format = "compact", -- "compact"|"json"|"natural"
+    },
+  },
+  suggestion = {
+    enabled = true, -- Enable ghost text suggestions (Copilot-style)
+    auto_trigger = true, -- Auto-trigger on typing
+    debounce = 150, -- Debounce in milliseconds
+    use_copilot = true, -- Use copilot.lua suggestions when available, fallback to codetyper
+    keymap = {
+      accept = "<Tab>", -- Accept suggestion
+      next = "<M-]>", -- Next suggestion (Alt+])
+      prev = "<M-[>", -- Previous suggestion (Alt+[)
+      dismiss = "<C-]>", -- Dismiss suggestion (Ctrl+])
+    },
   },
 }
 
@@ -88,7 +126,7 @@ function M.validate(config)
     return false, "Missing LLM configuration"
   end
 
-  local valid_providers = { "claude", "ollama", "openai", "gemini", "copilot" }
+  local valid_providers = { "ollama", "openai", "gemini", "copilot" }
   local is_valid_provider = false
   for _, p in ipairs(valid_providers) do
     if config.llm.provider == p then
@@ -102,12 +140,7 @@ function M.validate(config)
   end
 
   -- Validate provider-specific configuration
-  if config.llm.provider == "claude" then
-    local api_key = config.llm.claude.api_key or vim.env.ANTHROPIC_API_KEY
-    if not api_key or api_key == "" then
-      return false, "Claude API key not configured. Set llm.claude.api_key or ANTHROPIC_API_KEY env var"
-    end
-  elseif config.llm.provider == "openai" then
+  if config.llm.provider == "openai" then
     local api_key = config.llm.openai.api_key or vim.env.OPENAI_API_KEY
     if not api_key or api_key == "" then
       return false, "OpenAI API key not configured. Set llm.openai.api_key or OPENAI_API_KEY env var"

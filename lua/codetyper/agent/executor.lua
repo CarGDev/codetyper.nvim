@@ -27,6 +27,9 @@ function M.execute(tool_name, parameters, callback)
     edit_file = M.handle_edit_file,
     write_file = M.handle_write_file,
     bash = M.handle_bash,
+    delete_file = M.handle_delete_file,
+    list_directory = M.handle_list_directory,
+    search_files = M.handle_search_files,
   }
 
   local handler = handlers[tool_name]
@@ -156,6 +159,165 @@ function M.handle_bash(params, callback)
   })
 end
 
+--- Handle delete_file tool
+---@param params table { path: string, reason: string }
+---@param callback fun(result: ExecutionResult)
+function M.handle_delete_file(params, callback)
+  local path = M.resolve_path(params.path)
+  local reason = params.reason or "No reason provided"
+
+  -- Check if file exists
+  if not utils.file_exists(path) then
+    callback({
+      success = false,
+      result = "File not found: " .. path,
+      requires_approval = false,
+    })
+    return
+  end
+
+  -- Read content for showing in diff (so user knows what they're deleting)
+  local content = utils.read_file(path) or "[Could not read file]"
+
+  callback({
+    success = true,
+    result = "Delete: " .. path .. " (" .. reason .. ")",
+    requires_approval = true,
+    diff_data = {
+      path = path,
+      original = content,
+      modified = "", -- Empty = deletion
+      operation = "delete",
+      reason = reason,
+    },
+  })
+end
+
+--- Handle list_directory tool
+---@param params table { path?: string, recursive?: boolean }
+---@param callback fun(result: ExecutionResult)
+function M.handle_list_directory(params, callback)
+  local path = params.path and M.resolve_path(params.path) or (utils.get_project_root() or vim.fn.getcwd())
+  local recursive = params.recursive or false
+
+  -- Use vim.fn.readdir or glob for directory listing
+  local entries = {}
+  local function list_dir(dir, depth)
+    if depth > 3 then
+      return
+    end
+
+    local ok, files = pcall(vim.fn.readdir, dir)
+    if not ok or not files then
+      return
+    end
+
+    for _, name in ipairs(files) do
+      if name ~= "." and name ~= ".." and not name:match("^%.git$") and not name:match("^node_modules$") then
+        local full_path = dir .. "/" .. name
+        local stat = vim.loop.fs_stat(full_path)
+        if stat then
+          local prefix = string.rep("  ", depth)
+          local type_indicator = stat.type == "directory" and "/" or ""
+          table.insert(entries, prefix .. name .. type_indicator)
+
+          if recursive and stat.type == "directory" then
+            list_dir(full_path, depth + 1)
+          end
+        end
+      end
+    end
+  end
+
+  list_dir(path, 0)
+
+  local result = "Directory: " .. path .. "\n\n" .. table.concat(entries, "\n")
+
+  callback({
+    success = true,
+    result = result,
+    requires_approval = false,
+  })
+end
+
+--- Handle search_files tool
+---@param params table { pattern?: string, content?: string, path?: string }
+---@param callback fun(result: ExecutionResult)
+function M.handle_search_files(params, callback)
+  local search_path = params.path and M.resolve_path(params.path) or (utils.get_project_root() or vim.fn.getcwd())
+  local pattern = params.pattern
+  local content_search = params.content
+
+  local results = {}
+
+  if pattern then
+    -- Search by file name pattern using glob
+    local glob_pattern = search_path .. "/**/" .. pattern
+    local files = vim.fn.glob(glob_pattern, false, true)
+
+    for _, file in ipairs(files) do
+      -- Skip common ignore patterns
+      if not file:match("node_modules") and not file:match("%.git/") then
+        table.insert(results, file:gsub(search_path .. "/", ""))
+      end
+    end
+  end
+
+  if content_search then
+    -- Search by content using grep
+    local grep_results = {}
+    local grep_cmd = string.format("grep -rl '%s' '%s' 2>/dev/null | head -20", content_search:gsub("'", "\\'"), search_path)
+
+    local handle = io.popen(grep_cmd)
+    if handle then
+      for line in handle:lines() do
+        if not line:match("node_modules") and not line:match("%.git/") then
+          table.insert(grep_results, line:gsub(search_path .. "/", ""))
+        end
+      end
+      handle:close()
+    end
+
+    -- Merge with pattern results or use as primary results
+    if #results == 0 then
+      results = grep_results
+    else
+      -- Intersection of pattern and content results
+      local pattern_set = {}
+      for _, f in ipairs(results) do
+        pattern_set[f] = true
+      end
+      results = {}
+      for _, f in ipairs(grep_results) do
+        if pattern_set[f] then
+          table.insert(results, f)
+        end
+      end
+    end
+  end
+
+  local result_text = "Search results"
+  if pattern then
+    result_text = result_text .. " (pattern: " .. pattern .. ")"
+  end
+  if content_search then
+    result_text = result_text .. " (content: " .. content_search .. ")"
+  end
+  result_text = result_text .. ":\n\n"
+
+  if #results == 0 then
+    result_text = result_text .. "No files found."
+  else
+    result_text = result_text .. table.concat(results, "\n")
+  end
+
+  callback({
+    success = true,
+    result = result_text,
+    requires_approval = false,
+  })
+end
+
 --- Actually apply an approved change
 ---@param diff_data DiffData The diff data to apply
 ---@param callback fun(result: ExecutionResult)
@@ -164,6 +326,24 @@ function M.apply_change(diff_data, callback)
     -- Extract command from modified (remove "$ " prefix)
     local command = diff_data.modified:gsub("^%$ ", "")
     M.execute_bash_command(command, 30000, callback)
+  elseif diff_data.operation == "delete" then
+    -- Delete file
+    local ok, err = os.remove(diff_data.path)
+    if ok then
+      -- Close buffer if it's open
+      M.close_buffer_if_open(diff_data.path)
+      callback({
+        success = true,
+        result = "Deleted: " .. diff_data.path,
+        requires_approval = false,
+      })
+    else
+      callback({
+        success = false,
+        result = "Failed to delete: " .. diff_data.path .. " (" .. (err or "unknown error") .. ")",
+        requires_approval = false,
+      })
+    end
   else
     -- Write file
     local success = utils.write_file(diff_data.path, diff_data.modified)
@@ -269,6 +449,22 @@ function M.reload_buffer_if_open(filepath)
         vim.api.nvim_buf_call(buf, function()
           vim.cmd("edit!")
         end)
+        break
+      end
+    end
+  end
+end
+
+--- Close a buffer if it's currently open (for deleted files)
+---@param filepath string Path to the file
+function M.close_buffer_if_open(filepath)
+  local full_path = vim.fn.fnamemodify(filepath, ":p")
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(buf) then
+      local buf_name = vim.api.nvim_buf_get_name(buf)
+      if buf_name == full_path then
+        -- Force close the buffer
+        pcall(vim.api.nvim_buf_delete, buf, { force = true })
         break
       end
     end

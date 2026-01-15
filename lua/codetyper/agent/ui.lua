@@ -35,13 +35,61 @@ local state = {
 local ns_chat = vim.api.nvim_create_namespace("codetyper_agent_chat")
 local ns_logs = vim.api.nvim_create_namespace("codetyper_agent_logs")
 
---- Fixed widths
-local CHAT_WIDTH = 300
-local LOGS_WIDTH = 50
+--- Fixed heights
 local INPUT_HEIGHT = 5
+local LOGS_WIDTH = 50
+
+--- Calculate dynamic width (1/4 of screen, minimum 30)
+---@return number
+local function get_panel_width()
+  return math.max(math.floor(vim.o.columns * 0.25), 30)
+end
 
 --- Autocmd group
 local agent_augroup = nil
+
+--- Autocmd group for width maintenance
+local width_augroup = nil
+
+--- Store target width
+local target_width = nil
+
+--- Setup autocmd to always maintain 1/4 window width
+local function setup_width_autocmd()
+  -- Clear previous autocmd group if exists
+  if width_augroup then
+    pcall(vim.api.nvim_del_augroup_by_id, width_augroup)
+  end
+
+  width_augroup = vim.api.nvim_create_augroup("CodetypeAgentWidth", { clear = true })
+
+  -- Always maintain 1/4 width on any window event
+  vim.api.nvim_create_autocmd({ "WinResized", "WinNew", "WinClosed", "VimResized" }, {
+    group = width_augroup,
+    callback = function()
+      if not state.is_open or not state.chat_win then
+        return
+      end
+      if not vim.api.nvim_win_is_valid(state.chat_win) then
+        return
+      end
+
+      vim.schedule(function()
+        if state.chat_win and vim.api.nvim_win_is_valid(state.chat_win) then
+          -- Always calculate 1/4 of current screen width
+          local new_target = math.max(math.floor(vim.o.columns * 0.25), 30)
+          target_width = new_target
+
+          local current_width = vim.api.nvim_win_get_width(state.chat_win)
+          if current_width ~= target_width then
+            pcall(vim.api.nvim_win_set_width, state.chat_win, target_width)
+          end
+        end
+      end)
+    end,
+    desc = "Maintain Agent panel at 1/4 window width",
+  })
+end
 
 --- Add a log entry to the logs buffer
 ---@param entry table Log entry
@@ -479,7 +527,7 @@ function M.open()
   vim.cmd("topleft vsplit")
   state.chat_win = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(state.chat_win, state.chat_buf)
-  vim.api.nvim_win_set_width(state.chat_win, CHAT_WIDTH)
+  vim.api.nvim_win_set_width(state.chat_win, get_panel_width())
 
   -- Window options for chat
   vim.wo[state.chat_win].number = false
@@ -592,6 +640,10 @@ function M.open()
     end,
   })
 
+  -- Setup autocmd to maintain 1/4 width
+  target_width = get_panel_width()
+  setup_width_autocmd()
+
   state.is_open = true
 
   -- Focus input and log startup
@@ -603,7 +655,16 @@ function M.open()
   if ok then
     local config = codetyper.get_config()
     local provider = config.llm.provider
-    local model = provider == "claude" and config.llm.claude.model or config.llm.ollama.model
+    local model = "unknown"
+    if provider == "ollama" then
+      model = config.llm.ollama.model
+    elseif provider == "openai" then
+      model = config.llm.openai.model
+    elseif provider == "gemini" then
+      model = config.llm.gemini.model
+    elseif provider == "copilot" then
+      model = config.llm.copilot.model
+    end
     logs.info(string.format("%s (%s)", provider, model))
   end
 end

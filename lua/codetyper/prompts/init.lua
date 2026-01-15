@@ -11,6 +11,7 @@ M.code = require("codetyper.prompts.code")
 M.ask = require("codetyper.prompts.ask")
 M.refactor = require("codetyper.prompts.refactor")
 M.document = require("codetyper.prompts.document")
+M.agent = require("codetyper.prompts.agent")
 
 --- Get a prompt by category and name
 ---@param category string Category name (system, code, ask, refactor, document)
