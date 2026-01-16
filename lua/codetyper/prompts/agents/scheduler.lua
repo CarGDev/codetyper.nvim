@@ -1,4 +1,4 @@
----@mod codetyper.prompts.agent.scheduler Scheduler prompts
+---@mod codetyper.prompts.agents.scheduler Scheduler prompts
 local M = {}
 
 M.retry_context = [[

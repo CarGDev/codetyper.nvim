@@ -1,4 +1,4 @@
----@mod codetyper.params.agent.linter Linter configuration
+---@mod codetyper.params.agents.linter Linter configuration
 local M = {}
 
 M.config = {

@@ -6,7 +6,7 @@
 
 local M = {}
 
-local params = require("codetyper.params.agent.worker")
+local params = require("codetyper.params.agents.worker")
 local confidence = require("codetyper.core.llm.confidence")
 
 ---@class WorkerResult

@@ -10,7 +10,7 @@ local M = {}
 ---@field allow_list table<string, boolean> Patterns always allowed
 ---@field deny_list table<string, boolean> Patterns always denied
 
-local params = require("codetyper.params.agent.permissions")
+local params = require("codetyper.params.agents.permissions")
 
 local state = {
 	session_allowed = {},

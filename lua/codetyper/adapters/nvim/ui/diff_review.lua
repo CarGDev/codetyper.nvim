@@ -6,7 +6,7 @@
 local M = {}
 
 local utils = require("codetyper.support.utils")
-local prompts = require("codetyper.prompts.agent.diff")
+local prompts = require("codetyper.prompts.agents.diff")
 
 
 ---@class DiffEntry

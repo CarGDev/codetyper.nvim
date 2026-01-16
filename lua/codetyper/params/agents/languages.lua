@@ -1,4 +1,4 @@
----@mod codetyper.params.agent.languages Language-specific patterns and configurations
+---@mod codetyper.params.agents.languages Language-specific patterns and configurations
 local M = {}
 
 --- Language-specific import patterns

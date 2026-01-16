@@ -1,4 +1,4 @@
----@mod codetyper.prompts.agent.modal Prompts and UI strings for context modal
+---@mod codetyper.prompts.agents.modal Prompts and UI strings for context modal
 local M = {}
 
 --- Modal UI strings

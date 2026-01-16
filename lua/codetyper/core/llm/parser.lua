@@ -4,7 +4,7 @@
 
 local M = {}
 
-local params = require("codetyper.params.agent.parser")
+local params = require("codetyper.params.agents.parser")
 
 
 ---@class ParsedResponse

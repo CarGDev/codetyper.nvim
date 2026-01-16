@@ -437,7 +437,7 @@ function M.generate_with_tools(messages, context, tool_definitions, callback)
 		end
 
 		local tools_module = require("codetyper.core.tools")
-		local agent_prompts = require("codetyper.prompts.agent")
+		local agent_prompts = require("codetyper.prompts.agents")
 
 		-- Build system prompt with agent instructions and project context
 		local system_prompt = llm.build_system_prompt(context)

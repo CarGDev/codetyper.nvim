@@ -157,7 +157,7 @@ function M.show_diff(diff_data, callback)
   end
 
   -- Show help message
-  local help_msg = require("codetyper.prompts.agent.diff").diff_help
+  local help_msg = require("codetyper.prompts.agents.diff").diff_help
 
   -- Iterate to replace {path} variable
   local final_help = {}
@@ -190,7 +190,7 @@ function M.show_bash_approval(command, callback)
   end
 
   -- Create approval dialog with options
-  local approval_prompts = require("codetyper.prompts.agent.diff").bash_approval
+  local approval_prompts = require("codetyper.prompts.agents.diff").bash_approval
   local lines = {
     "",
     approval_prompts.title,

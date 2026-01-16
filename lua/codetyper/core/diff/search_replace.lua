@@ -6,7 +6,7 @@
 
 local M = {}
 
-local params = require("codetyper.params.agent.search_replace").patterns
+local params = require("codetyper.params.agents.search_replace").patterns
 
 ---@class SearchReplaceBlock
 ---@field search string The text to search for

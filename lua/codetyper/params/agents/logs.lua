@@ -1,4 +1,4 @@
----@mod codetyper.params.agent.logs Log parameters
+---@mod codetyper.params.agents.logs Log parameters
 local M = {}
 
 M.icons = {

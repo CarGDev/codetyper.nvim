@@ -471,7 +471,7 @@ local function call_llm(messages, tools, system_prompt, provider, model, callbac
 		local client = require("codetyper.core.llm." .. provider)
 
 		-- Build prompt from messages
-		local prompts = require("codetyper.prompts.agent")
+		local prompts = require("codetyper.prompts.agents")
 		local prompt_parts = {}
 		for _, msg in ipairs(messages) do
 			if msg.role == "user" then
@@ -484,7 +484,7 @@ local function call_llm(messages, tools, system_prompt, provider, model, callbac
 		end
 
 		-- Add tool descriptions to prompt for text-based providers
-		local tool_desc = require("codetyper.prompts.agent").tool_instructions_text
+		local tool_desc = require("codetyper.prompts.agents").tool_instructions_text
 		for _, tool in ipairs(tools) do
 			local name = tool.name or (tool["function"] and tool["function"].name)
 			local desc = tool.description or (tool["function"] and tool["function"].description)
@@ -561,7 +561,7 @@ function M.run(opts)
 
 	-- Add initial file context if provided
 	if opts.files and #opts.files > 0 then
-		local file_context = require("codetyper.prompts.agent").format_file_context(opts.files)
+		local file_context = require("codetyper.prompts.agents").format_file_context(opts.files)
 		table.insert(history, { role = "user", content = file_context })
 		table.insert(history, { role = "assistant", content = "I've reviewed the provided files. What would you like me to do?" })
 	end

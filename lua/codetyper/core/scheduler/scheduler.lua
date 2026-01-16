@@ -11,7 +11,7 @@ local patch = require("codetyper.core.diff.patch")
 local worker = require("codetyper.core.scheduler.worker")
 local confidence_mod = require("codetyper.core.llm.confidence")
 local context_modal = require("codetyper.adapters.nvim.ui.context_modal")
-local params = require("codetyper.params.agent.scheduler")
+local params = require("codetyper.params.agents.scheduler")
 
 -- Setup context modal cleanup on exit
 context_modal.setup()

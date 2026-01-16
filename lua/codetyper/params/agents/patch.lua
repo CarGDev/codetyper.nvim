@@ -1,4 +1,4 @@
----@mod codetyper.params.agent.patch Patch configuration
+---@mod codetyper.params.agents.patch Patch configuration
 local M = {}
 
 M.config = {

@@ -4,7 +4,7 @@
 
 local M = {}
 
-local params = require("codetyper.params.agent.logs")
+local params = require("codetyper.params.agents.logs")
 
 
 ---@class LogEntry

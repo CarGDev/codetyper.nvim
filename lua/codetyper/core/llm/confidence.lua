@@ -6,7 +6,7 @@
 
 local M = {}
 
-local params = require("codetyper.params.agent.confidence")
+local params = require("codetyper.params.agents.confidence")
 
 --- Heuristic weights (must sum to 1.0)
 M.weights = params.weights

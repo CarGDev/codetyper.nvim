@@ -122,7 +122,7 @@ local function attach_requested_files()
 	end
 	local files = parse_requested_files(state.llm_response)
 	if #files == 0 then
-		local ui_prompts = require("codetyper.prompts.agent.modal").ui
+		local ui_prompts = require("codetyper.prompts.agents.modal").ui
 		vim.api.nvim_buf_set_lines(state.buf, vim.api.nvim_buf_line_count(state.buf), -1, false, ui_prompts.files_header)
 		return
 	end
@@ -191,7 +191,7 @@ function M.open(original_event, llm_response, callback, suggested_commands)
 	vim.wo[state.win].wrap = true
 	vim.wo[state.win].cursorline = true
 
-	local ui_prompts = require("codetyper.prompts.agent.modal").ui
+	local ui_prompts = require("codetyper.prompts.agents.modal").ui
 
 	-- Add header showing what the LLM said
 	local header_lines = {
@@ -325,7 +325,7 @@ local function run_project_inspect()
 		{ label = "Show repo files (git ls-files)", cmd = "git ls-files" },
 	}
 
-	local ui_prompts = require("codetyper.prompts.agent.modal").ui
+	local ui_prompts = require("codetyper.prompts.agents.modal").ui
 	local insert_pos = vim.api.nvim_buf_line_count(state.buf)
 	vim.api.nvim_buf_set_lines(state.buf, insert_pos, insert_pos, false, ui_prompts.project_inspect_header)
 

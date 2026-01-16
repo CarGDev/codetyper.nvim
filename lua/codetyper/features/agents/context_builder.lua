@@ -6,7 +6,7 @@
 local M = {}
 
 local utils = require("codetyper.support.utils")
-local params = require("codetyper.params.agent.context")
+local params = require("codetyper.params.agents.context")
 
 --- Get project structure as a tree string
 ---@param max_depth? number Maximum depth to traverse (default: 3)

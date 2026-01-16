@@ -1,4 +1,4 @@
----@mod codetyper.params.agent.context Parameters for context building
+---@mod codetyper.params.agents.context Parameters for context building
 local M = {}
 
 --- Common ignore patterns

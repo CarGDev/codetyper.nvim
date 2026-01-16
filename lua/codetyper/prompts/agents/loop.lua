@@ -1,4 +1,4 @@
----@mod codetyper.prompts.agent.loop Agent Loop prompts
+---@mod codetyper.prompts.agents.loop Agent Loop prompts
 local M = {}
 
 M.default_system_prompt = [[You are a helpful coding assistant with access to tools.

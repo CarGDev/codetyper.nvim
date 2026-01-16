@@ -14,7 +14,7 @@ local M = {}
 ---@field name string|nil Name of the function/class if available
 
 --- Node types that represent function-like scopes per language
-local params = require("codetyper.params.agent.scope")
+local params = require("codetyper.params.agents.scope")
 local function_nodes = params.function_nodes
 local class_nodes = params.class_nodes
 local block_nodes = params.block_nodes

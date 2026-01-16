@@ -1,4 +1,4 @@
----@mod codetyper.params.agent.worker Worker configuration and patterns
+---@mod codetyper.params.agents.worker Worker configuration and patterns
 local M = {}
 
 --- Patterns that indicate LLM needs more context (must be near start of response)

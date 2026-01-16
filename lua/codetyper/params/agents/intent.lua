@@ -1,4 +1,4 @@
----@mod codetyper.params.agent.intent Intent patterns and scope configuration
+---@mod codetyper.params.agents.intent Intent patterns and scope configuration
 local M = {}
 
 --- Intent patterns with associated metadata

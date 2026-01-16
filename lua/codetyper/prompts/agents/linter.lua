@@ -1,4 +1,4 @@
----@mod codetyper.prompts.agent.linter Linter prompts
+---@mod codetyper.prompts.agents.linter Linter prompts
 local M = {}
 
 M.fix_request = [[

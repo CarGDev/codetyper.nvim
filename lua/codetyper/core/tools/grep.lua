@@ -4,7 +4,7 @@
 ---@brief ]]
 
 local Base = require("codetyper.core.tools.base")
-local description = require("codetyper.params.agent.grep").description
+local description = require("codetyper.params.agents.grep").description
 local params = require("codetyper.prompts.agents.grep").params
 local returns = require("codetyper.prompts.agents.grep").returns
 

@@ -1,4 +1,4 @@
----@mod codetyper.params.agent.tools Tool definitions
+---@mod codetyper.params.agents.tools Tool definitions
 local M = {}
 
 --- Tool definitions in a provider-agnostic format

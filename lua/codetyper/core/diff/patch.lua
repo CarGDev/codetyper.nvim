@@ -7,7 +7,7 @@
 
 local M = {}
 
-local params = require("codetyper.params.agent.patch")
+local params = require("codetyper.params.agents.patch")
 
 
 --- Lazy load inject module to avoid circular requires

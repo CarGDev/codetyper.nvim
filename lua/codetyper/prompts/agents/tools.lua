@@ -1,4 +1,4 @@
----@mod codetyper.prompts.agent.tools Tool system prompts
+---@mod codetyper.prompts.agents.tools Tool system prompts
 local M = {}
 
 M.instructions = {

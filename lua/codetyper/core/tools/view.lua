@@ -10,7 +10,7 @@ local M = setmetatable({}, Base)
 
 M.name = "view"
 
-local params = require("codetyper.params.agent.view")
+local params = require("codetyper.params.agents.view")
 local description = require("codetyper.prompts.agents.view").description
 
 M.description = description

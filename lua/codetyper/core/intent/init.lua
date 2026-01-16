@@ -13,10 +13,10 @@ local M = {}
 ---@field action string "replace"|"insert"|"append"|"none"
 ---@field keywords string[] Keywords that triggered this intent
 
-local params = require("codetyper.params.agent.intent")
+local params = require("codetyper.params.agents.intent")
 local intent_patterns = params.intent_patterns
 local scope_patterns = params.scope_patterns
-local prompts = require("codetyper.prompts.agent.intent")
+local prompts = require("codetyper.prompts.agents.intent")
 
 --- Detect intent from prompt content
 ---@param prompt string The prompt content

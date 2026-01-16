@@ -5,7 +5,7 @@
 local M = {}
 
 --- Tool definitions in a provider-agnostic format
-M.definitions = require("codetyper.params.agent.tools").definitions
+M.definitions = require("codetyper.params.agents.tools").definitions
 
 --- Convert tool definitions to Claude API format
 ---@return table[] Tools in Claude's expected format
@@ -41,7 +41,7 @@ end
 --- Convert tool definitions to prompt format for Ollama
 ---@return string Formatted tool descriptions for system prompt
 function M.to_prompt_format()
-  local prompts = require("codetyper.prompts.agent.tools").instructions
+  local prompts = require("codetyper.prompts.agents.tools").instructions
   local lines = {
     prompts.intro,
     "",

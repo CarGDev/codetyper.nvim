@@ -1,4 +1,4 @@
----@mod codetyper.prompts.agent Agent prompts for Codetyper.nvim
+---@mod codetyper.prompts.agents.init Agent prompts for Codetyper.nvim
 ---
 --- System prompts for the agentic mode with tool use.
 

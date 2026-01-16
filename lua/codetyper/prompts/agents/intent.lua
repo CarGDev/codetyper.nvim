@@ -1,4 +1,4 @@
----@mod codetyper.prompts.agent.intent Intent-specific system prompts
+---@mod codetyper.prompts.agents.intent Intent-specific system prompts
 local M = {}
 
 M.modifiers = {

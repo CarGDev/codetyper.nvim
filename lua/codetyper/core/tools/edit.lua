@@ -6,9 +6,9 @@
 ---@brief ]]
 
 local Base = require("codetyper.core.tools.base")
-local description = require("codetyper.prompts.agent.edit").description
-local params = require("codetyper.params.agent.edit").params
-local returns = require("codetyper.params.agent.edit").returns
+local description = require("codetyper.prompts.agents.edit").description
+local params = require("codetyper.params.agents.edit").params
+local returns = require("codetyper.params.agents.edit").returns
 
 ---@class CoderTool
 local M = setmetatable({}, Base)

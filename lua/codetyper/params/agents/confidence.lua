@@ -1,4 +1,4 @@
----@mod codetyper.params.agent.confidence Parameters for confidence scoring
+---@mod codetyper.params.agents.confidence Parameters for confidence scoring
 local M = {}
 
 --- Heuristic weights (must sum to 1.0)

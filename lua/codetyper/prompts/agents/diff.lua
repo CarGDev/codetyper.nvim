@@ -1,4 +1,4 @@
----@mod codetyper.prompts.agent.diff Prompts and UI strings for diff view and bash approval
+---@mod codetyper.prompts.agents.diff Prompts and UI strings for diff view and bash approval
 local M = {}
 
 --- Bash approval dialog strings

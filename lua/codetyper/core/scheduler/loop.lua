@@ -6,7 +6,7 @@
 
 local M = {}
 
-local prompts = require("codetyper.prompts.agent.loop")
+local prompts = require("codetyper.prompts.agents.loop")
 
 ---@class AgentMessage
 ---@field role "system"|"user"|"assistant"|"tool"

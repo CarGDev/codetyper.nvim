@@ -1,4 +1,4 @@
----@mod codetyper.params.agent.permissions Dangerous and safe command patterns
+---@mod codetyper.params.agents.permissions Dangerous and safe command patterns
 local M = {}
 
 --- Dangerous command patterns that should never be auto-allowed

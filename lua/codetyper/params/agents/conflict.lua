@@ -1,4 +1,4 @@
----@mod codetyper.params.agent.conflict Parameters for conflict resolution
+---@mod codetyper.params.agents.conflict Parameters for conflict resolution
 local M = {}
 
 --- Configuration defaults

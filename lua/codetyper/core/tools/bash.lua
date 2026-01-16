@@ -4,9 +4,9 @@
 ---@brief ]]
 
 local Base = require("codetyper.core.tools.base")
-local description = require("codetyper.prompts.agent.bash").description
-local params = require("codetyper.params.agent.bash").params
-local returns = require("codetyper.params.agent.bash").returns
+local description = require("codetyper.prompts.agents.bash").description
+local params = require("codetyper.params.agents.bash").params
+local returns = require("codetyper.params.agents.bash").returns
 local BANNED_COMMANDS = require("codetyper.commands.agents.banned").BANNED_COMMANDS
 local BANNED_PATTERNS = require("codetyper.commands.agents.banned").BANNED_PATTERNS
 

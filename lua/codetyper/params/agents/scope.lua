@@ -1,4 +1,4 @@
----@mod codetyper.params.agent.scope Tree-sitter scope mappings
+---@mod codetyper.params.agents.scope Tree-sitter scope mappings
 local M = {}
 
 --- Node types that represent function-like scopes per language

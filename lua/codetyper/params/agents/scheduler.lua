@@ -1,4 +1,4 @@
----@mod codetyper.params.agent.scheduler Scheduler configuration
+---@mod codetyper.params.agents.scheduler Scheduler configuration
 local M = {}
 
 M.config = {

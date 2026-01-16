@@ -1,4 +1,4 @@
----@mod codetyper.params.agent.search_replace Search/Replace patterns
+---@mod codetyper.params.agents.search_replace Search/Replace patterns
 local M = {}
 
 M.patterns = {

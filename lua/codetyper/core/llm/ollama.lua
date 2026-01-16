@@ -218,7 +218,7 @@ end
 ---@param callback fun(response: table|nil, error: string|nil) Callback with Claude-like response format
 function M.generate_with_tools(messages, context, tool_definitions, callback)
 	local logs = require("codetyper.adapters.nvim.ui.logs")
-	local agent_prompts = require("codetyper.prompts.agent")
+	local agent_prompts = require("codetyper.prompts.agents")
 	local tools_module = require("codetyper.core.tools")
 
 	logs.request("ollama", get_model())

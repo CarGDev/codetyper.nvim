@@ -18,7 +18,7 @@ local M = {}
 ---@field import_lines table<number, boolean> Map of line numbers that are imports
 
 local utils = require("codetyper.support.utils")
-local languages = require("codetyper.params.agent.languages")
+local languages = require("codetyper.params.agents.languages")
 local import_patterns = languages.import_patterns
 
 --- Check if a line is an import statement for the given language

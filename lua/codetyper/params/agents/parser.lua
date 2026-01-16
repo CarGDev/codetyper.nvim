@@ -1,4 +1,4 @@
----@mod codetyper.params.agent.parser Parser regex patterns
+---@mod codetyper.params.agents.parser Parser regex patterns
 local M = {}
 
 M.patterns = {

@@ -15,7 +15,7 @@
 
 local M = {}
 
-local params = require("codetyper.params.agent.conflict")
+local params = require("codetyper.params.agents.conflict")
 
 --- Lazy load linter module
 local function get_linter()

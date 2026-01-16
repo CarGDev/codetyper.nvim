@@ -6,8 +6,8 @@
 
 local M = {}
 
-local config_params = require("codetyper.params.agent.linter")
-local prompts = require("codetyper.prompts.agent.linter")
+local config_params = require("codetyper.params.agents.linter")
+local prompts = require("codetyper.prompts.agents.linter")
 
 --- Configuration
 local config = config_params.config
