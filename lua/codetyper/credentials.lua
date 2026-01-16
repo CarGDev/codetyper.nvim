@@ -226,34 +226,55 @@ M.default_models = {
 }
 
 --- Available models for Copilot (GitHub Copilot Chat API)
---- Models are ordered by capability/cost (most capable first)
+--- Models with cost multipliers: 0x = free, 0.33x = discount, 1x = standard, 3x = premium
 M.copilot_models = {
-	-- GPT-5 series
-	"gpt-5.2-codex",
-	"gpt-5.2",
-	"gpt-5.1-codex-max",
-	"gpt-5.1-codex",
-	"gpt-5.1-codex-mini",
-	"gpt-5.1",
-	"gpt-5-codex",
-	"gpt-5",
-	"gpt-5-mini",
-	-- GPT-4 series
-	"gpt-4.1",
-	"gpt-4o",
-	-- Claude models
-	"claude-opus-4.5",
-	"claude-sonnet-4.5",
-	"claude-sonnet-4",
-	"claude-haiku-4.5",
-	-- Gemini models
-	"gemini-2.5-pro",
-	"gemini-3-pro",
-	"gemini-3-flash",
-	-- Other models
-	"grok-code-fast-1",
-	"raptor-mini",
+	-- Free tier (0x)
+	{ name = "gpt-4.1", cost = "0x" },
+	{ name = "gpt-4o", cost = "0x" },
+	{ name = "gpt-5-mini", cost = "0x" },
+	{ name = "grok-code-fast-1", cost = "0x" },
+	{ name = "raptor-mini", cost = "0x" },
+	-- Discount tier (0.33x)
+	{ name = "claude-haiku-4.5", cost = "0.33x" },
+	{ name = "gemini-3-flash", cost = "0.33x" },
+	{ name = "gpt-5.1-codex-mini", cost = "0.33x" },
+	-- Standard tier (1x)
+	{ name = "claude-sonnet-4", cost = "1x" },
+	{ name = "claude-sonnet-4.5", cost = "1x" },
+	{ name = "gemini-2.5-pro", cost = "1x" },
+	{ name = "gemini-3-pro", cost = "1x" },
+	{ name = "gpt-5", cost = "1x" },
+	{ name = "gpt-5-codex", cost = "1x" },
+	{ name = "gpt-5.1", cost = "1x" },
+	{ name = "gpt-5.1-codex", cost = "1x" },
+	{ name = "gpt-5.1-codex-max", cost = "1x" },
+	{ name = "gpt-5.2", cost = "1x" },
+	{ name = "gpt-5.2-codex", cost = "1x" },
+	-- Premium tier (3x)
+	{ name = "claude-opus-4.5", cost = "3x" },
 }
+
+--- Get list of copilot model names (for completion)
+---@return string[]
+function M.get_copilot_model_names()
+	local names = {}
+	for _, model in ipairs(M.copilot_models) do
+		table.insert(names, model.name)
+	end
+	return names
+end
+
+--- Get cost for a copilot model
+---@param model_name string
+---@return string|nil
+function M.get_copilot_model_cost(model_name)
+	for _, model in ipairs(M.copilot_models) do
+		if model.name == model_name then
+			return model.cost
+		end
+	end
+	return nil
+end
 
 --- Interactive command to add/update API key
 function M.interactive_add()
@@ -307,30 +328,38 @@ function M.interactive_api_key(provider)
 end
 
 --- Interactive Copilot configuration (no API key, uses OAuth)
-function M.interactive_copilot_config()
-	utils.notify("Copilot uses OAuth from copilot.lua/copilot.vim - no API key needed", vim.log.levels.INFO)
+---@param silent? boolean If true, don't show the OAuth info message
+function M.interactive_copilot_config(silent)
+	if not silent then
+		utils.notify("Copilot uses OAuth from copilot.lua/copilot.vim - no API key needed", vim.log.levels.INFO)
+	end
 
 	-- Get current model if configured
 	local current_model = M.get_model("copilot") or M.default_models.copilot
+	local current_cost = M.get_copilot_model_cost(current_model) or "?"
 
 	-- Build model options with "Custom..." option
 	local model_options = vim.deepcopy(M.copilot_models)
-	table.insert(model_options, "Custom...")
+	table.insert(model_options, { name = "Custom...", cost = "" })
 
 	vim.ui.select(model_options, {
-		prompt = "Select Copilot model (current: " .. current_model .. "):",
+		prompt = "Select Copilot model (current: " .. current_model .. " — " .. current_cost .. "):",
 		format_item = function(item)
-			if item == current_model then
-				return item .. " [current]"
+			local display = item.name
+			if item.cost and item.cost ~= "" then
+				display = display .. " — " .. item.cost
 			end
-			return item
+			if item.name == current_model then
+				display = display .. " [current]"
+			end
+			return display
 		end,
 	}, function(choice)
 		if choice == nil then
 			return -- Cancelled
 		end
 
-		if choice == "Custom..." then
+		if choice.name == "Custom..." then
 			-- Allow custom model input
 			vim.ui.input({
 				prompt = "Enter custom model name: ",
@@ -345,7 +374,7 @@ function M.interactive_copilot_config()
 			end)
 		else
 			M.save_and_notify("copilot", {
-				model = choice,
+				model = choice.name,
 				configured = true,
 			})
 		end

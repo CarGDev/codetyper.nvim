@@ -901,6 +901,27 @@ local function coder_cmd(args)
       local credentials = require("codetyper.credentials")
       credentials.interactive_switch_provider()
     end,
+    ["model"] = function(args)
+      local credentials = require("codetyper.credentials")
+      local codetyper = require("codetyper")
+      local config = codetyper.get_config()
+      local provider = config.llm.provider
+
+      -- Only available for Copilot provider
+      if provider ~= "copilot" then
+        utils.notify("CoderModel is only available when using Copilot provider. Current: " .. provider:upper(), vim.log.levels.WARN)
+        return
+      end
+
+      local model_arg = args.fargs[2]
+      if model_arg and model_arg ~= "" then
+        local cost = credentials.get_copilot_model_cost(model_arg) or "custom"
+        credentials.set_credentials("copilot", { model = model_arg, configured = true })
+        utils.notify("Copilot model set to: " .. model_arg .. " — " .. cost, vim.log.levels.INFO)
+      else
+        credentials.interactive_copilot_config(true)
+      end
+    end,
   }
 
   local cmd_fn = commands[subcommand]
@@ -929,7 +950,7 @@ function M.setup()
         "auto-toggle", "auto-set",
         "llm-stats", "llm-feedback-good", "llm-feedback-bad", "llm-reset-stats",
         "cost", "cost-clear",
-        "add-api-key", "remove-api-key", "credentials", "switch-provider",
+        "add-api-key", "remove-api-key", "credentials", "switch-provider", "model",
       }
     end,
     desc = "Codetyper.nvim commands",
@@ -1254,6 +1275,43 @@ function M.setup()
     local credentials = require("codetyper.credentials")
     credentials.interactive_switch_provider()
   end, { desc = "Switch active LLM provider" })
+
+  -- Quick model switcher command (Copilot only)
+  vim.api.nvim_create_user_command("CoderModel", function(opts)
+    local credentials = require("codetyper.credentials")
+    local codetyper = require("codetyper")
+    local config = codetyper.get_config()
+    local provider = config.llm.provider
+
+    -- Only available for Copilot provider
+    if provider ~= "copilot" then
+      utils.notify("CoderModel is only available when using Copilot provider. Current: " .. provider:upper(), vim.log.levels.WARN)
+      return
+    end
+
+    -- If an argument is provided, set the model directly
+    if opts.args and opts.args ~= "" then
+      local cost = credentials.get_copilot_model_cost(opts.args) or "custom"
+      credentials.set_credentials("copilot", { model = opts.args, configured = true })
+      utils.notify("Copilot model set to: " .. opts.args .. " — " .. cost, vim.log.levels.INFO)
+      return
+    end
+
+    -- Show interactive selector with costs (silent mode - no OAuth message)
+    credentials.interactive_copilot_config(true)
+  end, {
+    nargs = "?",
+    desc = "Quick switch Copilot model (only available with Copilot provider)",
+    complete = function()
+      local codetyper = require("codetyper")
+      local credentials = require("codetyper.credentials")
+      local config = codetyper.get_config()
+      if config.llm.provider == "copilot" then
+        return credentials.get_copilot_model_names()
+      end
+      return {}
+    end,
+  })
 
   -- Conflict mode commands
   vim.api.nvim_create_user_command("CoderConflictToggle", function()
