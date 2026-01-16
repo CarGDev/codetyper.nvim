@@ -727,7 +727,7 @@ end
 --- Check for closed prompt with preference check
 --- If user hasn't chosen auto/manual mode, ask them first
 function M.check_for_closed_prompt_with_preference()
-	local preferences = require("codetyper.preferences")
+	local preferences = require("codetyper.config.preferences")
 	local parser = require("codetyper.parser")
 
 	-- First check if there are any prompts to process
@@ -767,7 +767,7 @@ end
 
 --- Check all prompts with preference check
 function M.check_all_prompts_with_preference()
-	local preferences = require("codetyper.preferences")
+	local preferences = require("codetyper.config.preferences")
 	local parser = require("codetyper.parser")
 
 	-- First check if there are any prompts to process

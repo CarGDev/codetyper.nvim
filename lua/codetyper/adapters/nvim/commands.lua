@@ -844,11 +844,11 @@ local function coder_cmd(args)
       cmd_forget(args.fargs[2])
     end,
     ["auto-toggle"] = function()
-      local preferences = require("codetyper.preferences")
+      local preferences = require("codetyper.config.preferences")
       preferences.toggle_auto_process()
     end,
     ["auto-set"] = function(args)
-      local preferences = require("codetyper.preferences")
+      local preferences = require("codetyper.config.preferences")
       local arg = (args[1] or ""):lower()
       if arg == "auto" or arg == "automatic" or arg == "on" then
         preferences.set_auto_process(true)
@@ -1104,12 +1104,12 @@ function M.setup()
 
   -- Preferences commands
   vim.api.nvim_create_user_command("CoderAutoToggle", function()
-    local preferences = require("codetyper.preferences")
+    local preferences = require("codetyper.config.preferences")
     preferences.toggle_auto_process()
   end, { desc = "Toggle automatic/manual prompt processing" })
 
   vim.api.nvim_create_user_command("CoderAutoSet", function(opts)
-    local preferences = require("codetyper.preferences")
+    local preferences = require("codetyper.config.preferences")
     local arg = opts.args:lower()
     if arg == "auto" or arg == "automatic" or arg == "on" then
       preferences.set_auto_process(true)

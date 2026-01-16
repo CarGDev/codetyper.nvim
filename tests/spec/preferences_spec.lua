@@ -14,7 +14,7 @@ describe("preferences", function()
 		package.loaded["codetyper.preferences"] = nil
 		package.loaded["codetyper.utils"] = nil
 
-		preferences = require("codetyper.preferences")
+		preferences = require("codetyper.config.preferences")
 		utils = require("codetyper.utils")
 
 		-- Clear cache before each test
