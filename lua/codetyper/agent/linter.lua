@@ -6,17 +6,11 @@
 
 local M = {}
 
+local config_params = require("codetyper.params.agent.linter")
+local prompts = require("codetyper.prompts.agent.linter")
+
 --- Configuration
-local config = {
-	-- Auto-save file after code injection
-	auto_save = true,
-	-- Delay in ms to wait for LSP diagnostics to update
-	diagnostic_delay_ms = 500,
-	-- Severity levels to check (1=Error, 2=Warning, 3=Info, 4=Hint)
-	min_severity = vim.diagnostic.severity.WARN,
-	-- Auto-offer to fix lint errors
-	auto_offer_fix = true,
-}
+local config = config_params.config
 
 --- Diagnostic results for tracking
 ---@type table<number, table>
@@ -330,7 +324,7 @@ function M.request_ai_fix(bufnr, result)
 
 	-- Create fix prompt using inline tag
 	local fix_prompt = string.format(
-		"Fix the following linter errors in this code:\n\nERRORS:\n%s\n\nCODE (lines %d-%d):\n%s",
+		prompts.fix_request,
 		table.concat(error_list, "\n"),
 		start_line,
 		end_line,

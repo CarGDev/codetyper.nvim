@@ -109,4 +109,33 @@ Include:
 Do NOT restate tool output verbatim.
 ]]
 
+--- Text-based tool calling instructions
+M.tool_instructions_text = [[
+
+## Available Tools
+Call tools by outputting JSON in this format:
+```json
+{"tool": "tool_name", "arguments": {...}}
+```
+]]
+
+--- Initial greeting when files are provided
+M.initial_assistant_message = "I've reviewed the provided files. What would you like me to do?"
+
+--- Format prefixes for text-based models
+M.text_user_prefix = "User: "
+M.text_assistant_prefix = "Assistant: "
+
+--- Format file context
+---@param files string[] Paths
+---@return string Formatted context
+function M.format_file_context(files)
+  local context = "# Initial Files\n"
+  for _, file_path in ipairs(files) do
+    local content = table.concat(vim.fn.readfile(file_path) or {}, "\n")
+    context = context .. string.format("\n## %s\n```\n%s\n```\n", file_path, content)
+  end
+  return context
+end
+
 return M

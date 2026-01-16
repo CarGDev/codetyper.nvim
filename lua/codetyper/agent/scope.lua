@@ -14,62 +14,10 @@ local M = {}
 ---@field name string|nil Name of the function/class if available
 
 --- Node types that represent function-like scopes per language
-local function_nodes = {
-	-- Lua
-	["function_declaration"] = "function",
-	["function_definition"] = "function",
-	["local_function"] = "function",
-	["function"] = "function",
-
-	-- JavaScript/TypeScript
-	["function_declaration"] = "function",
-	["function_expression"] = "function",
-	["arrow_function"] = "function",
-	["method_definition"] = "method",
-	["function"] = "function",
-
-	-- Python
-	["function_definition"] = "function",
-	["async_function_definition"] = "function",
-
-	-- Go
-	["function_declaration"] = "function",
-	["method_declaration"] = "method",
-
-	-- Rust
-	["function_item"] = "function",
-	["impl_item"] = "method",
-
-	-- Ruby
-	["method"] = "method",
-	["singleton_method"] = "method",
-
-	-- Java/C#
-	["method_declaration"] = "method",
-	["constructor_declaration"] = "method",
-
-	-- C/C++
-	["function_definition"] = "function",
-}
-
---- Node types that represent class-like scopes
-local class_nodes = {
-	["class_declaration"] = "class",
-	["class_definition"] = "class",
-	["class"] = "class",
-	["struct_item"] = "class",
-	["impl_item"] = "class",
-	["interface_declaration"] = "class",
-	["module"] = "class",
-}
-
---- Node types that represent block scopes
-local block_nodes = {
-	["block"] = "block",
-	["statement_block"] = "block",
-	["compound_statement"] = "block",
-	["do_block"] = "block",
-}
+local params = require("codetyper.params.agent.scope")
+local function_nodes = params.function_nodes
+local class_nodes = params.class_nodes
+local block_nodes = params.block_nodes
 
 --- Check if Tree-sitter is available for buffer
 ---@param bufnr number

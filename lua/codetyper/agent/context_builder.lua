@@ -6,6 +6,7 @@
 local M = {}
 
 local utils = require("codetyper.utils")
+local params = require("codetyper.params.agent.context")
 
 --- Get project structure as a tree string
 ---@param max_depth? number Maximum depth to traverse (default: 3)
@@ -20,21 +21,7 @@ function M.get_project_structure(max_depth, max_files)
   local file_count = 0
 
   -- Common ignore patterns
-  local ignore_patterns = {
-    "^%.",           -- Hidden files/dirs
-    "node_modules",
-    "%.git$",
-    "__pycache__",
-    "%.pyc$",
-    "target",        -- Rust
-    "build",
-    "dist",
-    "%.o$",
-    "%.a$",
-    "%.so$",
-    "%.min%.",
-    "%.map$",
-  }
+  local ignore_patterns = params.ignore_patterns
 
   local function should_ignore(name)
     for _, pattern in ipairs(ignore_patterns) do
@@ -127,19 +114,7 @@ function M.get_key_files()
     ["plugin.lua"] = "Neovim plugin config",
   }
 
-  for filename, desc in pairs(important_files) do
-    -- Check in root
-    local path = root .. "/" .. filename
-    if vim.fn.filereadable(path) == 1 then
-      key_files[filename] = { path = path, description = desc }
-    end
-
-    -- Check in lua/ for Neovim plugins
-    local lua_path = root .. "/lua/" .. filename
-    if vim.fn.filereadable(lua_path) == 1 then
-      key_files["lua/" .. filename] = { path = lua_path, description = desc }
-    end
-  end
+  for filename, desc in paparams.important_filesnd
 
   return key_files
 end
@@ -161,16 +136,7 @@ function M.detect_project_type()
   }
 
   -- Check for Neovim plugin specifically
-  if vim.fn.isdirectory(root .. "/lua") == 1 then
-    local plugin_files = vim.fn.glob(root .. "/plugin/*.lua", false, true)
-    if #plugin_files > 0 or vim.fn.filereadable(root .. "/init.lua") == 1 then
-      return { type = "neovim-plugin", language = "lua", framework = "neovim" }
-    end
-  end
-
-  for file, info in pairs(indicators) do
-    if vim.fn.filereadable(root .. "/" .. file) == 1 then
-      return info
+  if vim.fn.isdirectoparams.indicators   return info
     end
   end
 

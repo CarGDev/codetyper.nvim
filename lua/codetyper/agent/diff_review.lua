@@ -6,6 +6,8 @@
 local M = {}
 
 local utils = require("codetyper.utils")
+local prompts = require("codetyper.prompts.agent.diff")
+
 
 ---@class DiffEntry
 ---@field path string File path
@@ -124,9 +126,10 @@ local function update_diff_view()
   end
 
   local entry = state.entries[state.current_index]
+  local ui_prompts = prompts.review
   if not entry then
     vim.bo[state.diff_buf].modifiable = true
-    vim.api.nvim_buf_set_lines(state.diff_buf, 0, -1, false, { "No changes to review" })
+    vim.api.nvim_buf_set_lines(state.diff_buf, 0, -1, false, { ui_prompts.messages.no_changes_short })
     vim.bo[state.diff_buf].modifiable = false
     return
   end
@@ -134,15 +137,17 @@ local function update_diff_view()
   local lines = {}
 
   -- Header
-  local status_icon = entry.applied and "" or (entry.approved and "" or "")
+  local status_icon = entry.applied and " " or (entry.approved and " " or " ")
   local op_icon = entry.operation == "create" and "+" or (entry.operation == "delete" and "-" or "~")
+  local current_status = entry.applied and ui_prompts.status.applied
+      or (entry.approved and ui_prompts.status.approved or ui_prompts.status.pending)
 
-  table.insert(lines, string.format("╭─ %s %s %s ─────────────────────────────────────",
+  table.insert(lines, string.format(ui_prompts.diff_header.top,
     status_icon, op_icon, vim.fn.fnamemodify(entry.path, ":t")))
-  table.insert(lines, "│ " .. entry.path)
-  table.insert(lines, "│ Operation: " .. entry.operation)
-  table.insert(lines, "│ Status: " .. (entry.applied and "Applied" or (entry.approved and "Approved" or "Pending")))
-  table.insert(lines, "╰────────────────────────────────────────────────────")
+  table.insert(lines, string.format(ui_prompts.diff_header.path, entry.path))
+  table.insert(lines, string.format(ui_prompts.diff_header.op, entry.operation))
+  table.insert(lines, string.format(ui_prompts.diff_header.status, current_status))
+  table.insert(lines, ui_prompts.diff_header.bottom)
   table.insert(lines, "")
 
   -- Diff content
@@ -163,17 +168,14 @@ local function update_file_list()
     return
   end
 
-  local lines = {
-    "╭─ Changes (" .. #state.entries .. ") ──────────╮",
-    "│                              │",
-    "│ j/k: navigate               │",
-    "│ Enter: view diff            │",
-    "│ a: approve  r: reject       │",
-    "│ A: approve all              │",
-    "│ q: close                    │",
-    "╰──────────────────────────────╯",
-    "",
-  }
+  local ui_prompts = prompts.review
+  local lines = {}
+  table.insert(lines, string.format(ui_prompts.list_menu.top, #state.entries))
+  for _, item in ipairs(ui_prompts.list_menu.items) do
+    table.insert(lines, item)
+  end
+  table.insert(lines, ui_prompts.list_menu.bottom)
+  table.insert(lines, "")
 
   for i, entry in ipairs(state.entries) do
     local prefix = (i == state.current_index) and "▶ " or "  "
@@ -185,7 +187,7 @@ local function update_file_list()
   end
 
   if #state.entries == 0 then
-    table.insert(lines, "  No changes to review")
+    table.insert(lines, ui_prompts.messages.no_changes)
   end
 
   vim.bo[state.list_buf].modifiable = true
@@ -276,7 +278,7 @@ function M.apply_approved()
   update_diff_view()
 
   if applied_count > 0 then
-    utils.notify(string.format("Applied %d change(s)", applied_count))
+    utils.notify(string.format(prompts.review.messages.applied_count, applied_count))
   end
 
   return applied_count
@@ -289,7 +291,7 @@ function M.open()
   end
 
   if #state.entries == 0 then
-    utils.notify("No changes to review", vim.log.levels.INFO)
+    utils.notify(prompts.review.messages.no_changes_short, vim.log.levels.INFO)
     return
   end
 

@@ -157,17 +157,19 @@ function M.show_diff(diff_data, callback)
   end
 
   -- Show help message
-  vim.api.nvim_echo({
-    { "Diff: ", "Normal" },
-    { diff_data.path, "Directory" },
-    { " | ", "Normal" },
-    { "y/<CR>", "Keyword" },
-    { " approve  ", "Normal" },
-    { "n/q/<Esc>", "Keyword" },
-    { " reject  ", "Normal" },
-    { "<Tab>", "Keyword" },
-    { " switch panes", "Normal" },
-  }, false, {})
+  local help_msg = require("codetyper.prompts.agent.diff").diff_help
+
+  -- Iterate to replace {path} variable
+  local final_help = {}
+  for _, item in ipairs(help_msg) do
+    if item[1] == "{path}" then
+       table.insert(final_help, { diff_data.path, item[2] })
+    else
+       table.insert(final_help, item)
+    end
+  end
+
+  vim.api.nvim_echo(final_help, false, {})
 end
 
 ---@alias BashApprovalResult {approved: boolean, permission_level: string|nil}
@@ -188,31 +190,31 @@ function M.show_bash_approval(command, callback)
   end
 
   -- Create approval dialog with options
+  local approval_prompts = require("codetyper.prompts.agent.diff").bash_approval
   local lines = {
     "",
-    "  BASH COMMAND APPROVAL",
-    "  " .. string.rep("─", 56),
+    approval_prompts.title,
+    approval_prompts.divider,
     "",
-    "  Command:",
+    approval_prompts.command_label,
     "  $ " .. command,
     "",
   }
 
   -- Add warning for dangerous commands
   if not perm_result.allowed and perm_result.reason ~= "Requires approval" then
-    table.insert(lines, "  ⚠️  WARNING: " .. perm_result.reason)
+    table.insert(lines, approval_prompts.warning_prefix .. perm_result.reason)
     table.insert(lines, "")
   end
 
-  table.insert(lines, "  " .. string.rep("─", 56))
+  table.insert(lines, approval_prompts.divider)
   table.insert(lines, "")
-  table.insert(lines, "  [y] Allow once           - Execute this command")
-  table.insert(lines, "  [s] Allow this session   - Auto-allow until restart")
-  table.insert(lines, "  [a] Add to allow list    - Always allow this command")
-  table.insert(lines, "  [n] Reject               - Cancel execution")
+  for _, opt in ipairs(approval_prompts.options) do
+     table.insert(lines, opt)
+  end
   table.insert(lines, "")
-  table.insert(lines, "  " .. string.rep("─", 56))
-  table.insert(lines, "  Press key to choose | [q] or [Esc] to cancel")
+  table.insert(lines, approval_prompts.divider)
+  table.insert(lines, approval_prompts.cancel_hint)
   table.insert(lines, "")
 
   local width = math.max(65, #command + 15)

@@ -4,6 +4,9 @@
 
 local M = {}
 
+local params = require("codetyper.params.agent.parser")
+
+
 ---@class ParsedResponse
 ---@field text string Text content from the response
 ---@field tool_calls ToolCall[] List of tool calls
@@ -48,11 +51,11 @@ function M.parse_ollama_response(response_text)
   local result = {
     text = response_text,
     tool_calls = {},
-    stop_reason = "end_turn",
+    stop_reason = params.defaults.stop_reason,
   }
 
   -- Pattern to find JSON tool blocks in fenced code blocks
-  local fenced_pattern = "```json%s*(%b{})%s*```"
+  local fenced_pattern = params.patterns.fenced_json
 
   -- Find all fenced JSON blocks
   for json_str in response_text:gmatch(fenced_pattern) do
@@ -63,14 +66,14 @@ function M.parse_ollama_response(response_text)
         name = parsed.tool,
         parameters = parsed.parameters,
       })
-      result.stop_reason = "tool_use"
+      result.stop_reason = params.defaults.tool_stop_reason
     end
   end
 
   -- Also try to find inline JSON (not in code blocks)
   -- Pattern for {"tool": "...", "parameters": {...}}
   if #result.tool_calls == 0 then
-    local inline_pattern = '(%{"tool"%s*:%s*"[^"]+"%s*,%s*"parameters"%s*:%s*%b{}%})'
+    local inline_pattern = params.patterns.inline_json
     for json_str in response_text:gmatch(inline_pattern) do
       local ok, parsed = pcall(vim.json.decode, json_str)
       if ok and parsed.tool and parsed.parameters then
@@ -79,15 +82,15 @@ function M.parse_ollama_response(response_text)
           name = parsed.tool,
           parameters = parsed.parameters,
         })
-        result.stop_reason = "tool_use"
+        result.stop_reason = params.defaults.tool_stop_reason
       end
     end
   end
 
   -- Clean tool JSON from displayed text
   if #result.tool_calls > 0 then
-    result.text = result.text:gsub("```json%s*%b{}%s*```", "[Tool call]")
-    result.text = result.text:gsub('%{"tool"%s*:%s*"[^"]+"%s*,%s*"parameters"%s*:%s*%b{}%}', "[Tool call]")
+    result.text = result.text:gsub(params.patterns.fenced_json, params.defaults.replacement_text)
+    result.text = result.text:gsub(params.patterns.inline_json, params.defaults.replacement_text)
   end
 
   return result

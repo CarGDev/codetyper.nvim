@@ -15,22 +15,15 @@
 
 local M = {}
 
+local params = require("codetyper.params.agent.conflict")
+
 --- Lazy load linter module
 local function get_linter()
 	return require("codetyper.agent.linter")
 end
 
 --- Configuration
-local config = {
-	-- Run linter check after accepting AI suggestions
-	lint_after_accept = true,
-	-- Auto-fix lint errors without prompting
-	auto_fix_lint_errors = true,
-	-- Auto-show menu after injecting conflict
-	auto_show_menu = true,
-	-- Auto-show menu for next conflict after resolving one
-	auto_show_next_menu = true,
-}
+local config = vim.deepcopy(params.config)
 
 --- Namespace for conflict highlighting
 local NAMESPACE = vim.api.nvim_create_namespace("codetyper_conflict")
@@ -39,24 +32,12 @@ local NAMESPACE = vim.api.nvim_create_namespace("codetyper_conflict")
 local HINT_NAMESPACE = vim.api.nvim_create_namespace("codetyper_conflict_hints")
 
 --- Highlight groups
-local HL_GROUPS = {
-	current = "CoderConflictCurrent",
-	current_label = "CoderConflictCurrentLabel",
-	incoming = "CoderConflictIncoming",
-	incoming_label = "CoderConflictIncomingLabel",
-	separator = "CoderConflictSeparator",
-	hint = "CoderConflictHint",
-}
+local HL_GROUPS = params.hl_groups
 
 --- Conflict markers
-local MARKERS = {
-	current_start = "<<<<<<< CURRENT",
-	separator = "=======",
-	incoming_end = ">>>>>>> INCOMING",
-}
+local MARKERS = params.markers
 
 --- Track buffers with active conflicts
----@type table<number, table>
 local conflict_buffers = {}
 
 --- Run linter validation after accepting code changes

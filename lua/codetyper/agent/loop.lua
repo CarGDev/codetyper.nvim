@@ -6,6 +6,8 @@
 
 local M = {}
 
+local prompts = require("codetyper.prompts.agent.loop")
+
 ---@class AgentMessage
 ---@field role "system"|"user"|"assistant"|"tool"
 ---@field content string|table
@@ -345,24 +347,7 @@ end
 function M.create(task, opts)
 	opts = opts or {}
 
-	local system_prompt = opts.system_prompt or [[You are a helpful coding assistant with access to tools.
-
-Available tools:
-- view: Read file contents
-- grep: Search for patterns in files
-- glob: Find files by pattern
-- edit: Make targeted edits to files
-- write: Create or overwrite files
-- bash: Execute shell commands
-
-When you need to perform a task:
-1. Use tools to gather information
-2. Plan your approach
-3. Execute changes using appropriate tools
-4. Verify the results
-
-Always explain your reasoning before using tools.
-When you're done, provide a clear summary of what was accomplished.]]
+	local system_prompt = opts.system_prompt or prompts.default_system_prompt
 
 	M.run(vim.tbl_extend("force", opts, {
 		system_prompt = system_prompt,
@@ -384,9 +369,7 @@ function M.dispatch(prompt, on_complete, opts)
 	end)
 
 	M.run({
-		system_prompt = [[You are a research assistant. Your task is to find information and report back.
-You have access to: view (read files), grep (search content), glob (find files).
-Be thorough and report your findings clearly.]],
+		system_prompt = prompts.dispatch_prompt,
 		user_input = prompt,
 		tools = opts.tools or safe_tools,
 		max_iterations = opts.max_iterations or 5,

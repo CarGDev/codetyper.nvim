@@ -6,6 +6,8 @@
 
 local M = {}
 
+local params = require("codetyper.params.agent.search_replace").patterns
+
 ---@class SearchReplaceBlock
 ---@field search string The text to search for
 ---@field replace string The text to replace with
@@ -48,7 +50,7 @@ function M.parse_blocks(response)
 	local blocks = {}
 
 	-- Try dash-style format: ------- SEARCH ... ======= ... +++++++ REPLACE
-	for search, replace in response:gmatch("%-%-%-%-%-%-%-?%s*SEARCH%s*\n(.-)\n=======%s*\n(.-)\n%+%+%+%+%+%+%+?%s*REPLACE") do
+	for search, replace in response:gmatch(params.dash_style) do
 		table.insert(blocks, { search = search, replace = replace })
 	end
 
@@ -57,7 +59,7 @@ function M.parse_blocks(response)
 	end
 
 	-- Try claude-style format: <<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE
-	for search, replace in response:gmatch("<<<<<<<[%s]*SEARCH%s*\n(.-)\n=======%s*\n(.-)\n>>>>>>>[%s]*REPLACE") do
+	for search, replace in response:gmatch(params.claude_style) do
 		table.insert(blocks, { search = search, replace = replace })
 	end
 
@@ -66,7 +68,7 @@ function M.parse_blocks(response)
 	end
 
 	-- Try simple format: [SEARCH] ... [REPLACE] ... [END]
-	for search, replace in response:gmatch("%[SEARCH%]%s*\n(.-)\n%[REPLACE%]%s*\n(.-)\n%[END%]") do
+	for search, replace in response:gmatch(params.simple_style) do
 		table.insert(blocks, { search = search, replace = replace })
 	end
 
@@ -75,7 +77,7 @@ function M.parse_blocks(response)
 	end
 
 	-- Try markdown diff format: ```diff ... ```
-	local diff_block = response:match("```diff\n(.-)\n```")
+	local diff_block = response:match(params.diff_block)
 	if diff_block then
 		local old_lines = {}
 		local new_lines = {}

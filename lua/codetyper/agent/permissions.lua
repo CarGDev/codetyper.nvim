@@ -10,6 +10,8 @@ local M = {}
 ---@field allow_list table<string, boolean> Patterns always allowed
 ---@field deny_list table<string, boolean> Patterns always denied
 
+local params = require("codetyper.params.agent.permissions")
+
 local state = {
 	session_allowed = {},
 	allow_list = {},
@@ -17,59 +19,10 @@ local state = {
 }
 
 --- Dangerous command patterns that should never be auto-allowed
-local DANGEROUS_PATTERNS = {
-	"^rm%s+%-rf",
-	"^rm%s+%-r%s+/",
-	"^rm%s+/",
-	"^sudo%s+rm",
-	"^chmod%s+777",
-	"^chmod%s+%-R",
-	"^chown%s+%-R",
-	"^dd%s+",
-	"^mkfs",
-	"^fdisk",
-	"^format",
-	":.*>%s*/dev/",
-	"^curl.*|.*sh",
-	"^wget.*|.*sh",
-	"^eval%s+",
-	"`;.*`",
-	"%$%(.*%)",
-	"fork%s*bomb",
-}
+local DANGEROUS_PATTERNS = params.dangerous_patterns
 
 --- Safe command patterns that can be auto-allowed
-local SAFE_PATTERNS = {
-	"^ls%s",
-	"^ls$",
-	"^cat%s",
-	"^head%s",
-	"^tail%s",
-	"^grep%s",
-	"^find%s",
-	"^pwd$",
-	"^echo%s",
-	"^wc%s",
-	"^which%s",
-	"^type%s",
-	"^file%s",
-	"^stat%s",
-	"^git%s+status",
-	"^git%s+log",
-	"^git%s+diff",
-	"^git%s+branch",
-	"^git%s+show",
-	"^npm%s+list",
-	"^npm%s+ls",
-	"^npm%s+outdated",
-	"^yarn%s+list",
-	"^cargo%s+check",
-	"^cargo%s+test",
-	"^go%s+test",
-	"^go%s+build",
-	"^make%s+test",
-	"^make%s+check",
-}
+local SAFE_PATTERNS = params.safe_patterns
 
 ---@alias PermissionLevel "allow"|"allow_session"|"allow_list"|"reject"
 

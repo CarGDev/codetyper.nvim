@@ -11,6 +11,7 @@ local patch = require("codetyper.agent.patch")
 local worker = require("codetyper.agent.worker")
 local confidence_mod = require("codetyper.agent.confidence")
 local context_modal = require("codetyper.agent.context_modal")
+local params = require("codetyper.params.agent.scheduler")
 
 -- Setup context modal cleanup on exit
 context_modal.setup()
@@ -21,15 +22,7 @@ local state = {
 	timer = nil,
 	poll_interval = 100, -- ms
 	paused = false,
-	config = {
-		enabled = true,
-		ollama_scout = true,
-		escalation_threshold = 0.7,
-		max_concurrent = 2,
-		completion_delay_ms = 100,
-		apply_delay_ms = 5000, -- Wait before applying code
-		remote_provider = "copilot", -- Default fallback provider
-	},
+	config = params.config,
 }
 
 --- Autocommand group for injection timing

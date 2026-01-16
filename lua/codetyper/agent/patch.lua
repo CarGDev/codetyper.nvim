@@ -7,6 +7,9 @@
 
 local M = {}
 
+local params = require("codetyper.params.agent.patch")
+
+
 --- Lazy load inject module to avoid circular requires
 local function get_inject_module()
 	return require("codetyper.agent.inject")
@@ -23,12 +26,7 @@ local function get_conflict_module()
 end
 
 --- Configuration for patch behavior
-local config = {
-	-- Use conflict markers instead of direct apply (allows interactive review)
-	use_conflict_mode = true,
-	-- Auto-jump to first conflict after applying
-	auto_jump_to_conflict = true,
-}
+local config = params.config
 
 ---@class BufferSnapshot
 ---@field bufnr number Buffer number

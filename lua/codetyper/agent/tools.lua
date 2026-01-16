@@ -5,144 +5,7 @@
 local M = {}
 
 --- Tool definitions in a provider-agnostic format
-M.definitions = {
-  read_file = {
-    name = "read_file",
-    description = "Read the contents of a file at the specified path",
-    parameters = {
-      type = "object",
-      properties = {
-        path = {
-          type = "string",
-          description = "Absolute or relative path to the file to read",
-        },
-      },
-      required = { "path" },
-    },
-  },
-
-  edit_file = {
-    name = "edit_file",
-    description = "Edit a file by replacing specific content. Provide the exact content to find and the replacement.",
-    parameters = {
-      type = "object",
-      properties = {
-        path = {
-          type = "string",
-          description = "Path to the file to edit",
-        },
-        find = {
-          type = "string",
-          description = "Exact content to find (must match exactly, including whitespace)",
-        },
-        replace = {
-          type = "string",
-          description = "Content to replace with",
-        },
-      },
-      required = { "path", "find", "replace" },
-    },
-  },
-
-  write_file = {
-    name = "write_file",
-    description = "Write content to a file, creating it if it doesn't exist or overwriting if it does",
-    parameters = {
-      type = "object",
-      properties = {
-        path = {
-          type = "string",
-          description = "Path to the file to write",
-        },
-        content = {
-          type = "string",
-          description = "Complete file content to write",
-        },
-      },
-      required = { "path", "content" },
-    },
-  },
-
-  bash = {
-    name = "bash",
-    description = "Execute a bash command and return the output. Use for git, npm, build tools, etc.",
-    parameters = {
-      type = "object",
-      properties = {
-        command = {
-          type = "string",
-          description = "The bash command to execute",
-        },
-        timeout = {
-          type = "number",
-          description = "Timeout in milliseconds (default: 30000)",
-        },
-      },
-      required = { "command" },
-    },
-  },
-
-  delete_file = {
-    name = "delete_file",
-    description = "Delete a file from the filesystem. Use with caution - requires explicit user approval.",
-    parameters = {
-      type = "object",
-      properties = {
-        path = {
-          type = "string",
-          description = "Path to the file to delete",
-        },
-        reason = {
-          type = "string",
-          description = "Reason for deleting this file (shown to user for approval)",
-        },
-      },
-      required = { "path", "reason" },
-    },
-  },
-
-  list_directory = {
-    name = "list_directory",
-    description = "List files and directories in a path. Use to explore project structure.",
-    parameters = {
-      type = "object",
-      properties = {
-        path = {
-          type = "string",
-          description = "Path to the directory to list (defaults to current directory)",
-        },
-        recursive = {
-          type = "boolean",
-          description = "Whether to list recursively (default: false, max depth: 3)",
-        },
-      },
-      required = {},
-    },
-  },
-
-  search_files = {
-    name = "search_files",
-    description = "Search for files by name pattern or content. Use to find relevant files in the project.",
-    parameters = {
-      type = "object",
-      properties = {
-        pattern = {
-          type = "string",
-          description = "Glob pattern for file names (e.g., '*.lua', 'test_*.py')",
-        },
-        content = {
-          type = "string",
-          description = "Search for files containing this text",
-        },
-        path = {
-          type = "string",
-          description = "Directory to search in (defaults to project root)",
-        },
-      },
-      required = {},
-    },
-  },
-}
+M.definitions = require("codetyper.params.agent.tools").definitions
 
 --- Convert tool definitions to Claude API format
 ---@return table[] Tools in Claude's expected format
@@ -178,8 +41,9 @@ end
 --- Convert tool definitions to prompt format for Ollama
 ---@return string Formatted tool descriptions for system prompt
 function M.to_prompt_format()
+  local prompts = require("codetyper.prompts.agent.tools").instructions
   local lines = {
-    "You have access to the following tools. To use a tool, respond with a JSON block.",
+    prompts.intro,
     "",
   }
 
@@ -198,13 +62,10 @@ function M.to_prompt_format()
 
   table.insert(lines, "---")
   table.insert(lines, "")
-  table.insert(lines, "To call a tool, output a JSON block like this:")
-  table.insert(lines, "```json")
-  table.insert(lines, '{"tool": "tool_name", "parameters": {"param1": "value1"}}')
-  table.insert(lines, "```")
+  table.insert(lines, prompts.header)
+  table.insert(lines, prompts.example)
   table.insert(lines, "")
-  table.insert(lines, "After receiving tool results, continue your response or call another tool.")
-  table.insert(lines, "When you're done, just respond normally without any tool calls.")
+  table.insert(lines, prompts.footer)
 
   return table.concat(lines, "\n")
 end

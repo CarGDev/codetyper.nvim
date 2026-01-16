@@ -31,10 +31,7 @@ local M = {}
 ---@field on_complete? fun(result: string|nil, error: string|nil) Called when done
 ---@field on_status? fun(status: string) Status updates
 
---- Generate unique tool call ID
-local function generate_tool_call_id()
-	return "call_" .. string.format("%x", os.time()) .. "_" .. string.format("%x", math.random(0, 0xFFFF))
-end
+local utils = require("codetyper.utils")
 
 --- Load agent definition
 ---@param name string Agent name
@@ -72,59 +69,7 @@ local function load_agent(name)
 	end
 
 	-- Built-in agents
-	local builtin_agents = {
-		coder = {
-			name = "coder",
-			description = "Full-featured coding agent with file modification capabilities",
-			system_prompt = [[You are an expert software engineer. You have access to tools to read, write, and modify files.
-
-## Your Capabilities
-- Read files to understand the codebase
-- Search for patterns with grep and glob
-- Create new files with write tool
-- Edit existing files with precise replacements
-- Execute shell commands for builds and tests
-
-## Guidelines
-1. Always read relevant files before making changes
-2. Make minimal, focused changes
-3. Follow existing code style and patterns
-4. Create tests when adding new functionality
-5. Verify changes work by running tests or builds
-
-## Important Rules
-- NEVER guess file contents - always read first
-- Make precise edits using exact string matching
-- Explain your reasoning before making changes
-- If unsure, ask for clarification]],
-			tools = { "view", "edit", "write", "grep", "glob", "bash" },
-		},
-		planner = {
-			name = "planner",
-			description = "Planning agent - read-only, helps design implementations",
-			system_prompt = [[You are a software architect. Analyze codebases and create implementation plans.
-
-You can read files and search the codebase, but cannot modify files.
-Your role is to:
-1. Understand the existing architecture
-2. Identify relevant files and patterns
-3. Create step-by-step implementation plans
-4. Suggest which files to modify and how
-
-Be thorough in your analysis before making recommendations.]],
-			tools = { "view", "grep", "glob" },
-		},
-		explorer = {
-			name = "explorer",
-			description = "Exploration agent - quickly find information in codebase",
-			system_prompt = [[You are a codebase exploration assistant. Find information quickly and report back.
-
-Your goal is to efficiently search and summarize findings.
-Use glob to find files, grep to search content, and view to read specific files.
-Be concise and focused in your responses.]],
-			tools = { "view", "grep", "glob" },
-		},
-	}
+	local builtin_agents = require("codetyper.prompts.agents.personas").builtin
 
 	return builtin_agents[name]
 end
@@ -365,7 +310,7 @@ local function parse_tool_calls(response, provider)
 			end
 
 			table.insert(tool_calls, {
-				id = block.id or generate_tool_call_id(),
+				id = block.id or utils.generate_id("call"),
 				type = "function",
 				["function"] = {
 					name = block.name,
@@ -449,7 +394,7 @@ local function call_llm(messages, tools, system_prompt, provider, model, callbac
 					elseif block.type == "tool_use" then
 						table.insert(result.content, {
 							type = "tool_use",
-							id = block.id or generate_tool_call_id(),
+							id = block.id or utils.generate_id("call"),
 							name = block.name,
 							input = block.input,
 						})
@@ -490,7 +435,7 @@ local function call_llm(messages, tools, system_prompt, provider, model, callbac
 					elseif block.type == "tool_use" then
 						table.insert(result.content, {
 							type = "tool_use",
-							id = block.id or generate_tool_call_id(),
+							id = block.id or utils.generate_id("call"),
 							name = block.name,
 							input = block.input,
 						})
@@ -526,21 +471,20 @@ local function call_llm(messages, tools, system_prompt, provider, model, callbac
 		local client = require("codetyper.llm." .. provider)
 
 		-- Build prompt from messages
+		local prompts = require("codetyper.prompts.agent")
 		local prompt_parts = {}
 		for _, msg in ipairs(messages) do
 			if msg.role == "user" then
 				local content = type(msg.content) == "string" and msg.content or vim.json.encode(msg.content)
-				table.insert(prompt_parts, "User: " .. content)
+				table.insert(prompt_parts, prompts.text_user_prefix .. content)
 			elseif msg.role == "assistant" then
 				local content = type(msg.content) == "string" and msg.content or vim.json.encode(msg.content)
-				table.insert(prompt_parts, "Assistant: " .. content)
+				table.insert(prompt_parts, prompts.text_assistant_prefix .. content)
 			end
 		end
 
 		-- Add tool descriptions to prompt for text-based providers
-		local tool_desc = "\n\n## Available Tools\n"
-		tool_desc = tool_desc .. "Call tools by outputting JSON in this format:\n"
-		tool_desc = tool_desc .. '```json\n{"tool": "tool_name", "arguments": {...}}\n```\n\n'
+		local tool_desc = require("codetyper.prompts.agent").tool_instructions_text
 		for _, tool in ipairs(tools) do
 			local name = tool.name or (tool["function"] and tool["function"].name)
 			local desc = tool.description or (tool["function"] and tool["function"].description)
@@ -573,7 +517,7 @@ local function call_llm(messages, tools, system_prompt, provider, model, callbac
 				if ok and parsed.tool then
 					table.insert(result.content, {
 						type = "tool_use",
-						id = generate_tool_call_id(),
+						id = utils.generate_id("call"),
 						name = parsed.tool,
 						input = parsed.arguments or {},
 					})
@@ -617,11 +561,7 @@ function M.run(opts)
 
 	-- Add initial file context if provided
 	if opts.files and #opts.files > 0 then
-		local file_context = "# Initial Files\n"
-		for _, file_path in ipairs(opts.files) do
-			local content = table.concat(vim.fn.readfile(file_path) or {}, "\n")
-			file_context = file_context .. string.format("\n## %s\n```\n%s\n```\n", file_path, content)
-		end
+		local file_context = require("codetyper.prompts.agent").format_file_context(opts.files)
 		table.insert(history, { role = "user", content = file_context })
 		table.insert(history, { role = "assistant", content = "I've reviewed the provided files. What would you like me to do?" })
 	end
@@ -736,27 +676,7 @@ function M.init_agents_dir()
 	vim.fn.mkdir(agents_dir, "p")
 
 	-- Create example agent
-	local example_agent = [[---
-description: Example custom agent
-tools: view,grep,glob,edit,write
-model:
----
-
-# Custom Agent
-
-You are a custom coding agent. Describe your specialized behavior here.
-
-## Your Role
-- Define what this agent specializes in
-- List specific capabilities
-
-## Guidelines
-- Add agent-specific rules
-- Define coding standards to follow
-
-## Examples
-Provide examples of how to handle common tasks.
-]]
+	local example_agent = require("codetyper.prompts.agents.templates").agent
 
 	local example_path = agents_dir .. "/example.md"
 	if vim.fn.filereadable(example_path) ~= 1 then
@@ -772,30 +692,7 @@ function M.init_rules_dir()
 	vim.fn.mkdir(rules_dir, "p")
 
 	-- Create example rule
-	local example_rule = [[# Code Style
-
-Follow these coding standards:
-
-## General
-- Use consistent indentation (tabs or spaces based on project)
-- Keep lines under 100 characters
-- Add comments for complex logic
-
-## Naming Conventions
-- Use descriptive variable names
-- Functions should be verbs (e.g., getUserData, calculateTotal)
-- Constants in UPPER_SNAKE_CASE
-
-## Testing
-- Write tests for new functionality
-- Aim for >80% code coverage
-- Test edge cases
-
-## Documentation
-- Document public APIs
-- Include usage examples
-- Keep docs up to date with code
-]]
+	local example_rule = require("codetyper.prompts.agents.templates").rule
 
 	local example_path = rules_dir .. "/code-style.md"
 	if vim.fn.filereadable(example_path) ~= 1 then
@@ -817,7 +714,10 @@ function M.list_agents()
 	local agents = {}
 
 	-- Built-in agents
-	local builtins = { "coder", "planner", "explorer" }
+	local personas = require("codetyper.prompts.agents.personas").builtin
+	local builtins = vim.tbl_keys(personas)
+	table.sort(builtins)
+
 	for _, name in ipairs(builtins) do
 		local agent = load_agent(name)
 		if agent then

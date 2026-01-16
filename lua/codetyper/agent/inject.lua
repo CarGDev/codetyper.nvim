@@ -17,74 +17,9 @@ local M = {}
 ---@field body string[] Non-import code lines
 ---@field import_lines table<number, boolean> Map of line numbers that are imports
 
---- Language-specific import patterns
-local import_patterns = {
-	-- JavaScript/TypeScript
-	javascript = {
-		{ pattern = "^%s*import%s+.+%s+from%s+['\"]", multi_line = true },
-		{ pattern = "^%s*import%s+['\"]", multi_line = false },
-		{ pattern = "^%s*import%s*{", multi_line = true },
-		{ pattern = "^%s*import%s*%*", multi_line = true },
-		{ pattern = "^%s*export%s+{.+}%s+from%s+['\"]", multi_line = true },
-		{ pattern = "^%s*const%s+%w+%s*=%s*require%(['\"]", multi_line = false },
-		{ pattern = "^%s*let%s+%w+%s*=%s*require%(['\"]", multi_line = false },
-		{ pattern = "^%s*var%s+%w+%s*=%s*require%(['\"]", multi_line = false },
-	},
-	-- Python
-	python = {
-		{ pattern = "^%s*import%s+%w", multi_line = false },
-		{ pattern = "^%s*from%s+[%w%.]+%s+import%s+", multi_line = true },
-	},
-	-- Lua
-	lua = {
-		{ pattern = "^%s*local%s+%w+%s*=%s*require%s*%(?['\"]", multi_line = false },
-		{ pattern = "^%s*require%s*%(?['\"]", multi_line = false },
-	},
-	-- Go
-	go = {
-		{ pattern = "^%s*import%s+%(?", multi_line = true },
-	},
-	-- Rust
-	rust = {
-		{ pattern = "^%s*use%s+", multi_line = true },
-		{ pattern = "^%s*extern%s+crate%s+", multi_line = false },
-	},
-	-- C/C++
-	c = {
-		{ pattern = "^%s*#include%s*[<\"]", multi_line = false },
-	},
-	-- Java/Kotlin
-	java = {
-		{ pattern = "^%s*import%s+", multi_line = false },
-	},
-	-- Ruby
-	ruby = {
-		{ pattern = "^%s*require%s+['\"]", multi_line = false },
-		{ pattern = "^%s*require_relative%s+['\"]", multi_line = false },
-	},
-	-- PHP
-	php = {
-		{ pattern = "^%s*use%s+", multi_line = false },
-		{ pattern = "^%s*require%s+['\"]", multi_line = false },
-		{ pattern = "^%s*require_once%s+['\"]", multi_line = false },
-		{ pattern = "^%s*include%s+['\"]", multi_line = false },
-		{ pattern = "^%s*include_once%s+['\"]", multi_line = false },
-	},
-}
-
--- Alias common extensions to language configs
-import_patterns.ts = import_patterns.javascript
-import_patterns.tsx = import_patterns.javascript
-import_patterns.jsx = import_patterns.javascript
-import_patterns.mjs = import_patterns.javascript
-import_patterns.cjs = import_patterns.javascript
-import_patterns.py = import_patterns.python
-import_patterns.cpp = import_patterns.c
-import_patterns.hpp = import_patterns.c
-import_patterns.h = import_patterns.c
-import_patterns.kt = import_patterns.java
-import_patterns.rs = import_patterns.rust
-import_patterns.rb = import_patterns.ruby
+local utils = require("codetyper.utils")
+local languages = require("codetyper.params.agent.languages")
+local import_patterns = languages.import_patterns
 
 --- Check if a line is an import statement for the given language
 ---@param line string
@@ -100,83 +35,13 @@ local function is_import_line(line, patterns)
 	return false, false
 end
 
---- Check if a line is empty or a comment
----@param line string
----@param filetype string
----@return boolean
-local function is_empty_or_comment(line, filetype)
-	local trimmed = line:match("^%s*(.-)%s*$")
-	if trimmed == "" then
-		return true
-	end
-
-	-- Language-specific comment patterns
-	local comment_patterns = {
-		lua = { "^%-%-" },
-		python = { "^#" },
-		javascript = { "^//", "^/%*", "^%*" },
-		typescript = { "^//", "^/%*", "^%*" },
-		go = { "^//", "^/%*", "^%*" },
-		rust = { "^//", "^/%*", "^%*" },
-		c = { "^//", "^/%*", "^%*", "^#" },
-		java = { "^//", "^/%*", "^%*" },
-		ruby = { "^#" },
-		php = { "^//", "^/%*", "^%*", "^#" },
-	}
-
-	local patterns = comment_patterns[filetype] or comment_patterns.javascript
-	for _, pattern in ipairs(patterns) do
-		if trimmed:match(pattern) then
-			return true
-		end
-	end
-
-	return false
-end
 
 --- Check if a line ends a multi-line import
 ---@param line string
 ---@param filetype string
 ---@return boolean
 local function ends_multiline_import(line, filetype)
-	-- Check for closing patterns
-	if filetype == "javascript" or filetype == "typescript" or filetype == "ts" or filetype == "tsx" then
-		-- ES6 imports end with 'from "..." ;' or just ';' or a line with just '}'
-		if line:match("from%s+['\"][^'\"]+['\"]%s*;?%s*$") then
-			return true
-		end
-		if line:match("}%s*from%s+['\"]") then
-			return true
-		end
-		if line:match("^%s*}%s*;?%s*$") then
-			return true
-		end
-		if line:match(";%s*$") then
-			return true
-		end
-	elseif filetype == "python" or filetype == "py" then
-		-- Python single-line import: doesn't end with \, (, or ,
-		-- Examples: "from typing import List, Dict" or "import os"
-		if not line:match("\\%s*$") and not line:match("%(%s*$") and not line:match(",%s*$") then
-			return true
-		end
-		-- Python multiline imports end with closing paren
-		if line:match("%)%s*$") then
-			return true
-		end
-	elseif filetype == "go" then
-		-- Go multi-line imports end with ')'
-		if line:match("%)%s*$") then
-			return true
-		end
-	elseif filetype == "rust" or filetype == "rs" then
-		-- Rust use statements end with ';'
-		if line:match(";%s*$") then
-			return true
-		end
-	end
-
-	return false
+	return utils.ends_multiline_import(line, filetype)
 end
 
 --- Parse code into imports and body
@@ -285,7 +150,7 @@ function M.find_import_section(bufnr, filetype)
 				if is_multi and not ends_multiline_import(line, filetype) then
 					in_multiline = true
 				end
-			elseif is_empty_or_comment(line, filetype) then
+			elseif utils.is_empty_or_comment(line, filetype) then
 				-- Allow gaps in import section
 				if first_import then
 					consecutive_non_import = consecutive_non_import + 1
@@ -388,34 +253,11 @@ function M.sort_imports(imports, filetype)
 	local local_imports = {}
 
 	for _, imp in ipairs(imports) do
-		-- Detect import type based on patterns
-		local is_local = false
-		local is_builtin = false
+		local category = utils.classify_import(imp, filetype)
 
-		if filetype == "javascript" or filetype == "typescript" or filetype == "ts" or filetype == "tsx" then
-			-- Local: starts with . or ..
-			is_local = imp:match("from%s+['\"]%.") or imp:match("require%(['\"]%.")
-			-- Node builtin modules
-			is_builtin = imp:match("from%s+['\"]node:") or imp:match("from%s+['\"]fs['\"]")
-				or imp:match("from%s+['\"]path['\"]") or imp:match("from%s+['\"]http['\"]")
-		elseif filetype == "python" or filetype == "py" then
-			-- Local: relative imports
-			is_local = imp:match("^from%s+%.") or imp:match("^import%s+%.")
-			-- Python stdlib (simplified check)
-			is_builtin = imp:match("^import%s+os") or imp:match("^import%s+sys")
-				or imp:match("^from%s+os%s+") or imp:match("^from%s+sys%s+")
-				or imp:match("^import%s+re") or imp:match("^import%s+json")
-		elseif filetype == "lua" then
-			-- Local: relative requires
-			is_local = imp:match("require%(['\"]%.") or imp:match("require%s+['\"]%.")
-		elseif filetype == "go" then
-			-- Local: project imports (contain /)
-			is_local = imp:match("['\"][^'\"]+/[^'\"]+['\"]") and not imp:match("github%.com")
-		end
-
-		if is_builtin then
+		if category == "builtin" then
 			table.insert(builtin, imp)
-		elseif is_local then
+		elseif category == "local" then
 			table.insert(local_imports, imp)
 		else
 			table.insert(third_party, imp)
@@ -533,7 +375,7 @@ function M.inject(bufnr, code, opts)
 				local trimmed = line:match("^%s*(.-)%s*$")
 				-- Skip shebang, docstrings, and initial comments
 				if trimmed ~= "" and not trimmed:match("^#!")
-					and not trimmed:match("^['\"]") and not is_empty_or_comment(line, filetype) then
+					and not trimmed:match("^['\"]") and not utils.is_empty_or_comment(line, filetype) then
 					insert_at = i - 1
 					break
 				end

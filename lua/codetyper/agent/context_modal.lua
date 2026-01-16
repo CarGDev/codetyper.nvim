@@ -122,7 +122,8 @@ local function attach_requested_files()
 	end
 	local files = parse_requested_files(state.llm_response)
 	if #files == 0 then
-		vim.api.nvim_buf_set_lines(state.buf, vim.api.nvim_buf_line_count(state.buf), -1, false, { "", "-- No files detected in LLM response --" })
+		local ui_prompts = require("codetyper.prompts.agent.modal").ui
+		vim.api.nvim_buf_set_lines(state.buf, vim.api.nvim_buf_line_count(state.buf), -1, false, ui_prompts.files_header)
 		return
 	end
 
@@ -190,9 +191,11 @@ function M.open(original_event, llm_response, callback, suggested_commands)
 	vim.wo[state.win].wrap = true
 	vim.wo[state.win].cursorline = true
 
+	local ui_prompts = require("codetyper.prompts.agent.modal").ui
+
 	-- Add header showing what the LLM said
 	local header_lines = {
-		"-- LLM Response: --",
+		ui_prompts.llm_response_header,
 	}
 
 	-- Truncate LLM response for display
@@ -207,16 +210,16 @@ function M.open(original_event, llm_response, callback, suggested_commands)
 	-- If suggested commands were provided, show them in the header
 	if suggested_commands and #suggested_commands > 0 then
 		table.insert(header_lines, "")
-		table.insert(header_lines, "-- Suggested commands: --")
+		table.insert(header_lines, ui_prompts.suggested_commands_header)
 		for i, s in ipairs(suggested_commands) do
 			local label = s.label or s.cmd
 			table.insert(header_lines, string.format("[%d] %s: %s", i, label, s.cmd))
 		end
-		table.insert(header_lines, "-- Press <leader><n> to run a command, or <leader>r to run all --")
+		table.insert(header_lines, ui_prompts.commands_hint)
 	end
 
 	table.insert(header_lines, "")
-	table.insert(header_lines, "-- Enter additional context below (Ctrl-Enter to submit, Esc to cancel) --")
+	table.insert(header_lines, ui_prompts.input_header)
 	table.insert(header_lines, "")
 
 	vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, header_lines)
@@ -322,8 +325,9 @@ local function run_project_inspect()
 		{ label = "Show repo files (git ls-files)", cmd = "git ls-files" },
 	}
 
+	local ui_prompts = require("codetyper.prompts.agent.modal").ui
 	local insert_pos = vim.api.nvim_buf_line_count(state.buf)
-	vim.api.nvim_buf_set_lines(state.buf, insert_pos, insert_pos, false, { "", "-- Project inspection results --" })
+	vim.api.nvim_buf_set_lines(state.buf, insert_pos, insert_pos, false, ui_prompts.project_inspect_header)
 
 	for _, c in ipairs(cmds) do
 		local ok, out = pcall(vim.fn.systemlist, c.cmd)

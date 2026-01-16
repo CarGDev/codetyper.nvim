@@ -6,6 +6,7 @@
 
 local M = {}
 
+local params = require("codetyper.params.agent.worker")
 local confidence = require("codetyper.agent.confidence")
 
 ---@class WorkerResult
@@ -32,20 +33,7 @@ local confidence = require("codetyper.agent.confidence")
 local worker_counter = 0
 
 --- Patterns that indicate LLM needs more context (must be near start of response)
-local context_needed_patterns = {
-	"^%s*i need more context",
-	"^%s*i'm sorry.-i need more",
-	"^%s*i apologize.-i need more",
-	"^%s*could you provide more context",
-	"^%s*could you please provide more",
-	"^%s*can you clarify",
-	"^%s*please provide more context",
-	"^%s*more information needed",
-	"^%s*not enough context",
-	"^%s*i don't have enough",
-	"^%s*unclear what you",
-	"^%s*what do you mean by",
-}
+local context_needed_patterns = params.context_needed_patterns
 
 --- Check if response indicates need for more context
 --- Only triggers if the response primarily asks for context (no substantial code)
@@ -196,12 +184,7 @@ end
 local active_workers = {}
 
 --- Default timeouts by provider type
-local default_timeouts = {
-	ollama = 30000,   -- 30s for local
-	openai = 60000,   -- 60s for remote
-	gemini = 60000,
-	copilot = 60000,
-}
+local default_timeouts = params.default_timeouts
 
 --- Generate worker ID
 ---@return string

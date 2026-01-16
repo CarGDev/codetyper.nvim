@@ -6,41 +6,14 @@
 
 local M = {}
 
+local params = require("codetyper.params.agent.confidence")
+
 --- Heuristic weights (must sum to 1.0)
-M.weights = {
-	length = 0.15, -- Response length relative to prompt
-	uncertainty = 0.30, -- Uncertainty phrases
-	syntax = 0.25, -- Syntax completeness
-	repetition = 0.15, -- Duplicate lines
-	truncation = 0.15, -- Incomplete ending
-}
+M.weights = params.weights
 
 --- Uncertainty phrases that indicate low confidence
-local uncertainty_phrases = {
-	-- English
-	"i'm not sure",
-	"i am not sure",
-	"maybe",
-	"perhaps",
-	"might work",
-	"could work",
-	"not certain",
-	"uncertain",
-	"i think",
-	"possibly",
-	"TODO",
-	"FIXME",
-	"XXX",
-	"placeholder",
-	"implement this",
-	"fill in",
-	"your code here",
-	"...", -- Ellipsis as placeholder
-	"# TODO",
-	"// TODO",
-	"-- TODO",
-	"/* TODO",
-}
+local uncertainty_phrases = params.uncertainty_phrases
+
 
 --- Score based on response length relative to prompt
 ---@param response string
@@ -94,32 +67,6 @@ local function score_uncertainty(response)
 	end
 end
 
---- Check bracket balance for common languages
----@param response string
----@return boolean balanced
-local function check_brackets(response)
-	local pairs = {
-		["{"] = "}",
-		["["] = "]",
-		["("] = ")",
-	}
-
-	local stack = {}
-
-	for char in response:gmatch(".") do
-		if pairs[char] then
-			table.insert(stack, pairs[char])
-		elseif char == "}" or char == "]" or char == ")" then
-			if #stack == 0 or stack[#stack] ~= char then
-				return false
-			end
-			table.remove(stack)
-		end
-	end
-
-	return #stack == 0
-end
-
 --- Score based on syntax completeness
 ---@param response string
 ---@return number 0.0-1.0
@@ -127,7 +74,7 @@ local function score_syntax(response)
 	local score = 1.0
 
 	-- Check bracket balance
-	if not check_brackets(response) then
+	if not require("codetyper.utils").check_brackets(response) then
 		score = score - 0.4
 	end
 

@@ -4,6 +4,9 @@
 
 local M = {}
 
+local params = require("codetyper.params.agent.logs")
+
+
 ---@class LogEntry
 ---@field timestamp string ISO timestamp
 ---@field level string "info" | "debug" | "request" | "response" | "tool" | "error"
@@ -119,14 +122,7 @@ end
 ---@param status string "start" | "success" | "error" | "approval"
 ---@param details? string Additional details
 function M.tool(tool_name, status, details)
-  local icons = {
-    start = "->",
-    success = "OK",
-    error = "ERR",
-    approval = "??",
-    approved = "YES",
-    rejected = "NO",
-  }
+  local icons = params.icons
 
   local msg = string.format("[%s] %s", icons[status] or status, tool_name)
   if details then
@@ -297,17 +293,11 @@ end
 ---@return string
 function M.format_entry(entry)
   -- Claude Code style formatting for thinking/action entries
-  local thinking_types = { "thinking", "reason", "action", "task", "result" }
+  local thinking_types = params.thinking_types
   local is_thinking = vim.tbl_contains(thinking_types, entry.level)
 
   if is_thinking then
-    local prefix = ({
-      thinking = "⏺",
-      reason = "⏺",
-      action = "⏺",
-      task = "✶",
-      result = "",
-    })[entry.level] or "⏺"
+    local prefix = params.thinking_prefixes[entry.level] or "⏺"
 
     if prefix ~= "" then
       return prefix .. " " .. entry.message
@@ -317,18 +307,7 @@ function M.format_entry(entry)
   end
 
   -- Traditional log format for other types
-  local level_prefix = ({
-    info = "i",
-    debug = ".",
-    request = ">",
-    response = "<",
-    tool = "T",
-    error = "!",
-    warning = "?",
-    success = "i",
-    queue = "Q",
-    patch = "P",
-  })[entry.level] or "?"
+  local level_prefix = params.level_icons[entry.level] or "?"
 
   local base = string.format("[%s] %s %s", entry.timestamp, level_prefix, entry.message)
 
@@ -353,15 +332,9 @@ function M.format_for_chat(entry)
   end
 
   -- Claude Code style formatting
-  local thinking_types = { "thinking", "reason", "action", "task", "result" }
+  local thinking_types = params.thinking_types
   if vim.tbl_contains(thinking_types, entry.level) then
-    local prefix = ({
-      thinking = "⏺",
-      reason = "⏺",
-      action = "⏺",
-      task = "✶",
-      result = "",
-    })[entry.level] or "⏺"
+    local prefix = params.thinking_prefixes[entry.level] or "⏺"
 
     if prefix ~= "" then
       return prefix .. " " .. entry.message
