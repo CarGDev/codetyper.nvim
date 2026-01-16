@@ -2,7 +2,7 @@
 ---@brief [[
 --- Manages code patches with buffer snapshots for staleness detection.
 --- Patches are queued for safe injection when completion popup is not visible.
---- Uses smart injection for intelligent import merging.
+--- Uses SEARCH/REPLACE blocks for reliable code editing.
 ---@brief ]]
 
 local M = {}
@@ -11,6 +11,24 @@ local M = {}
 local function get_inject_module()
 	return require("codetyper.agent.inject")
 end
+
+--- Lazy load search_replace module
+local function get_search_replace_module()
+	return require("codetyper.agent.search_replace")
+end
+
+--- Lazy load conflict module
+local function get_conflict_module()
+	return require("codetyper.agent.conflict")
+end
+
+--- Configuration for patch behavior
+local config = {
+	-- Use conflict markers instead of direct apply (allows interactive review)
+	use_conflict_mode = true,
+	-- Auto-jump to first conflict after applying
+	auto_jump_to_conflict = true,
+}
 
 ---@class BufferSnapshot
 ---@field bufnr number Buffer number
@@ -27,11 +45,13 @@ end
 ---@field original_snapshot BufferSnapshot Snapshot at event creation
 ---@field generated_code string Code to inject
 ---@field injection_range {start_line: number, end_line: number}|nil
----@field injection_strategy string "append"|"replace"|"insert"
+---@field injection_strategy string "append"|"replace"|"insert"|"search_replace"
 ---@field confidence number Confidence score (0.0-1.0)
 ---@field status string "pending"|"applied"|"stale"|"rejected"
 ---@field created_at number Timestamp
 ---@field applied_at number|nil When applied
+---@field use_search_replace boolean Whether to use SEARCH/REPLACE block parsing
+---@field search_replace_blocks table[]|nil Parsed SEARCH/REPLACE blocks
 
 --- Patch storage
 ---@type PatchCandidate[]
@@ -194,6 +214,10 @@ function M.create_from_event(event, generated_code, confidence, strategy)
 		end
 	end
 
+	-- Detect if this is an inline prompt (source == target, not a .coder. file)
+	local is_inline = (source_bufnr == target_bufnr) or
+		(event.target_path and not event.target_path:match("%.coder%."))
+
 	-- Take snapshot of the scope range in target buffer (for staleness detection)
 	local snapshot_range = event.scope_range or event.range
 	local snapshot = M.snapshot_buffer(
@@ -201,22 +225,67 @@ function M.create_from_event(event, generated_code, confidence, strategy)
 		snapshot_range
 	)
 
+	-- Check if the response contains SEARCH/REPLACE blocks
+	local search_replace = get_search_replace_module()
+	local sr_blocks = search_replace.parse_blocks(generated_code)
+	local use_search_replace = #sr_blocks > 0
+
 	-- Determine injection strategy and range based on intent
 	local injection_strategy = strategy
 	local injection_range = nil
 
-	if not injection_strategy and event.intent then
+	-- If we have SEARCH/REPLACE blocks, use that strategy
+	if use_search_replace then
+		injection_strategy = "search_replace"
+		pcall(function()
+			local logs = require("codetyper.agent.logs")
+			logs.add({
+				type = "info",
+				message = string.format("Using SEARCH/REPLACE mode with %d block(s)", #sr_blocks),
+			})
+		end)
+	elseif not injection_strategy and event.intent then
 		local intent_mod = require("codetyper.agent.intent")
 		if intent_mod.is_replacement(event.intent) then
 			injection_strategy = "replace"
-			-- Use scope range for replacement
-			if event.scope_range then
+
+			-- INLINE PROMPTS: Always use tag range
+			-- The LLM is told specifically to replace the tagged region
+			if is_inline and event.range then
+				injection_range = {
+					start_line = event.range.start_line,
+					end_line = event.range.end_line,
+				}
+				pcall(function()
+					local logs = require("codetyper.agent.logs")
+					logs.add({
+						type = "info",
+						message = string.format("Inline prompt: will replace tag region (lines %d-%d)",
+							event.range.start_line, event.range.end_line),
+					})
+				end)
+			-- CODER FILES: Use scope range for replacement
+			elseif event.scope_range then
 				injection_range = event.scope_range
+			else
+				-- Fallback: no scope found (treesitter didn't find function)
+				-- Use tag range - the generated code will replace the tag region
+				injection_range = {
+					start_line = event.range.start_line,
+					end_line = event.range.end_line,
+				}
+				pcall(function()
+					local logs = require("codetyper.agent.logs")
+					logs.add({
+						type = "warning",
+						message = "No scope found, using tag range as fallback",
+					})
+				end)
 			end
 		elseif event.intent.action == "insert" then
 			injection_strategy = "insert"
-			-- Insert at prompt location
-			injection_range = { start_line = event.range.start_line, end_line = event.range.start_line }
+			-- Insert at prompt location (use full tag range)
+			injection_range = { start_line = event.range.start_line, end_line = event.range.end_line }
 		elseif event.intent.action == "append" then
 			injection_strategy = "append"
 			-- Will append to end of file
@@ -244,6 +313,11 @@ function M.create_from_event(event, generated_code, confidence, strategy)
 		scope = event.scope,
 		-- Store the prompt tag range so we can delete it after applying
 		prompt_tag_range = event.range,
+		-- Mark if this is an inline prompt (tags in source file, not coder file)
+		is_inline_prompt = is_inline,
+		-- SEARCH/REPLACE support
+		use_search_replace = use_search_replace,
+		search_replace_blocks = use_search_replace and sr_blocks or nil,
 	}
 end
 
@@ -464,13 +538,15 @@ function M.apply(patch)
 	-- Prepare code lines
 	local code_lines = vim.split(patch.generated_code, "\n", { plain = true })
 
-	-- FIRST: Remove the prompt tags from the SOURCE buffer (coder file), not target
-	-- The tags are in the coder file where the user wrote the prompt
-	-- Code goes to target file, tags get removed from source file
+	-- Use the stored inline prompt flag (computed during patch creation)
+	-- For inline prompts, we replace the tag region directly instead of separate remove + inject
 	local source_bufnr = patch.source_bufnr
+	local is_inline_prompt = patch.is_inline_prompt or (source_bufnr == target_bufnr)
 	local tags_removed = 0
 
-	if source_bufnr and vim.api.nvim_buf_is_valid(source_bufnr) then
+	-- For CODER FILES (source != target): Remove tags from source, inject into target
+	-- For INLINE PROMPTS (source == target): Include tag range in injection, no separate removal
+	if not is_inline_prompt and source_bufnr and vim.api.nvim_buf_is_valid(source_bufnr) then
 		tags_removed = remove_prompt_tags(source_bufnr)
 
 		pcall(function()
@@ -490,6 +566,76 @@ function M.apply(patch)
 	-- Get filetype for smart injection
 	local filetype = vim.fn.fnamemodify(patch.target_path or "", ":e")
 
+	-- SEARCH/REPLACE MODE: Use fuzzy matching to find and replace text
+	if patch.use_search_replace and patch.search_replace_blocks and #patch.search_replace_blocks > 0 then
+		local search_replace = get_search_replace_module()
+
+		-- Remove the /@ @/ tags first (they shouldn't be in the file anymore)
+		if is_inline_prompt and source_bufnr and vim.api.nvim_buf_is_valid(source_bufnr) then
+			tags_removed = remove_prompt_tags(source_bufnr)
+			if tags_removed > 0 then
+				pcall(function()
+					local logs = require("codetyper.agent.logs")
+					logs.add({
+						type = "info",
+						message = string.format("Removed %d prompt tag(s)", tags_removed),
+					})
+				end)
+			end
+		end
+
+		-- Apply SEARCH/REPLACE blocks
+		local success, err = search_replace.apply_to_buffer(target_bufnr, patch.search_replace_blocks)
+
+		if success then
+			M.mark_applied(patch.id)
+
+			pcall(function()
+				local logs = require("codetyper.agent.logs")
+				logs.add({
+					type = "success",
+					message = string.format("Patch %s applied via SEARCH/REPLACE (%d block(s))",
+						patch.id, #patch.search_replace_blocks),
+					data = {
+						target_path = patch.target_path,
+						blocks_applied = #patch.search_replace_blocks,
+					},
+				})
+			end)
+
+			-- Learn from successful code generation
+			pcall(function()
+				local brain = require("codetyper.brain")
+				if brain.is_initialized() then
+					local intent_type = patch.intent and patch.intent.type or "unknown"
+					brain.learn({
+						type = "code_completion",
+						file = patch.target_path,
+						timestamp = os.time(),
+						data = {
+							intent = intent_type,
+							method = "search_replace",
+							language = filetype,
+							confidence = patch.confidence or 0.5,
+						},
+					})
+				end
+			end)
+
+			return true, nil
+		else
+			-- SEARCH/REPLACE failed, log the error
+			pcall(function()
+				local logs = require("codetyper.agent.logs")
+				logs.add({
+					type = "warning",
+					message = string.format("SEARCH/REPLACE failed: %s. Falling back to line-based injection.", err or "unknown"),
+				})
+			end)
+			-- Fall through to line-based injection as fallback
+		end
+	end
+
 	-- Use smart injection module for intelligent import handling
 	local inject = get_inject_module()
 	local inject_result = nil
@@ -508,10 +654,10 @@ function M.apply(patch)
 			local start_line = patch.injection_range.start_line
 			local end_line = patch.injection_range.end_line
 
-			-- Adjust for tag removal - find the new range by searching for the scope
-			-- After removing tags, line numbers may have shifted
-			if patch.scope and patch.scope.type then
-				-- Try to find the scope using treesitter if available
+			-- For inline prompts, use scope range directly (tags are inside scope)
+			-- No adjustment needed since we didn't remove tags yet
+			if not is_inline_prompt and patch.scope and patch.scope.type then
+				-- For coder files, tags were already removed, so we may need to find the scope again
 				local found_range = nil
 				pcall(function()
 					local parsers = require("nvim-treesitter.parsers")
@@ -562,7 +708,31 @@ function M.apply(patch)
 
 			inject_opts.range = { start_line = start_line, end_line = end_line }
 		elseif patch.injection_strategy == "insert" and patch.injection_range then
-			inject_opts.range = { start_line = patch.injection_range.start_line }
+			-- For inline prompts with "insert" strategy, replace the TAG RANGE
+			-- (the tag itself gets replaced with the new code)
+			if is_inline_prompt and patch.prompt_tag_range then
+				inject_opts.range = {
+					start_line = patch.prompt_tag_range.start_line,
+					end_line = patch.prompt_tag_range.end_line
+				}
+				-- Switch to replace strategy for the tag range
+				inject_opts.strategy = "replace"
+			else
+				inject_opts.range = { start_line = patch.injection_range.start_line }
+			end
+		end
+
+		-- Log inline prompt handling
+		if is_inline_prompt then
+			pcall(function()
+				local logs = require("codetyper.agent.logs")
+				logs.add({
+					type = "info",
+					message = string.format("Inline prompt: replacing lines %d-%d",
+						inject_opts.range and inject_opts.range.start_line or 0,
+						inject_opts.range and inject_opts.range.end_line or 0),
+				})
+			end)
 		end
 
 		-- Use smart injection - handles imports automatically
@@ -727,6 +897,204 @@ end
 --- Clear all patches
 function M.clear()
 	patches = {}
+end
+
+--- Configure patch behavior
+---@param opts table Configuration options
+---   - use_conflict_mode: boolean Use conflict markers instead of direct apply
+---   - auto_jump_to_conflict: boolean Auto-jump to first conflict after applying
+function M.configure(opts)
+	if opts.use_conflict_mode ~= nil then
+		config.use_conflict_mode = opts.use_conflict_mode
+	end
+	if opts.auto_jump_to_conflict ~= nil then
+		config.auto_jump_to_conflict = opts.auto_jump_to_conflict
+	end
+end
+
+--- Get current configuration
+---@return table
+function M.get_config()
+	return vim.deepcopy(config)
+end
+
+--- Check if conflict mode is enabled
+---@return boolean
+function M.is_conflict_mode()
+	return config.use_conflict_mode
+end
+
+--- Apply a patch using conflict markers for interactive review
+--- Instead of directly replacing code, inserts git-style conflict markers
+---@param patch PatchCandidate
+---@return boolean success
+---@return string|nil error
+function M.apply_with_conflict(patch)
+	-- Check if safe to modify (not in insert mode)
+	if not is_safe_to_modify() then
+		return false, "user_typing"
+	end
+
+	-- Check staleness first
+	local is_stale, stale_reason = M.is_stale(patch)
+	if is_stale then
+		M.mark_stale(patch.id, stale_reason)
+		return false, "patch_stale: " .. (stale_reason or "unknown")
+	end
+
+	-- Ensure target buffer is valid
+	local target_bufnr = patch.target_bufnr
+	if target_bufnr == -1 or not vim.api.nvim_buf_is_valid(target_bufnr) then
+		target_bufnr = vim.fn.bufadd(patch.target_path)
+		if target_bufnr == 0 then
+			M.mark_rejected(patch.id, "buffer_not_found")
+			return false, "target buffer not found"
+		end
+		vim.fn.bufload(target_bufnr)
+		patch.target_bufnr = target_bufnr
+	end
+
+	local conflict = get_conflict_module()
+	local source_bufnr = patch.source_bufnr
+	local is_inline_prompt = patch.is_inline_prompt or (source_bufnr == target_bufnr)
+
+	-- Remove tags from coder files
+	if not is_inline_prompt and source_bufnr and vim.api.nvim_buf_is_valid(source_bufnr) then
+		remove_prompt_tags(source_bufnr)
+	end
+
+	-- For SEARCH/REPLACE blocks, convert each block to a conflict
+	if patch.use_search_replace and patch.search_replace_blocks and #patch.search_replace_blocks > 0 then
+		local search_replace = get_search_replace_module()
+		local content = table.concat(vim.api.nvim_buf_get_lines(target_bufnr, 0, -1, false), "\n")
+		local applied_count = 0
+
+		-- Sort blocks by position (bottom to top) to maintain line numbers
+		local sorted_blocks = {}
+		for _, block in ipairs(patch.search_replace_blocks) do
+			local match = search_replace.find_match(content, block.search)
+			if match then
+				block._match = match
+				table.insert(sorted_blocks, block)
+			end
+		end
+		table.sort(sorted_blocks, function(a, b)
+			return (a._match and a._match.start_line or 0) > (b._match and b._match.start_line or 0)
+		end)
+
+		-- Apply each block as a conflict
+		for _, block in ipairs(sorted_blocks) do
+			local match = block._match
+			if match then
+				local new_lines = vim.split(block.replace, "\n", { plain = true })
+				conflict.insert_conflict(
+					target_bufnr,
+					match.start_line,
+					match.end_line,
+					new_lines,
+					"AI SUGGESTION"
+				)
+				applied_count = applied_count + 1
+				-- Re-read content for next match (line numbers changed)
+				content = table.concat(vim.api.nvim_buf_get_lines(target_bufnr, 0, -1, false), "\n")
+			end
+		end
+
+		if applied_count > 0 then
+			-- Remove tags for inline prompts after inserting conflicts
+			if is_inline_prompt and source_bufnr and vim.api.nvim_buf_is_valid(source_bufnr) then
+				remove_prompt_tags(source_bufnr)
+			end
+
+			-- Process conflicts (highlight, keymaps) and show menu
+			conflict.process_and_show_menu(target_bufnr)
+
+			M.mark_applied(patch.id)
+
+			pcall(function()
+				local logs = require("codetyper.agent.logs")
+				logs.add({
+					type = "success",
+					message = string.format(
+						"Created %d conflict(s) for review - use co/ct/cb/cn to resolve",
+						applied_count
+					),
+				})
+			end)
+
+			return true, nil
+		end
+	end
+
+	-- Fallback: Use injection range if available
+	if patch.injection_range then
+		local start_line = patch.injection_range.start_line
+		local end_line = patch.injection_range.end_line
+		local new_lines = vim.split(patch.generated_code, "\n", { plain = true })
+
+		-- Remove tags for inline prompts
+		if is_inline_prompt and source_bufnr and vim.api.nvim_buf_is_valid(source_bufnr) then
+			remove_prompt_tags(source_bufnr)
+		end
+
+		-- Insert conflict markers
+		conflict.insert_conflict(target_bufnr, start_line, end_line, new_lines, "AI SUGGESTION")
+
+		-- Process conflicts (highlight, keymaps) and show menu
+		conflict.process_and_show_menu(target_bufnr)
+
+		M.mark_applied(patch.id)
+
+		pcall(function()
+			local logs = require("codetyper.agent.logs")
+			logs.add({
+				type = "success",
+				message = "Created conflict for review - use co/ct/cb/cn to resolve",
+			})
+		end)
+
+		return true, nil
+	end
+
+	-- No suitable range found, fall back to direct apply
+	return M.apply(patch)
+end
+
+--- Smart apply - uses conflict mode if enabled, otherwise direct apply
+---@param patch PatchCandidate
+---@return boolean success
+---@return string|nil error
+function M.smart_apply(patch)
+	if config.use_conflict_mode then
+		return M.apply_with_conflict(patch)
+	else
+		return M.apply(patch)
+	end
+end
+
+--- Flush all pending patches using smart apply
+---@return number applied_count
+---@return number stale_count
+---@return number deferred_count
+function M.flush_pending_smart()
+	local applied = 0
+	local stale = 0
+	local deferred = 0
+
+	for _, p in ipairs(patches) do
+		if p.status == "pending" then
+			local success, err = M.smart_apply(p)
+			if success then
+				applied = applied + 1
+			elseif err == "user_typing" then
+				deferred = deferred + 1
+			else
+				stale = stale + 1
+			end
+		end
+	end
+
+	return applied, stale, deferred
 end
 
 return M

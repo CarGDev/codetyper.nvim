@@ -20,7 +20,7 @@ local defaults = {
       model = "gemini-2.0-flash",
     },
     copilot = {
-      model = "gpt-4o", -- Uses GitHub Copilot authentication
+      model = "claude-sonnet-4", -- Uses GitHub Copilot authentication
     },
   },
   window = {

@@ -282,13 +282,21 @@ function M.resolve_scope_heuristic(bufnr, row, col)
 			ending = nil, -- Python uses indentation
 		},
 		javascript = {
-			start = "^%s*function%s+",
-			start_alt = "^%s*const%s+%w+%s*=%s*",
+			start = "^%s*export%s+function%s+",
+			start_alt = "^%s*function%s+",
+			start_alt2 = "^%s*export%s+const%s+%w+%s*=",
+			start_alt3 = "^%s*const%s+%w+%s*=%s*",
+			start_alt4 = "^%s*export%s+async%s+function%s+",
+			start_alt5 = "^%s*async%s+function%s+",
 			ending = "^%s*}%s*$",
 		},
 		typescript = {
-			start = "^%s*function%s+",
-			start_alt = "^%s*const%s+%w+%s*=%s*",
+			start = "^%s*export%s+function%s+",
+			start_alt = "^%s*function%s+",
+			start_alt2 = "^%s*export%s+const%s+%w+%s*=",
+			start_alt3 = "^%s*const%s+%w+%s*=%s*",
+			start_alt4 = "^%s*export%s+async%s+function%s+",
+			start_alt5 = "^%s*async%s+function%s+",
 			ending = "^%s*}%s*$",
 		},
 	}
@@ -302,8 +310,13 @@ function M.resolve_scope_heuristic(bufnr, row, col)
 	local start_line = nil
 	for i = row, 1, -1 do
 		local line = lines[i]
-		if line:match(lang_patterns.start) or
-			(lang_patterns.start_alt and line:match(lang_patterns.start_alt)) then
+		-- Check all start patterns
+		if line:match(lang_patterns.start)
+			or (lang_patterns.start_alt and line:match(lang_patterns.start_alt))
+			or (lang_patterns.start_alt2 and line:match(lang_patterns.start_alt2))
+			or (lang_patterns.start_alt3 and line:match(lang_patterns.start_alt3))
+			or (lang_patterns.start_alt4 and line:match(lang_patterns.start_alt4))
+			or (lang_patterns.start_alt5 and line:match(lang_patterns.start_alt5)) then
 			start_line = i
 			break
 		end

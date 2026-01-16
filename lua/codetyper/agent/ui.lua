@@ -29,6 +29,7 @@ local state = {
   is_open = false,
   log_listener_id = nil,
   referenced_files = {},
+  selection_context = nil, -- Visual selection passed when opening
 }
 
 --- Namespace for highlights
@@ -121,7 +122,9 @@ local function add_log_entry(entry)
     local lines = vim.api.nvim_buf_get_lines(state.logs_buf, 0, -1, false)
     local line_num = #lines
 
-    vim.api.nvim_buf_set_lines(state.logs_buf, -1, -1, false, { formatted })
+    -- Split formatted log into individual lines to avoid passing newline-containing items
+    local formatted_lines = vim.split(formatted, "\n")
+    vim.api.nvim_buf_set_lines(state.logs_buf, -1, -1, false, formatted_lines)
 
     -- Apply highlighting based on level
     local hl_map = {
@@ -234,8 +237,16 @@ local function create_callbacks()
 
     on_complete = function()
       vim.schedule(function()
-        add_message("system", "Done.", "DiagnosticHint")
-        logs.info("Agent loop completed")
+        local changes_count = agent.get_changes_count()
+        if changes_count > 0 then
+          add_message("system",
+            string.format("Done. %d file(s) changed. Press <leader>d to review changes.", changes_count),
+            "DiagnosticHint")
+          logs.info(string.format("Agent completed with %d change(s)", changes_count))
+        else
+          add_message("system", "Done.", "DiagnosticHint")
+          logs.info("Agent loop completed")
+        end
         M.focus_input()
       end)
     end,
@@ -303,17 +314,44 @@ local function submit_input()
         "╔═══════════════════════════════════════════════════════════════╗",
         "║  [AGENT MODE] Can read/write files                           ║",
         "╠═══════════════════════════════════════════════════════════════╣",
-        "║  @ attach file | C-f current file | :CoderType switch mode   ║",
+        "║  @ attach | C-f current file | <leader>d review changes      ║",
         "╚═══════════════════════════════════════════════════════════════╝",
         "",
       })
       vim.bo[state.chat_buf].modifiable = false
     end
+    -- Also clear collected diffs
+    local diff_review = require("codetyper.agent.diff_review")
+    diff_review.clear()
     return
   end
 
   if input == "/close" then
     M.close()
+    return
+  end
+
+  if input == "/continue" then
+    if agent.is_running() then
+      add_message("system", "Agent is already running. Use /stop first.")
+      return
+    end
+
+    if not agent.has_saved_session() then
+      add_message("system", "No saved session to continue.")
+      return
+    end
+
+    local info = agent.get_saved_session_info()
+    if info then
+      add_message("system", string.format("Resuming session from %s...", info.saved_at))
+      logs.info(string.format("Resuming: %d messages, iteration %d", info.messages, info.iteration))
+    end
+
+    local success = agent.continue_session(create_callbacks())
+    if not success then
+      add_message("system", "Failed to resume session.")
+    end
     return
   end
 
@@ -359,8 +397,15 @@ local function submit_input()
 
   -- Append file context to input
   local full_input = input
+
+  -- Add selection context if present
+  local selection_ctx = M.get_selection_context()
+  if selection_ctx then
+    full_input = full_input .. "\n\n" .. selection_ctx
+  end
+
   if file_context ~= "" then
-    full_input = input .. "\n\nATTACHED FILES:" .. file_context
+    full_input = full_input .. "\n\nATTACHED FILES:" .. file_context
   end
 
   logs.thinking("Starting...")
@@ -494,11 +539,19 @@ local function update_logs_title()
 end
 
 --- Open the agent UI
-function M.open()
+---@param selection table|nil Visual selection context {text, start_line, end_line, filepath, filename, language}
+function M.open(selection)
   if state.is_open then
+    -- If already open and new selection provided, add it as context
+    if selection and selection.text and selection.text ~= "" then
+      M.add_selection_context(selection)
+    end
     M.focus_input()
     return
   end
+
+  -- Store selection context
+  state.selection_context = selection
 
   -- Clear previous state
   logs.clear()
@@ -574,7 +627,7 @@ function M.open()
     "╔═══════════════════════════════════════════════════════════════╗",
     "║  [AGENT MODE] Can read/write files                           ║",
     "╠═══════════════════════════════════════════════════════════════╣",
-    "║  @ attach file | C-f current file | :CoderType switch mode   ║",
+    "║  @ attach | C-f current file | <leader>d review changes      ║",
     "╚═══════════════════════════════════════════════════════════════╝",
     "",
   })
@@ -607,6 +660,7 @@ function M.open()
   vim.keymap.set("n", "<Tab>", M.focus_chat, input_opts)
   vim.keymap.set("n", "q", M.close, input_opts)
   vim.keymap.set("n", "<Esc>", M.close, input_opts)
+  vim.keymap.set("n", "<leader>d", M.show_diff_review, input_opts)
 
   -- Set up keymaps for chat buffer
   local chat_opts = { buffer = state.chat_buf, noremap = true, silent = true }
@@ -617,6 +671,7 @@ function M.open()
   vim.keymap.set("n", "<C-f>", M.include_current_file, chat_opts)
   vim.keymap.set("n", "<Tab>", M.focus_logs, chat_opts)
   vim.keymap.set("n", "q", M.close, chat_opts)
+  vim.keymap.set("n", "<leader>d", M.show_diff_review, chat_opts)
 
   -- Set up keymaps for logs buffer
   local logs_opts = { buffer = state.logs_buf, noremap = true, silent = true }
@@ -649,6 +704,26 @@ function M.open()
   -- Focus input and log startup
   M.focus_input()
   logs.info("Agent ready")
+
+  -- Check for saved session and notify user
+  if agent.has_saved_session() then
+    vim.schedule(function()
+      local info = agent.get_saved_session_info()
+      if info then
+        add_message("system",
+          string.format("Saved session available (%s). Type /continue to resume.", info.saved_at),
+          "DiagnosticHint")
+        logs.info("Saved session found: " .. (info.prompt or ""):sub(1, 30) .. "...")
+      end
+    end)
+  end
+
+  -- If we have a selection, show it as context
+  if selection and selection.text and selection.text ~= "" then
+    vim.schedule(function()
+      M.add_selection_context(selection)
+    end)
+  end
 
   -- Log provider info
   local ok, codetyper = pcall(require, "codetyper")
@@ -730,6 +805,103 @@ end
 ---@return boolean
 function M.is_open()
   return state.is_open
+end
+
+--- Show the diff review for all changes made in this session
+function M.show_diff_review()
+  local changes_count = agent.get_changes_count()
+  if changes_count == 0 then
+    utils.notify("No changes to review", vim.log.levels.INFO)
+    return
+  end
+  agent.show_diff_review()
+end
+
+--- Add visual selection as context in the chat
+---@param selection table Selection info {text, start_line, end_line, filepath, filename, language}
+function M.add_selection_context(selection)
+  if not state.chat_buf or not vim.api.nvim_buf_is_valid(state.chat_buf) then
+    return
+  end
+
+  state.selection_context = selection
+
+  vim.bo[state.chat_buf].modifiable = true
+
+  local lines = vim.api.nvim_buf_get_lines(state.chat_buf, 0, -1, false)
+
+  -- Format the selection display
+  local location = ""
+  if selection.filename then
+    location = selection.filename
+    if selection.start_line then
+      location = location .. ":" .. selection.start_line
+      if selection.end_line and selection.end_line ~= selection.start_line then
+        location = location .. "-" .. selection.end_line
+      end
+    end
+  end
+
+  local new_lines = {
+    "",
+    "┌─ Selected Code ─────────────────────",
+    "│ " .. location,
+    "│",
+  }
+
+  -- Add the selected code
+  for _, line in ipairs(vim.split(selection.text, "\n")) do
+    table.insert(new_lines, "│ " .. line)
+  end
+
+  table.insert(new_lines, "│")
+  table.insert(new_lines, "└──────────────────────────────────────")
+  table.insert(new_lines, "")
+  table.insert(new_lines, "Describe what you'd like to do with this code.")
+
+  for _, line in ipairs(new_lines) do
+    table.insert(lines, line)
+  end
+
+  vim.api.nvim_buf_set_lines(state.chat_buf, 0, -1, false, lines)
+  vim.bo[state.chat_buf].modifiable = false
+
+  -- Scroll to bottom
+  if state.chat_win and vim.api.nvim_win_is_valid(state.chat_win) then
+    local line_count = vim.api.nvim_buf_line_count(state.chat_buf)
+    vim.api.nvim_win_set_cursor(state.chat_win, { line_count, 0 })
+  end
+
+  -- Also add the file to referenced_files for context
+  if selection.filepath and selection.filepath ~= "" then
+    state.referenced_files[selection.filename or "selection"] = selection.filepath
+  end
+
+  logs.info("Selection added: " .. location)
+end
+
+--- Get selection context for agent prompt
+---@return string|nil Selection context string
+function M.get_selection_context()
+  if not state.selection_context or not state.selection_context.text then
+    return nil
+  end
+
+  local sel = state.selection_context
+  local location = sel.filename or "unknown"
+  if sel.start_line then
+    location = location .. ":" .. sel.start_line
+    if sel.end_line and sel.end_line ~= sel.start_line then
+      location = location .. "-" .. sel.end_line
+    end
+  end
+
+  return string.format(
+    "SELECTED CODE (%s):\n```%s\n%s\n```",
+    location,
+    sel.language or "",
+    sel.text
+  )
 end
 
 return M

@@ -2,7 +2,7 @@
 ---@brief [[
 --- Tool for making targeted edits to files using search/replace.
 --- Implements multiple fallback strategies for robust matching.
---- Inspired by opencode's 9-strategy approach.
+--- Multi-strategy approach for reliable editing.
 ---@brief ]]
 
 local Base = require("codetyper.agent.tools.base")

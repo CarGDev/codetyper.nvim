@@ -4,12 +4,79 @@
 
 local M = {}
 local utils = require("codetyper.utils")
+local logs = require("codetyper.agent.logs")
 
 ---@class ExecutionResult
 ---@field success boolean Whether the execution succeeded
 ---@field result string Result message or content
 ---@field requires_approval boolean Whether user approval is needed
 ---@field diff_data? DiffData Data for diff preview (if requires_approval)
+
+--- Open a file in a buffer (in a non-agent window)
+---@param path string File path to open
+---@param jump_to_line? number Optional line number to jump to
+local function open_file_in_buffer(path, jump_to_line)
+  if not path or path == "" then
+    return
+  end
+
+  -- Check if file exists
+  if vim.fn.filereadable(path) ~= 1 then
+    return
+  end
+
+  vim.schedule(function()
+    -- Find a suitable window (not the agent UI windows)
+    local target_win = nil
+    local agent_ui_ok, agent_ui = pcall(require, "codetyper.agent.ui")
+
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      local buf = vim.api.nvim_win_get_buf(win)
+      local buftype = vim.bo[buf].buftype
+
+      -- Skip special buffers (agent UI, nofile, etc.)
+      if buftype == "" or buftype == "acwrite" then
+        -- Check if this is not an agent UI window
+        local is_agent_win = false
+        if agent_ui_ok and agent_ui.is_open() then
+          -- Skip agent windows by checking if it's one of our special buffers
+          local bufname = vim.api.nvim_buf_get_name(buf)
+          if bufname == "" then
+            -- Could be agent buffer, check by buffer option
+            is_agent_win = vim.bo[buf].buftype == "nofile"
+          end
+        end
+
+        if not is_agent_win then
+          target_win = win
+          break
+        end
+      end
+    end
+
+    -- If no suitable window found, create a new split
+    if not target_win then
+      -- Get the rightmost non-agent window or create one
+      vim.cmd("rightbelow vsplit")
+      target_win = vim.api.nvim_get_current_win()
+    end
+
+    -- Open the file in the target window
+    vim.api.nvim_set_current_win(target_win)
+    vim.cmd("edit " .. vim.fn.fnameescape(path))
+
+    -- Jump to line if specified
+    if jump_to_line and jump_to_line > 0 then
+      local line_count = vim.api.nvim_buf_line_count(0)
+      local target_line = math.min(jump_to_line, line_count)
+      vim.api.nvim_win_set_cursor(target_win, { target_line, 0 })
+      vim.cmd("normal! zz")
+    end
+  end)
+end
+
+--- Expose open_file_in_buffer for external use
+M.open_file_in_buffer = open_file_in_buffer
 
 ---@class DiffData
 ---@field path string File path
@@ -50,15 +117,28 @@ end
 ---@param callback fun(result: ExecutionResult)
 function M.handle_read_file(params, callback)
   local path = M.resolve_path(params.path)
+
+  -- Log the read operation in Claude Code style
+  local relative_path = vim.fn.fnamemodify(path, ":~:.")
+  logs.read(relative_path)
+
   local content = utils.read_file(path)
 
   if content then
+    -- Log how many lines were read
+    local lines = vim.split(content, "\n", { plain = true })
+    logs.add({ type = "result", message = string.format("  ⎿  Read %d lines", #lines) })
+
+    -- Open the file in a buffer so user can see it
+    open_file_in_buffer(path)
+
     callback({
       success = true,
       result = content,
       requires_approval = false,
     })
   else
+    logs.add({ type = "error", message = "  ⎿  File not found" })
     callback({
       success = false,
       result = "Could not read file: " .. path,
@@ -72,9 +152,15 @@ end
 ---@param callback fun(result: ExecutionResult)
 function M.handle_edit_file(params, callback)
   local path = M.resolve_path(params.path)
+  local relative_path = vim.fn.fnamemodify(path, ":~:.")
+
+  -- Log the edit operation
+  logs.add({ type = "action", message = string.format("Edit(%s)", relative_path) })
+
   local original = utils.read_file(path)
 
   if not original then
+    logs.add({ type = "error", message = "  ⎿  File not found" })
     callback({
       success = false,
       result = "File not found: " .. path,
@@ -88,12 +174,25 @@ function M.handle_edit_file(params, callback)
   local new_content, count = original:gsub(escaped_find, params.replace, 1)
 
   if count == 0 then
+    logs.add({ type = "error", message = "  ⎿  Content not found" })
     callback({
       success = false,
       result = "Could not find content to replace in: " .. path,
       requires_approval = false,
     })
     return
+  end
+
+  -- Calculate lines changed
+  local original_lines = #vim.split(original, "\n", { plain = true })
+  local new_lines = #vim.split(new_content, "\n", { plain = true })
+  local diff = new_lines - original_lines
+  if diff > 0 then
+    logs.add({ type = "result", message = string.format("  ⎿  +%d lines (pending approval)", diff) })
+  elseif diff < 0 then
+    logs.add({ type = "result", message = string.format("  ⎿  %d lines (pending approval)", diff) })
+  else
+    logs.add({ type = "result", message = "  ⎿  Modified (pending approval)" })
   end
 
   -- Requires user approval - show diff
@@ -115,8 +214,28 @@ end
 ---@param callback fun(result: ExecutionResult)
 function M.handle_write_file(params, callback)
   local path = M.resolve_path(params.path)
+  local relative_path = vim.fn.fnamemodify(path, ":~:.")
   local original = utils.read_file(path) or ""
   local operation = original == "" and "create" or "overwrite"
+
+  -- Log the write operation
+  if operation == "create" then
+    logs.add({ type = "action", message = string.format("Write(%s)", relative_path) })
+    local new_lines = #vim.split(params.content, "\n", { plain = true })
+    logs.add({ type = "result", message = string.format("  ⎿  New file (%d lines, pending approval)", new_lines) })
+  else
+    logs.add({ type = "action", message = string.format("Update(%s)", relative_path) })
+    local original_lines = #vim.split(original, "\n", { plain = true })
+    local new_lines = #vim.split(params.content, "\n", { plain = true })
+    local diff = new_lines - original_lines
+    if diff > 0 then
+      logs.add({ type = "result", message = string.format("  ⎿  +%d lines (pending approval)", diff) })
+    elseif diff < 0 then
+      logs.add({ type = "result", message = string.format("  ⎿  %d lines (pending approval)", diff) })
+    else
+      logs.add({ type = "result", message = "  ⎿  Modified (pending approval)" })
+    end
+  end
 
   -- Ensure parent directory exists
   local dir = vim.fn.fnamemodify(path, ":h")
@@ -142,6 +261,10 @@ end
 ---@param callback fun(result: ExecutionResult)
 function M.handle_bash(params, callback)
   local command = params.command
+
+  -- Log the bash operation
+  logs.add({ type = "action", message = string.format("Bash(%s)", command:sub(1, 50) .. (#command > 50 and "..." or "")) })
+  logs.add({ type = "result", message = "  ⎿  Pending approval" })
 
   -- Requires user approval first
   callback({
@@ -258,7 +381,8 @@ function M.handle_search_files(params, callback)
     for _, file in ipairs(files) do
       -- Skip common ignore patterns
       if not file:match("node_modules") and not file:match("%.git/") then
-        table.insert(results, file:gsub(search_path .. "/", ""))
+        local relative = file:gsub(search_path .. "/", "")
+        table.insert(results, relative)
       end
     end
   end
@@ -272,7 +396,8 @@ function M.handle_search_files(params, callback)
     if handle then
       for line in handle:lines() do
         if not line:match("node_modules") and not line:match("%.git/") then
-          table.insert(grep_results, line:gsub(search_path .. "/", ""))
+          local relative = line:gsub(search_path .. "/", "")
+          table.insert(grep_results, relative)
         end
       end
       handle:close()
@@ -348,7 +473,8 @@ function M.apply_change(diff_data, callback)
     -- Write file
     local success = utils.write_file(diff_data.path, diff_data.modified)
     if success then
-      -- Reload buffer if it's open
+      -- Open and/or reload buffer so user can see the changes
+      open_file_in_buffer(diff_data.path)
       M.reload_buffer_if_open(diff_data.path)
       callback({
         success = true,

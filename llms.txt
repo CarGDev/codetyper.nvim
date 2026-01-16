@@ -14,68 +14,70 @@ Instead of having an AI generate entire files, Codetyper lets developers maintai
 2. A companion "coder file" is created (`index.coder.ts`)
 3. Developer writes prompts using special tags: `/@ prompt @/`
 4. When the closing tag is typed, the LLM generates code
-5. Generated code is injected into the target file
+5. Generated code is shown as a conflict for review
+6. Developer accepts/rejects changes using keymaps
 
 ## Plugin Architecture
 
 ```
 lua/codetyper/
-├── init.lua          # Main entry, setup function, module initialization
-├── config.lua        # Configuration management, defaults, validation
-├── types.lua         # Lua type definitions for LSP/documentation
-├── utils.lua         # Utility functions (file ops, notifications)
-├── commands.lua      # Vim command definitions (:Coder, :CoderOpen, etc.)
-├── window.lua        # Split window management (open, close, toggle)
-├── parser.lua        # Parses /@ @/ tags from buffer content
-├── gitignore.lua     # Manages .gitignore entries for coder files
-├── autocmds.lua      # Autocommands for tag detection, filetype, auto-index
-├── inject.lua        # Code injection strategies
-├── health.lua        # Health check for :checkhealth
-├── tree.lua          # Project tree logging (.coder/tree.log)
-├── logs_panel.lua    # Standalone logs panel UI
-├── cost.lua          # LLM cost tracking with persistent history
-├── credentials.lua   # Secure credential storage (API keys, models)
+├── init.lua              # Main entry, setup function
+├── config.lua            # Configuration management
+├── types.lua             # Lua type definitions
+├── utils.lua             # Utility functions
+├── commands.lua          # Vim command definitions
+├── window.lua            # Split window management
+├── parser.lua            # Parses /@ @/ tags
+├── gitignore.lua         # Manages .gitignore entries
+├── autocmds.lua          # Autocommands for tag detection
+├── inject.lua            # Code injection strategies
+├── health.lua            # Health check for :checkhealth
+├── tree.lua              # Project tree logging
+├── logs_panel.lua        # Standalone logs panel UI
+├── cost.lua              # LLM cost tracking
+├── credentials.lua       # Secure credential storage
 ├── llm/
-│   ├── init.lua      # LLM interface, provider selection
-│   ├── claude.lua    # Claude API client (Anthropic)
-│   ├── openai.lua    # OpenAI API client (with custom endpoint support)
-│   ├── gemini.lua    # Google Gemini API client
-│   ├── copilot.lua   # GitHub Copilot client (uses OAuth from copilot.lua/vim)
-│   └── ollama.lua    # Ollama API client (local LLMs)
+│   ├── init.lua          # LLM interface, provider selection
+│   ├── claude.lua        # Claude API client
+│   ├── openai.lua        # OpenAI API client
+│   ├── gemini.lua        # Google Gemini API client
+│   ├── copilot.lua       # GitHub Copilot client
+│   └── ollama.lua        # Ollama API client (local)
 ├── agent/
-│   ├── init.lua      # Agent system entry point
-│   ├── ui.lua        # Agent panel UI
-│   ├── logs.lua      # Logging system with listeners
-│   ├── tools.lua     # Tool definitions (read_file, edit_file, write_file, bash)
-│   ├── executor.lua  # Tool execution logic
-│   ├── parser.lua    # Parse tool calls from LLM responses
-│   ├── queue.lua     # Event queue with priority heap
-│   ├── patch.lua     # Patch candidates with staleness detection
-│   ├── confidence.lua # Response confidence scoring heuristics
-│   ├── worker.lua    # Async LLM worker wrapper
-│   ├── scheduler.lua # Event scheduler with completion-awareness
-│   ├── scope.lua     # Tree-sitter scope resolution
-│   └── intent.lua    # Intent detection from prompts
+│   ├── init.lua          # Agent system entry point
+│   ├── ui.lua            # Agent panel UI
+│   ├── logs.lua          # Logging system
+│   ├── tools.lua         # Tool definitions (read, edit, write, bash)
+│   ├── executor.lua      # Tool execution logic
+│   ├── parser.lua        # Parse tool calls from responses
+│   ├── queue.lua         # Event queue with priority heap
+│   ├── patch.lua         # Patch candidates with staleness detection
+│   ├── confidence.lua    # Response confidence scoring
+│   ├── worker.lua        # Async LLM worker
+│   ├── scheduler.lua     # Event scheduler
+│   ├── scope.lua         # Tree-sitter scope resolution
+│   ├── intent.lua        # Intent detection from prompts
+│   ├── conflict.lua      # Git-style conflict resolution
+│   ├── linter.lua        # LSP diagnostics validation
+│   └── search_replace.lua # SEARCH/REPLACE block parsing
 ├── ask/
-│   ├── init.lua      # Ask panel entry point
-│   └── ui.lua        # Ask panel UI (chat interface)
+│   ├── init.lua          # Ask panel entry point
+│   └── ui.lua            # Ask panel UI (chat interface)
 └── prompts/
-    ├── init.lua      # System prompts for code generation
-    └── agent.lua     # Agent-specific prompts and tool instructions
+    ├── init.lua          # System prompts for code generation
+    └── agent.lua         # Agent-specific prompts
 ```
 
 ## .coder/ Folder
 
-The plugin automatically creates and maintains a `.coder/` folder in your project:
-
 ```
 .coder/
-├── tree.log           # Project structure, auto-updated on file changes
-├── cost_history.json  # LLM cost tracking history (persistent)
+├── tree.log           # Project structure, auto-updated
+├── cost_history.json  # LLM cost tracking history
 ├── brain/             # Knowledge graph storage
-│   ├── nodes/         # Learning nodes by type
-│   ├── indices/       # Search indices
-│   └── deltas/        # Version history
+│   ├── nodes/
+│   ├── indices/
+│   └── deltas/
 ├── agents/            # Custom agent definitions
 └── rules/             # Project-specific rules
 ```
@@ -95,108 +97,122 @@ llm = {
 }
 ```
 
-### 2. Agent Mode
+### 2. Conflict Resolution System
+
+Git-style diff visualization for code review:
+
+```
+<<<<<<< CURRENT
+// Original code
+=======
+// AI-generated code
+>>>>>>> INCOMING
+```
+
+**Keymaps (buffer-local when conflicts exist):**
+| Key | Description |
+|-----|-------------|
+| `co` | Accept CURRENT (original) code |
+| `ct` | Accept INCOMING (AI suggestion) |
+| `cb` | Accept BOTH versions |
+| `cn` | Delete conflict (accept NONE) |
+| `cm` | Show conflict resolution menu |
+| `]x` | Go to next conflict |
+| `[x` | Go to previous conflict |
+| `<CR>` | Show menu when on conflict |
+
+**Menu keymaps:**
+| Key | Description |
+|-----|-------------|
+| `1` | Accept current |
+| `2` | Accept incoming |
+| `3` | Accept both |
+| `4` | Accept none |
+| `q`/`<Esc>` | Close menu |
+
+**Configuration:**
+```lua
+-- In conflict.lua
+config = {
+  lint_after_accept = true,      -- Check linter after accepting
+  auto_fix_lint_errors = true,   -- Auto-queue fix
+  auto_show_menu = true,         -- Show menu after injection
+  auto_show_next_menu = true,    -- Show menu for next conflict
+}
+```
+
+### 3. Linter Validation
+
+Auto-check and fix lint errors after code injection:
+
+```lua
+-- In linter.lua
+config = {
+  auto_save = true,              -- Save file after injection
+  diagnostic_delay_ms = 500,     -- Wait for LSP
+  min_severity = vim.diagnostic.severity.WARN,
+  auto_offer_fix = true,         -- Offer to fix errors
+}
+```
+
+**Commands:**
+- `:CoderLintCheck` - Check buffer for lint errors
+- `:CoderLintFix` - Request AI to fix lint errors
+- `:CoderLintQuickfix` - Show errors in quickfix
+- `:CoderLintToggleAuto` - Toggle auto lint checking
+
+### 4. SEARCH/REPLACE Block System
+
+Reliable code editing with fuzzy matching:
+
+```
+<<<<<<< SEARCH
+function oldCode() {
+  // original
+}
+=======
+function newCode() {
+  // replacement
+}
+>>>>>>> REPLACE
+```
+
+**Configuration:**
+```lua
+-- In search_replace.lua
+config = {
+  fuzzy_threshold = 0.8,         -- Minimum similarity
+  normalize_whitespace = true,   -- Ignore whitespace differences
+  context_lines = 3,             -- Lines for context matching
+}
+```
+
+### 5. Agent Mode
 
 Autonomous coding assistant with tool access:
 
+**Available Tools:**
 - `read_file` - Read file contents
 - `edit_file` - Edit files with find/replace
 - `write_file` - Create or overwrite files
 - `bash` - Execute shell commands
 
-### 3. Transform Commands
-
-Transform `/@ @/` tags inline without split view:
-
-- `:CoderTransform` - Transform all tags in file
-- `:CoderTransformCursor` - Transform tag at cursor
-- `:CoderTransformVisual` - Transform selected tags
-
-### 4. Auto-Index
-
-Automatically create coder companion files when opening source files:
-
-```lua
-auto_index = true  -- disabled by default
-```
-
-### 5. Logs Panel
-
-Real-time visibility into LLM operations with token usage tracking.
-
-### 6. Cost Tracking
-
-Track LLM API costs across sessions:
-
-- **Session tracking**: Monitor current session costs in real-time
-- **All-time tracking**: Persistent history in `.coder/cost_history.json`
-- **Per-model breakdown**: See costs by individual model
-- **50+ models**: Built-in pricing for GPT, Claude, O-series, Gemini
-
-Cost window keymaps:
-- `q`/`<Esc>` - Close window
-- `r` - Refresh display
-- `c` - Clear session costs
-- `C` - Clear all history
-
-### 7. Automatic Ollama Fallback
-
-When API rate limits are hit (e.g., Copilot free tier), the plugin:
-1. Detects the rate limit error
-2. Checks if local Ollama is available
-3. Automatically switches provider to Ollama
-4. Notifies user of the provider change
-
-### 8. Credentials Management
-
-Store API keys securely outside of config files:
-
-```vim
-:CoderAddApiKey
-```
-
-**Features:**
-- Interactive prompts for provider, API key, model, endpoint
-- Stored in `~/.local/share/nvim/codetyper/configuration.json`
-- Supports all providers: Claude, OpenAI, Gemini, Copilot, Ollama
-- Switch providers at runtime with `:CoderSwitchProvider`
-
-**Credential priority:**
-1. Stored credentials (via `:CoderAddApiKey`)
-2. Config file settings (`require("codetyper").setup({...})`)
-3. Environment variables (`OPENAI_API_KEY`, etc.)
-
-### 9. Event-Driven Scheduler
-
-Prompts are treated as events, not commands:
+### 6. Event-Driven Scheduler
 
 ```
-User types /@...@/ → Event queued → Scheduler dispatches → Worker processes → Patch created → Safe injection
+User types /@...@/ → Event queued → Scheduler dispatches → Worker processes → Patch created → Conflict shown
 ```
 
 **Key concepts:**
+- **PromptEvent**: Captures buffer state at prompt time
+- **Optimistic Execution**: Ollama as fast scout
+- **Confidence Scoring**: 5 heuristics
+- **Staleness Detection**: Discard if buffer changed
+- **Completion Safety**: Defer while autocomplete visible
 
-- **PromptEvent**: Captures buffer state (changedtick, content hash) at prompt time
-- **Optimistic Execution**: Ollama as fast scout, escalate to remote LLMs if confidence low
-- **Confidence Scoring**: 5 heuristics (length, uncertainty, syntax, repetition, truncation)
-- **Staleness Detection**: Discard patches if buffer changed during generation
-- **Completion Safety**: Defer injection while autocomplete popup visible
+### 7. Tree-sitter Scope Resolution
 
-**Configuration:**
-
-```lua
-scheduler = {
-  enabled = true,           -- Enable event-driven mode
-  ollama_scout = true,      -- Use Ollama first
-  escalation_threshold = 0.7, -- Below this → escalate
-  max_concurrent = 2,       -- Parallel workers
-  completion_delay_ms = 100, -- Wait after popup closes
-}
-```
-
-### 10. Tree-sitter Scope Resolution
-
-Prompts automatically resolve to their enclosing function/method/class:
+Prompts automatically resolve to enclosing scope:
 
 ```lua
 function foo()
@@ -206,12 +222,7 @@ end
 
 **Scope types:** `function`, `method`, `class`, `block`, `file`
 
-For replacement intents (complete, refactor, fix), the entire scope is extracted
-and sent to the LLM, then replaced with the transformed version.
-
-### 11. Intent Detection
-
-The system parses prompts to detect user intent:
+### 8. Intent Detection
 
 | Intent | Keywords | Action |
 |--------|----------|--------|
@@ -221,157 +232,174 @@ The system parses prompts to detect user intent:
 | add | add, create, insert, new | insert |
 | document | document, comment, jsdoc | replace |
 | test | test, spec, unit test | append |
-| optimize | optimize, performance, faster | replace |
-| explain | explain, what, how, why | none |
+| optimize | optimize, performance | replace |
+| explain | explain, what, how | none |
 
-### 12. Tag Precedence
+### 9. Cost Tracking
 
-Multiple tags in the same scope follow "first tag wins" rule:
-- Earlier (by line number) unresolved tag processes first
-- Later tags in same scope are skipped with warning
-- Different scopes process independently
+Track LLM API costs:
+- Session costs tracked in real-time
+- All-time costs in `.coder/cost_history.json`
+- Pricing for 50+ models
 
-## Commands
+### 10. Credentials Management
 
-All commands can be invoked via `:Coder {subcommand}` or dedicated aliases.
+```vim
+:CoderAddApiKey
+```
+
+Stored in `~/.local/share/nvim/codetyper/configuration.json`
+
+**Priority:** stored credentials > config > environment variables
+
+## Commands Reference
 
 ### Core Commands
 | Command | Alias | Description |
 |---------|-------|-------------|
-| `:Coder open` | `:CoderOpen` | Open coder split view |
-| `:Coder close` | `:CoderClose` | Close coder split view |
-| `:Coder toggle` | `:CoderToggle` | Toggle coder split view |
-| `:Coder process` | `:CoderProcess` | Process last prompt in coder file |
-| `:Coder status` | - | Show plugin status and configuration |
-| `:Coder focus` | - | Switch focus between coder/target windows |
+| `:Coder open` | `:CoderOpen` | Open coder split |
+| `:Coder close` | `:CoderClose` | Close coder split |
+| `:Coder toggle` | `:CoderToggle` | Toggle coder split |
+| `:Coder process` | `:CoderProcess` | Process last prompt |
+| `:Coder status` | - | Show status |
+| `:Coder focus` | - | Switch focus |
 | `:Coder reset` | - | Reset processed prompts |
-| `:Coder gitignore` | - | Force update .gitignore |
 
-### Ask Panel (Chat Interface)
+### Ask Panel
 | Command | Alias | Description |
 |---------|-------|-------------|
 | `:Coder ask` | `:CoderAsk` | Open Ask panel |
 | `:Coder ask-toggle` | `:CoderAskToggle` | Toggle Ask panel |
-| `:Coder ask-close` | - | Close Ask panel |
-| `:Coder ask-clear` | `:CoderAskClear` | Clear chat history |
+| `:Coder ask-clear` | `:CoderAskClear` | Clear chat |
 
-### Agent Mode (Autonomous Coding)
+### Agent Mode
 | Command | Alias | Description |
 |---------|-------|-------------|
 | `:Coder agent` | `:CoderAgent` | Open Agent panel |
 | `:Coder agent-toggle` | `:CoderAgentToggle` | Toggle Agent panel |
-| `:Coder agent-close` | - | Close Agent panel |
-| `:Coder agent-stop` | `:CoderAgentStop` | Stop running agent |
+| `:Coder agent-stop` | `:CoderAgentStop` | Stop agent |
 
-### Agentic Mode (IDE-like Multi-file Agent)
+### Transform Commands
 | Command | Alias | Description |
 |---------|-------|-------------|
-| `:Coder agentic-run <task>` | `:CoderAgenticRun <task>` | Run agentic task |
-| `:Coder agentic-list` | `:CoderAgenticList` | List available agents |
-| `:Coder agentic-init` | `:CoderAgenticInit` | Initialize .coder/agents/ and .coder/rules/ |
+| `:Coder transform` | `:CoderTransform` | Transform all tags |
+| `:Coder transform-cursor` | `:CoderTransformCursor` | Transform at cursor |
+| - | `:CoderTransformVisual` | Transform selected |
 
-### Transform Commands (Inline Tag Processing)
-| Command | Alias | Description |
-|---------|-------|-------------|
-| `:Coder transform` | `:CoderTransform` | Transform all /@ @/ tags in file |
-| `:Coder transform-cursor` | `:CoderTransformCursor` | Transform tag at cursor |
-| - | `:CoderTransformVisual` | Transform selected tags (visual mode) |
-
-### Project & Index Commands
-| Command | Alias | Description |
-|---------|-------|-------------|
-| - | `:CoderIndex` | Open coder companion for current file |
-| `:Coder index-project` | `:CoderIndexProject` | Index entire project |
-| `:Coder index-status` | `:CoderIndexStatus` | Show project index status |
-
-### Tree & Structure Commands
-| Command | Alias | Description |
-|---------|-------|-------------|
-| `:Coder tree` | `:CoderTree` | Refresh .coder/tree.log |
-| `:Coder tree-view` | `:CoderTreeView` | View .coder/tree.log |
-
-### Queue & Scheduler Commands
-| Command | Alias | Description |
-|---------|-------|-------------|
-| `:Coder queue-status` | `:CoderQueueStatus` | Show scheduler/queue status |
-| `:Coder queue-process` | `:CoderQueueProcess` | Manually trigger queue processing |
-
-### Processing Mode Commands
-| Command | Alias | Description |
-|---------|-------|-------------|
-| `:Coder auto-toggle` | `:CoderAutoToggle` | Toggle automatic/manual processing |
-| `:Coder auto-set <mode>` | `:CoderAutoSet <mode>` | Set mode (auto/manual) |
-
-### Memory & Learning Commands
-| Command | Alias | Description |
-|---------|-------|-------------|
-| `:Coder memories` | `:CoderMemories` | Show learned memories |
-| `:Coder forget [pattern]` | `:CoderForget [pattern]` | Clear memories |
-
-### Brain Commands (Knowledge Graph)
-| Command | Alias | Description |
-|---------|-------|-------------|
-| - | `:CoderBrain [action]` | Brain management (stats/commit/flush/prune) |
-| - | `:CoderFeedback <type>` | Give feedback (good/bad/stats) |
-
-### LLM Statistics & Feedback
+### Conflict Resolution
 | Command | Description |
 |---------|-------------|
-| `:Coder llm-stats` | Show LLM provider accuracy stats |
-| `:Coder llm-feedback-good` | Report positive feedback |
-| `:Coder llm-feedback-bad` | Report negative feedback |
-| `:Coder llm-reset-stats` | Reset LLM accuracy stats |
+| `:CoderConflictToggle` | Toggle conflict mode |
+| `:CoderConflictMenu` | Show resolution menu |
+| `:CoderConflictNext` | Go to next conflict |
+| `:CoderConflictPrev` | Go to previous conflict |
+| `:CoderConflictStatus` | Show conflict status |
+| `:CoderConflictResolveAll [keep]` | Resolve all |
+| `:CoderConflictAcceptCurrent` | Accept original |
+| `:CoderConflictAcceptIncoming` | Accept AI |
+| `:CoderConflictAcceptBoth` | Accept both |
+| `:CoderConflictAcceptNone` | Delete both |
+| `:CoderConflictAutoMenu` | Toggle auto-show menu |
 
-### Cost Tracking
+### Linter Validation
+| Command | Description |
+|---------|-------------|
+| `:CoderLintCheck` | Check buffer |
+| `:CoderLintFix` | AI fix errors |
+| `:CoderLintQuickfix` | Show in quickfix |
+| `:CoderLintToggleAuto` | Toggle auto lint |
+
+### Queue & Scheduler
 | Command | Alias | Description |
 |---------|-------|-------------|
-| `:Coder cost` | `:CoderCost` | Show LLM cost estimation window |
-| `:Coder cost-clear` | - | Clear session cost tracking |
+| `:Coder queue-status` | `:CoderQueueStatus` | Show status |
+| `:Coder queue-process` | `:CoderQueueProcess` | Trigger processing |
 
-### Credentials Management
+### Processing Mode
 | Command | Alias | Description |
 |---------|-------|-------------|
-| `:Coder add-api-key` | `:CoderAddApiKey` | Add/update LLM provider credentials |
-| `:Coder remove-api-key` | `:CoderRemoveApiKey` | Remove provider credentials |
-| `:Coder credentials` | `:CoderCredentials` | Show credentials status |
-| `:Coder switch-provider` | `:CoderSwitchProvider` | Switch active provider |
+| `:Coder auto-toggle` | `:CoderAutoToggle` | Toggle auto/manual |
+| `:Coder auto-set <mode>` | `:CoderAutoSet` | Set mode |
+
+### Brain & Memory
+| Command | Description |
+|---------|-------------|
+| `:CoderMemories` | Show memories |
+| `:CoderForget [pattern]` | Clear memories |
+| `:CoderBrain [action]` | Brain management |
+| `:CoderFeedback <type>` | Give feedback |
+
+### Cost & Credentials
+| Command | Description |
+|---------|-------------|
+| `:CoderCost` | Show cost window |
+| `:CoderAddApiKey` | Add/update API key |
+| `:CoderRemoveApiKey` | Remove credentials |
+| `:CoderCredentials` | Show credentials |
+| `:CoderSwitchProvider` | Switch provider |
 
 ### UI Commands
-| Command | Alias | Description |
-|---------|-------|-------------|
-| `:Coder type-toggle` | `:CoderType` | Show Ask/Agent mode switcher |
-| `:Coder logs-toggle` | `:CoderLogs` | Toggle logs panel |
+| Command | Description |
+|---------|-------------|
+| `:CoderLogs` | Toggle logs panel |
+| `:CoderType` | Show mode switcher |
+
+## Keymaps Reference
+
+### Default Keymaps
+| Key | Mode | Description |
+|-----|------|-------------|
+| `<leader>ctt` | Normal | Transform tag at cursor |
+| `<leader>ctt` | Visual | Transform selected tags |
+| `<leader>ctT` | Normal | Transform all tags |
+| `<leader>ca` | Normal | Toggle Agent panel |
+| `<leader>ci` | Normal | Open coder companion |
+
+### Ask Panel Keymaps
+| Key | Description |
+|-----|-------------|
+| `@` | Attach file |
+| `Ctrl+Enter` | Submit |
+| `Ctrl+n` | New chat |
+| `Ctrl+f` | Add current file |
+| `q` | Close |
+| `Y` | Copy response |
+
+### Agent Panel Keymaps
+| Key | Description |
+|-----|-------------|
+| `<CR>` | Submit |
+| `Ctrl+c` | Stop agent |
+| `q` | Close |
+
+### Logs Panel Keymaps
+| Key | Description |
+|-----|-------------|
+| `q`/`<Esc>` | Close |
+
+### Cost Window Keymaps
+| Key | Description |
+|-----|-------------|
+| `q`/`<Esc>` | Close |
+| `r` | Refresh |
+| `c` | Clear session |
+| `C` | Clear all |
 
 ## Configuration Schema
 
 ```lua
 {
   llm = {
-    provider = "claude",  -- "claude" | "openai" | "gemini" | "copilot" | "ollama"
-    claude = {
-      api_key = nil,      -- string, uses ANTHROPIC_API_KEY env if nil
-      model = "claude-sonnet-4-20250514",
-    },
-    openai = {
-      api_key = nil,      -- string, uses OPENAI_API_KEY env if nil
-      model = "gpt-4o",
-      endpoint = nil,     -- custom endpoint for Azure, OpenRouter, etc.
-    },
-    gemini = {
-      api_key = nil,      -- string, uses GEMINI_API_KEY env if nil
-      model = "gemini-2.0-flash",
-    },
-    copilot = {
-      model = "gpt-4o",   -- uses OAuth from copilot.lua/copilot.vim
-    },
-    ollama = {
-      host = "http://localhost:11434",
-      model = "deepseek-coder:6.7b",
-    },
+    provider = "claude",
+    claude = { api_key = nil, model = "claude-sonnet-4-20250514" },
+    openai = { api_key = nil, model = "gpt-4o", endpoint = nil },
+    gemini = { api_key = nil, model = "gemini-2.0-flash" },
+    copilot = { model = "gpt-4o" },
+    ollama = { host = "http://localhost:11434", model = "deepseek-coder:6.7b" },
   },
   window = {
-    width = 25,           -- percentage (25 = 25% of screen)
-    position = "left",    -- "left" | "right"
+    width = 25,
+    position = "left",
     border = "rounded",
   },
   patterns = {
@@ -381,13 +409,14 @@ All commands can be invoked via `:Coder {subcommand}` or dedicated aliases.
   },
   auto_gitignore = true,
   auto_open_ask = true,
-  auto_index = false,     -- auto-create coder companion files
+  auto_index = false,
   scheduler = {
-    enabled = true,           -- enable event-driven scheduler
-    ollama_scout = true,      -- use Ollama as fast scout
+    enabled = true,
+    ollama_scout = true,
     escalation_threshold = 0.7,
     max_concurrent = 2,
     completion_delay_ms = 100,
+    apply_delay_ms = 5000,
   },
 }
 ```
@@ -396,29 +425,26 @@ All commands can be invoked via `:Coder {subcommand}` or dedicated aliases.
 
 ### Claude API
 - Endpoint: `https://api.anthropic.com/v1/messages`
-- Uses `x-api-key` header for authentication
-- Supports tool use for agent mode
+- Auth: `x-api-key` header
+- Supports tool use
 
 ### OpenAI API
 - Endpoint: `https://api.openai.com/v1/chat/completions` (configurable)
-- Uses `Authorization: Bearer` header
-- Supports tool use for agent mode
-- Compatible with Azure, OpenRouter, and other OpenAI-compatible APIs
+- Auth: `Authorization: Bearer`
+- Compatible with Azure, OpenRouter
 
 ### Gemini API
 - Endpoint: `https://generativelanguage.googleapis.com/v1beta/models`
-- Uses API key in URL parameter
-- Supports function calling for agent mode
+- Auth: API key in URL
+- Supports function calling
 
 ### Copilot API
 - Uses GitHub OAuth token from copilot.lua/copilot.vim
-- Endpoint from token response (typically `api.githubcopilot.com`)
 - OpenAI-compatible format
 
 ### Ollama API
 - Endpoint: `{host}/api/generate` or `{host}/api/chat`
-- No authentication required for local instances
-- Tool use via prompt-based approach
+- No auth required locally
 
 ## Agent Tool Definitions
 
@@ -430,13 +456,6 @@ tools = {
   bash = { command: string, timeout?: number },
 }
 ```
-
-## Code Injection Strategies
-
-1. **Refactor**: Replace entire file content
-2. **Add**: Insert at cursor position in target file
-3. **Document**: Insert above current function/class
-4. **Generic**: Prompt user for action
 
 ## File Naming Convention
 
@@ -450,8 +469,8 @@ Pattern: `name.coder.extension`
 
 ## Dependencies
 
-- **Required**: Neovim >= 0.8.0, curl
-- **Optional**: telescope.nvim (enhanced file picker), copilot.lua or copilot.vim (for Copilot provider)
+- **Required**: Neovim >= 0.8.0, curl, plenary.nvim, nvim-treesitter
+- **Optional**: telescope.nvim, copilot.lua/copilot.vim, nui.nvim
 
 ## Contact
 

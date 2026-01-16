@@ -172,6 +172,36 @@ local function get_buffer_completions(prefix, bufnr)
 	return items
 end
 
+--- Try to get Copilot suggestion if plugin is installed
+---@param prefix string
+---@return string|nil suggestion
+local function get_copilot_suggestion(prefix)
+	-- Try copilot.lua suggestion API first
+	local ok, copilot_suggestion = pcall(require, "copilot.suggestion")
+	if ok and copilot_suggestion and type(copilot_suggestion.get_suggestion) == "function" then
+		local ok2, suggestion = pcall(copilot_suggestion.get_suggestion)
+		if ok2 and suggestion and suggestion ~= "" then
+			-- Only return if suggestion seems to start with prefix (best-effort)
+			if prefix == "" or suggestion:lower():match(prefix:lower(), 1) then
+				return suggestion
+			else
+				return suggestion
+			end
+		end
+	end
+
+	-- Fallback: try older copilot module if present
+	local ok3, copilot = pcall(require, "copilot")
+	if ok3 and copilot and type(copilot.get_suggestion) == "function" then
+		local ok4, suggestion = pcall(copilot.get_suggestion)
+		if ok4 and suggestion and suggestion ~= "" then
+			return suggestion
+		end
+	end
+
+	return nil
+end
+
 --- Create new cmp source instance
 function source.new()
 	return setmetatable({}, { __index = source })
@@ -247,6 +277,32 @@ function source:complete(params, callback)
 					item.sortText = "3" .. item.label
 					table.insert(items, item)
 				end
+			end
+		end
+	end
+
+	-- If Copilot is installed, prefer its suggestion as a top-priority completion
+	local ok_cp, _ = pcall(require, "copilot")
+	if ok_cp then
+		local suggestion = nil
+		local ok_sug, res = pcall(get_copilot_suggestion, prefix)
+		if ok_sug then
+			suggestion = res
+		end
+		if suggestion and suggestion ~= "" then
+			-- Truncate suggestion to first line for label display
+			local first_line = suggestion:match("([^
+]+)") or suggestion
+			-- Avoid duplicates
+			if not seen[first_line] then
+				seen[first_line] = true
+				table.insert(items, 1, {
+					label = first_line,
+					kind = 1,
+					detail = "[copilot]",
+					documentation = suggestion,
+					sortText = "0" .. first_line,
+				})
 			end
 		end
 	end

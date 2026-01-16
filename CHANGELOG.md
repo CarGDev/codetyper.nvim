@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-01-16
+
+### Added
+
+- **Conflict Resolution System** - Git-style diff visualization for code review
+  - New `conflict.lua` module with full conflict management
+  - Git-style markers: `<<<<<<< CURRENT`, `=======`, `>>>>>>> INCOMING`
+  - Visual highlighting: green for original, blue for AI suggestions
+  - Buffer-local keymaps: `co` (ours), `ct` (theirs), `cb` (both), `cn` (none)
+  - Navigation keymaps: `]x` (next), `[x` (previous)
+  - Floating menu with `cm` or `<CR>` on conflict
+  - Number keys `1-4` for quick selection in menu
+  - Auto-show menu after code injection
+  - Auto-show menu for next conflict after resolution
+  - Commands: `:CoderConflictToggle`, `:CoderConflictMenu`, `:CoderConflictNext`, `:CoderConflictPrev`, `:CoderConflictStatus`, `:CoderConflictResolveAll`, `:CoderConflictAcceptCurrent`, `:CoderConflictAcceptIncoming`, `:CoderConflictAcceptBoth`, `:CoderConflictAcceptNone`, `:CoderConflictAutoMenu`
+
+- **Linter Validation System** - Auto-check and fix lint errors after code injection
+  - New `linter.lua` module for LSP diagnostics integration
+  - Auto-saves file after code injection
+  - Waits for LSP diagnostics to update
+  - Detects errors and warnings in injected code region
+  - Auto-queues AI fix prompts for lint errors
+  - Shows errors in quickfix list
+  - Commands: `:CoderLintCheck`, `:CoderLintFix`, `:CoderLintQuickfix`, `:CoderLintToggleAuto`
+
+- **SEARCH/REPLACE Block System** - Reliable code editing with fuzzy matching
+  - New `search_replace.lua` module for reliable code editing
+  - Parses SEARCH/REPLACE blocks from LLM responses
+  - Fuzzy matching with configurable thresholds
+  - Whitespace normalization for better matching
+  - Multiple matching strategies: exact, normalized, line-by-line
+  - Automatic fallback to line-based injection
+
+- **Process and Show Menu Function** - Streamlined conflict handling
+  - New `process_and_show_menu()` function combines processing and menu display
+  - Ensures highlights and keymaps are set up before showing menu
+
+### Changed
+
+- Unified automatic and manual tag processing to use same code path
+- `insert_conflict()` now only inserts markers, callers handle processing
+- Added `nowait = true` to conflict keymaps to prevent delay from built-in `c` command
+- Improved patch application flow with conflict mode integration
+
+### Fixed
+
+- Fixed `string.gsub` returning two values causing `table.insert` errors
+- Fixed keymaps not triggering due to Neovim's `c` command intercepting first character
+- Fixed menu not showing after code injection
+- Fixed diff highlighting not appearing
+
+---
+
 ## [0.5.0] - 2026-01-15
 
 ### Added
@@ -25,14 +78,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Notifies user of provider switch
 
 - **Enhanced Error Handling** - Better error messages for API failures
-  - Shows actual API response on parse errors (not generic "failed to parse")
+  - Shows actual API response on parse errors
   - Improved rate limit detection and messaging
-  - Sanitized newlines in error notifications to prevent UI crashes
+  - Sanitized newlines in error notifications
 
 - **Agent Tools System Improvements**
   - New `to_openai_format()` and `to_claude_format()` functions
   - `get_definitions()` for generic tool access
-  - Fixed tool call argument serialization (JSON strings vs tables)
+  - Fixed tool call argument serialization
 
 - **Credentials Management System** - Store API keys outside of config files
   - New `:CoderAddApiKey` command for interactive credential setup
@@ -40,8 +93,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `:CoderCredentials` to view credential status
   - `:CoderSwitchProvider` to switch active LLM provider
   - Credentials stored in `~/.local/share/nvim/codetyper/configuration.json`
-  - Priority: stored credentials > config > environment variables
-  - Supports all providers: Claude, OpenAI, Gemini, Copilot, Ollama
 
 ### Changed
 
@@ -54,7 +105,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed "Failed to parse Copilot response" error showing instead of actual error
 - Fixed `nvim_buf_set_lines` crash from newlines in error messages
 - Fixed `tools.definitions` nil error in agent initialization
-- Fixed tool name mismatch in agent prompts (write_file vs write)
+- Fixed tool name mismatch in agent prompts
 
 ---
 
@@ -63,7 +114,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Event-Driven Architecture** - Complete rewrite of prompt processing system
-  - Prompts are now treated as events with metadata (buffer state, priority, timestamps)
+  - Prompts are now treated as events with metadata
   - New modules: `queue.lua`, `patch.lua`, `confidence.lua`, `worker.lua`, `scheduler.lua`
   - Priority-based event queue with observer pattern
   - Buffer snapshots for staleness detection
@@ -74,42 +125,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Configurable escalation threshold (default: 0.7)
 
 - **Confidence Scoring** - Response quality heuristics
-  - 5 weighted heuristics: length, uncertainty phrases, syntax completeness, repetition, truncation
+  - 5 weighted heuristics: length, uncertainty, syntax, repetition, truncation
   - Scores range from 0.0-1.0
   - Determines whether to escalate to more capable LLM
 
 - **Staleness Detection** - Safe patch application
   - Track `vim.b.changedtick` and content hash at prompt time
   - Discard patches if buffer changed during generation
-  - Prevents stale code injection
 
 - **Completion-Aware Injection** - No fighting with autocomplete
   - Defer code injection while completion popup visible
   - Works with native popup, nvim-cmp, and coq_nvim
-  - Configurable delay after popup closes (default: 100ms)
 
 - **Tree-sitter Scope Resolution** - Smart context extraction
   - Automatically resolves prompts to enclosing function/method/class
   - Falls back to heuristics when Tree-sitter unavailable
-  - Scope types: function, method, class, block, file
 
 - **Intent Detection** - Understands what you want
   - Parses prompts to detect: complete, refactor, fix, add, document, test, optimize, explain
-  - Intent determines injection strategy (replace vs insert vs append)
-  - Priority adjustment based on intent type
-
-- **Tag Precedence Rules** - Multiple tags handled cleanly
-  - First tag in scope wins (FIFO ordering)
-  - Later tags in same scope skipped with warning
-  - Different scopes process independently
+  - Intent determines injection strategy
 
 ### Configuration
 
 New `scheduler` configuration block:
 ```lua
 scheduler = {
-  enabled = true,           -- Enable event-driven mode
-  ollama_scout = true,      -- Use Ollama first
+  enabled = true,
+  ollama_scout = true,
   escalation_threshold = 0.7,
   max_concurrent = 2,
   completion_delay_ms = 100,
@@ -122,50 +164,32 @@ scheduler = {
 
 ### Added
 
-- **Multiple LLM Providers** - Support for additional providers beyond Claude and Ollama
-  - OpenAI API with custom endpoint support (Azure, OpenRouter, etc.)
+- **Multiple LLM Providers** - Support for additional providers
+  - OpenAI API with custom endpoint support
   - Google Gemini API
-  - GitHub Copilot (uses existing copilot.lua/copilot.vim authentication)
+  - GitHub Copilot
 
 - **Agent Mode** - Autonomous coding assistant with tool use
-  - `read_file` - Read file contents
-  - `edit_file` - Edit files with find/replace
-  - `write_file` - Create or overwrite files
-  - `bash` - Execute shell commands
+  - `read_file`, `edit_file`, `write_file`, `bash` tools
   - Real-time logging of agent actions
   - `:CoderAgent`, `:CoderAgentToggle`, `:CoderAgentStop` commands
 
-- **Transform Commands** - Transform /@ @/ tags inline without split view
-  - `:CoderTransform` - Transform all tags in file
-  - `:CoderTransformCursor` - Transform tag at cursor
-  - `:CoderTransformVisual` - Transform selected tags
-  - Default keymaps: `<leader>ctt` (cursor/visual), `<leader>ctT` (all)
+- **Transform Commands** - Transform /@ @/ tags inline
+  - `:CoderTransform`, `:CoderTransformCursor`, `:CoderTransformVisual`
+  - Default keymaps: `<leader>ctt`, `<leader>ctT`
 
 - **Auto-Index Feature** - Automatically create coder companion files
   - Creates `.coder.` companion files when opening source files
-  - Language-aware templates with correct comment syntax
-  - `:CoderIndex` command to manually open companion
-  - `<leader>ci` keymap
-  - Configurable via `auto_index` option (disabled by default)
+  - Language-aware templates
 
 - **Logs Panel** - Real-time visibility into LLM operations
-  - Token usage tracking (prompt and completion tokens)
-  - "Thinking" process visibility
-  - Request/response logging
-  - `:CoderLogs` command to toggle panel
 
 - **Mode Switcher** - Switch between Ask and Agent modes
-  - `:CoderType` command shows mode selection UI
 
 ### Changed
 
-- Window width configuration now uses percentage as whole number (e.g., `25` for 25%)
+- Window width configuration now uses percentage as whole number
 - Improved code extraction from LLM responses
-- Better prompt templates for code generation
-
-### Fixed
-
-- Window width calculation consistency across modules
 
 ---
 
@@ -174,31 +198,23 @@ scheduler = {
 ### Added
 
 - **Ask Panel** - Chat interface for asking questions about code
-  - Fixed at 1/4 (25%) screen width for consistent layout
-  - File attachment with `@` key (uses Telescope if available)
-  - `Ctrl+n` to start a new chat (clears input and history)
+  - Fixed at 1/4 (25%) screen width
+  - File attachment with `@` key
+  - `Ctrl+n` to start a new chat
   - `Ctrl+Enter` to submit questions
   - `Ctrl+f` to add current file as context
-  - `Ctrl+h/j/k/l` for window navigation
-  - `K/J` to jump between output and input windows
-  - `Y` to copy last response to clipboard
-  - `q` to close panel (closes both windows together)
-- Auto-open Ask panel on startup (configurable via `auto_open_ask`)
-- File content is now sent to LLM when attaching files with `@`
+  - `Y` to copy last response
 
 ### Changed
 
-- Ask panel width is now fixed at 25% (1/4 of screen)
-- Improved close behavior - closing either Ask window closes both
-- Proper focus management after closing Ask panel
-- Compact UI elements to fit 1/4 width layout
-- Changed "Assistant" label to "AI" in chat messages
+- Ask panel width is now fixed at 25%
+- Improved close behavior
+- Changed "Assistant" label to "AI"
 
 ### Fixed
 
 - Ask panel window state sync issues
-- Window focus returning to code after closing Ask panel
-- NerdTree/nvim-tree causing Ask panel to resize incorrectly
+- Window focus returning to code after closing
 
 ---
 
@@ -210,27 +226,13 @@ scheduler = {
 - Core plugin architecture with modular Lua structure
 - Split window view for coder and target files
 - Tag-based prompt system (`/@` to open, `@/` to close)
-- Claude API integration for code generation
-- Ollama API integration for local LLM support
-- Automatic `.gitignore` management for coder files and `.coder/` folder
-- Smart prompt type detection (refactor, add, document, explain)
-- Code injection system with multiple strategies
-- User commands: `Coder`, `CoderOpen`, `CoderClose`, `CoderToggle`, `CoderProcess`, `CoderTree`, `CoderTreeView`
-- Health check module (`:checkhealth codetyper`)
-- Comprehensive documentation and help files
-- Telescope integration for file selection (optional)
-- **Project tree logging**: Automatic `.coder/tree.log` maintenance
-  - Updates on file create, save, delete
-  - Debounced updates (1 second) for performance
-  - File type icons for visual clarity
-  - Ignores common build/dependency folders
-
-### Configuration Options
-
-- LLM provider selection (Claude/Ollama)
-- Window position and width customization
-- Custom prompt tag patterns
-- Auto gitignore toggle
+- Claude API integration
+- Ollama API integration
+- Automatic `.gitignore` management
+- Smart prompt type detection
+- Code injection system
+- Health check module
+- Project tree logging
 
 ---
 
@@ -245,7 +247,8 @@ scheduler = {
 - **Fixed** - Bug fixes
 - **Security** - Vulnerability fixes
 
-[Unreleased]: https://github.com/cargdev/codetyper.nvim/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/cargdev/codetyper.nvim/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/cargdev/codetyper.nvim/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/cargdev/codetyper.nvim/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/cargdev/codetyper.nvim/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/cargdev/codetyper.nvim/compare/v0.2.0...v0.3.0

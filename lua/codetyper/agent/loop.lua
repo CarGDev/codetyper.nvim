@@ -1,7 +1,7 @@
 ---@mod codetyper.agent.loop Agent loop with tool orchestration
 ---@brief [[
 --- Main agent loop that handles multi-turn conversations with tool use.
---- Inspired by avante.nvim's agent_loop pattern.
+--- Agent execution loop with tool calling support.
 ---@brief ]]
 
 local M = {}

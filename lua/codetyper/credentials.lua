@@ -221,8 +221,38 @@ M.default_models = {
 	claude = "claude-sonnet-4-20250514",
 	openai = "gpt-4o",
 	gemini = "gemini-2.0-flash",
-	copilot = "gpt-4o",
+	copilot = "claude-sonnet-4",
 	ollama = "deepseek-coder:6.7b",
+}
+
+--- Available models for Copilot (GitHub Copilot Chat API)
+--- Models are ordered by capability/cost (most capable first)
+M.copilot_models = {
+	-- GPT-5 series
+	"gpt-5.2-codex",
+	"gpt-5.2",
+	"gpt-5.1-codex-max",
+	"gpt-5.1-codex",
+	"gpt-5.1-codex-mini",
+	"gpt-5.1",
+	"gpt-5-codex",
+	"gpt-5",
+	"gpt-5-mini",
+	-- GPT-4 series
+	"gpt-4.1",
+	"gpt-4o",
+	-- Claude models
+	"claude-opus-4.5",
+	"claude-sonnet-4.5",
+	"claude-sonnet-4",
+	"claude-haiku-4.5",
+	-- Gemini models
+	"gemini-2.5-pro",
+	"gemini-3-pro",
+	"gemini-3-flash",
+	-- Other models
+	"grok-code-fast-1",
+	"raptor-mini",
 }
 
 --- Interactive command to add/update API key
@@ -280,25 +310,45 @@ end
 function M.interactive_copilot_config()
 	utils.notify("Copilot uses OAuth from copilot.lua/copilot.vim - no API key needed", vim.log.levels.INFO)
 
-	-- Just ask for model
-	local default_model = M.default_models.copilot
-	vim.ui.input({
-		prompt = string.format("Copilot model (default: %s): ", default_model),
-		default = default_model,
-	}, function(model)
-		if model == nil then
+	-- Get current model if configured
+	local current_model = M.get_model("copilot") or M.default_models.copilot
+
+	-- Build model options with "Custom..." option
+	local model_options = vim.deepcopy(M.copilot_models)
+	table.insert(model_options, "Custom...")
+
+	vim.ui.select(model_options, {
+		prompt = "Select Copilot model (current: " .. current_model .. "):",
+		format_item = function(item)
+			if item == current_model then
+				return item .. " [current]"
+			end
+			return item
+		end,
+	}, function(choice)
+		if choice == nil then
 			return -- Cancelled
 		end
 
-		if model == "" then
-			model = default_model
+		if choice == "Custom..." then
+			-- Allow custom model input
+			vim.ui.input({
+				prompt = "Enter custom model name: ",
+				default = current_model,
+			}, function(custom_model)
+				if custom_model and custom_model ~= "" then
+					M.save_and_notify("copilot", {
+						model = custom_model,
+						configured = true,
+					})
+				end
+			end)
+		else
+			M.save_and_notify("copilot", {
+				model = choice,
+				configured = true,
+			})
 		end
-
-		M.save_and_notify("copilot", {
-			model = model,
-			-- Mark as configured even without API key
-			configured = true,
-		})
 	end)
 end
 

@@ -1,7 +1,7 @@
 ---@mod codetyper.agent.agentic Agentic loop with proper tool calling
 ---@brief [[
 --- Full agentic system that handles multi-file changes via tool calling.
---- Inspired by avante.nvim and opencode patterns.
+--- Multi-file agent system with tool orchestration.
 ---@brief ]]
 
 local M = {}

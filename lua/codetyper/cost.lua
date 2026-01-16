@@ -100,7 +100,7 @@ M.pricing = {
 	["gpt-image-1"] = { input = 5.00, cached_input = 1.25, output = nil },
 	["gpt-image-1-mini"] = { input = 2.00, cached_input = 0.20, output = nil },
 
-	-- Claude models (Anthropic)
+	-- Claude models
 	["claude-3-opus"] = { input = 15.00, cached_input = 7.50, output = 75.00 },
 	["claude-3-sonnet"] = { input = 3.00, cached_input = 1.50, output = 15.00 },
 	["claude-3-haiku"] = { input = 0.25, cached_input = 0.125, output = 1.25 },

@@ -439,10 +439,9 @@ function M.generate_with_tools(messages, context, tool_definitions, callback)
 		local tools_module = require("codetyper.agent.tools")
 		local agent_prompts = require("codetyper.prompts.agent")
 
-		-- Build system prompt with agent instructions
+		-- Build system prompt with agent instructions and project context
 		local system_prompt = llm.build_system_prompt(context)
-		system_prompt = system_prompt .. "\n\n" .. agent_prompts.system
-		system_prompt = system_prompt .. "\n\n" .. agent_prompts.tool_instructions
+		system_prompt = system_prompt .. "\n\n" .. agent_prompts.build_system_prompt()
 
 		-- Format messages for Copilot (OpenAI-compatible format)
 		local copilot_messages = { { role = "system", content = system_prompt } }
@@ -471,9 +470,21 @@ function M.generate_with_tools(messages, context, tool_definitions, callback)
 					role = "assistant",
 					content = type(msg.content) == "string" and msg.content or nil,
 				}
-				-- Preserve tool_calls for the API
-				if msg.tool_calls then
-					assistant_msg.tool_calls = msg.tool_calls
+				-- Convert tool_calls to OpenAI format for the API
+				if msg.tool_calls and #msg.tool_calls > 0 then
+					assistant_msg.tool_calls = {}
+					for _, tc in ipairs(msg.tool_calls) do
+						-- Convert from parsed format {id, name, parameters} to OpenAI format
+						local openai_tc = {
+							id = tc.id,
+							type = "function",
+							["function"] = {
+								name = tc.name,
+								arguments = vim.json.encode(tc.parameters or {}),
+							},
+						}
+						table.insert(assistant_msg.tool_calls, openai_tc)
+					end
 					-- Ensure content is not nil when tool_calls present
 					if assistant_msg.content == nil then
 						assistant_msg.content = ""
@@ -497,6 +508,7 @@ function M.generate_with_tools(messages, context, tool_definitions, callback)
 			temperature = 0.3,
 			stream = false,
 			tools = tools_module.to_openai_format(),
+			tool_choice = "auto", -- Encourage the model to use tools when appropriate
 		}
 
 		local endpoint = (token.endpoints and token.endpoints.api or "https://api.githubcopilot.com")

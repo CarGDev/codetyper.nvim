@@ -117,9 +117,16 @@ function M.add_to_gitignore()
 end
 
 --- Ensure coder files are in .gitignore (called on setup)
+--- Only adds to .gitignore if in a git project (has .git/ folder)
+--- Does NOT ask for permission - silently adds entries
 ---@param auto_gitignore? boolean Override auto_gitignore setting (default: true)
 ---@return boolean Success status
 function M.ensure_ignored(auto_gitignore)
+  -- Only add to gitignore if this is a git project
+  if not utils.is_git_project() then
+    return false -- Not a git project, skip
+  end
+
   -- Default to true if not specified
   if auto_gitignore == nil then
     -- Try to get from config if available
@@ -140,7 +147,46 @@ function M.ensure_ignored(auto_gitignore)
     return true
   end
 
-  return M.add_to_gitignore()
+  -- Silently add to gitignore (no notifications unless there's an error)
+  return M.add_to_gitignore_silent()
+end
+
+--- Add coder patterns to .gitignore silently (no notifications)
+---@return boolean Success status
+function M.add_to_gitignore_silent()
+  local gitignore_path = M.get_gitignore_path()
+  if not gitignore_path then
+    return false
+  end
+
+  local content = utils.read_file(gitignore_path)
+  local patterns_to_add = {}
+
+  if content then
+    local _, missing = all_patterns_exist(content)
+    if #missing == 0 then
+      return true
+    end
+    patterns_to_add = missing
+  else
+    content = ""
+    patterns_to_add = IGNORE_PATTERNS
+  end
+
+  local patterns_str = table.concat(patterns_to_add, "\n")
+
+  if content == "" then
+    content = CODER_COMMENT .. "\n" .. patterns_str .. "\n"
+  else
+    local newline = content:sub(-1) == "\n" and "" or "\n"
+    if not content:match(utils.escape_pattern(CODER_COMMENT)) then
+      content = content .. newline .. "\n" .. CODER_COMMENT .. "\n" .. patterns_str .. "\n"
+    else
+      content = content .. newline .. patterns_str .. "\n"
+    end
+  end
+
+  return utils.write_file(gitignore_path, content)
 end
 
 --- Remove coder patterns from .gitignore

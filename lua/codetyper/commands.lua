@@ -234,10 +234,11 @@ local function cmd_gitignore()
   gitignore.force_update()
 end
 
---- Open ask panel
-local function cmd_ask()
+--- Open ask panel (with optional visual selection)
+---@param selection table|nil Visual selection info
+local function cmd_ask(selection)
   local ask = require("codetyper.ask")
-  ask.open()
+  ask.open(selection)
 end
 
 --- Close ask panel
@@ -258,10 +259,11 @@ local function cmd_ask_clear()
   ask.clear_history()
 end
 
---- Open agent panel
-local function cmd_agent()
+--- Open agent panel (with optional visual selection)
+---@param selection table|nil Visual selection info
+local function cmd_agent(selection)
   local agent_ui = require("codetyper.agent.ui")
-  agent_ui.open()
+  agent_ui.open(selection)
 end
 
 --- Close agent panel
@@ -482,9 +484,10 @@ end
 
 --- Transform inline /@ @/ tags in current file
 --- Works on ANY file, not just .coder.* files
+--- Uses the same processing logic as automatic mode for consistent results
 local function cmd_transform()
   local parser = require("codetyper.parser")
-  local llm = require("codetyper.llm")
+  local autocmds = require("codetyper.autocmds")
   local logs_panel = require("codetyper.logs_panel")
   local logs = require("codetyper.agent.logs")
 
@@ -506,113 +509,25 @@ local function cmd_transform()
 
   -- Open the logs panel to show generation progress
   logs_panel.open()
-  logs.info("Transform started: " .. #prompts .. " prompt(s)")
+  logs.info("Transform started: " .. #prompts .. " prompt(s) in " .. vim.fn.fnamemodify(filepath, ":t"))
 
   utils.notify("Found " .. #prompts .. " prompt(s) to transform...", vim.log.levels.INFO)
 
-  -- Build context for this file
-  local ext = vim.fn.fnamemodify(filepath, ":e")
-  local context = llm.build_context(filepath, "code_generation")
+  -- Reset processed prompts tracking so we can re-process them (silent mode)
+  autocmds.reset_processed(bufnr, true)
 
-  -- Process prompts in reverse order (bottom to top) to maintain line numbers
-  local sorted_prompts = {}
-  for i = #prompts, 1, -1 do
-    table.insert(sorted_prompts, prompts[i])
-  end
-
-  -- Track how many are being processed
-  local pending = #sorted_prompts
-  local completed = 0
-  local errors = 0
-
-  -- Process each prompt
-  for _, prompt in ipairs(sorted_prompts) do
-    local clean_prompt = parser.clean_prompt(prompt.content)
-    local prompt_type = parser.detect_prompt_type(prompt.content)
-
-    -- Build enhanced user prompt
-    local enhanced_prompt = "TASK: " .. clean_prompt .. "\n\n"
-    enhanced_prompt = enhanced_prompt .. "REQUIREMENTS:\n"
-    enhanced_prompt = enhanced_prompt .. "- Generate ONLY " .. (context.language or "code") .. " code\n"
-    enhanced_prompt = enhanced_prompt .. "- NO markdown code blocks (no ```)\n"
-    enhanced_prompt = enhanced_prompt .. "- NO explanations or comments about what you did\n"
-    enhanced_prompt = enhanced_prompt .. "- Match the coding style of the existing file exactly\n"
-    enhanced_prompt = enhanced_prompt .. "- Output must be ready to insert directly into the file\n"
-
-    logs.info("Processing: " .. clean_prompt:sub(1, 40) .. "...")
-    utils.notify("Processing: " .. clean_prompt:sub(1, 40) .. "...", vim.log.levels.INFO)
-
-    -- Generate code for this prompt
-    llm.generate(enhanced_prompt, context, function(response, err)
-      if err then
-        logs.error("Failed: " .. err)
-        utils.notify("Failed: " .. err, vim.log.levels.ERROR)
-        errors = errors + 1
-      elseif response then
-        -- Replace the prompt tag with generated code
-        vim.schedule(function()
-          -- Get current buffer lines
-          local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-
-          -- Calculate the exact range to replace
-          local start_line = prompt.start_line
-          local end_line = prompt.end_line
-
-          -- Find the full lines containing the tags
-          local start_line_content = lines[start_line] or ""
-          local end_line_content = lines[end_line] or ""
-
-          -- Check if there's content before the opening tag on the same line
-          local codetyper = require("codetyper")
-          local config = codetyper.get_config()
-          local before_tag = ""
-          local after_tag = ""
-
-          local open_pos = start_line_content:find(utils.escape_pattern(config.patterns.open_tag))
-          if open_pos and open_pos > 1 then
-            before_tag = start_line_content:sub(1, open_pos - 1)
-          end
-
-          local close_pos = end_line_content:find(utils.escape_pattern(config.patterns.close_tag))
-          if close_pos then
-            local after_close = close_pos + #config.patterns.close_tag
-            if after_close <= #end_line_content then
-              after_tag = end_line_content:sub(after_close)
-            end
-          end
-
-          -- Build the replacement lines
-          local replacement_lines = vim.split(response, "\n", { plain = true })
-
-          -- Add before/after content if any
-          if before_tag ~= "" and #replacement_lines > 0 then
-            replacement_lines[1] = before_tag .. replacement_lines[1]
-          end
-          if after_tag ~= "" and #replacement_lines > 0 then
-            replacement_lines[#replacement_lines] = replacement_lines[#replacement_lines] .. after_tag
-          end
-
-          -- Replace the lines in buffer
-          vim.api.nvim_buf_set_lines(bufnr, start_line - 1, end_line, false, replacement_lines)
-
-          completed = completed + 1
-          if completed + errors >= pending then
-            local msg = "Transform complete: " .. completed .. " succeeded, " .. errors .. " failed"
-            logs.info(msg)
-            utils.notify(msg, errors > 0 and vim.log.levels.WARN or vim.log.levels.INFO)
-          end
-        end)
-      end
-    end)
-  end
+  -- Use the same processing logic as automatic mode
+  -- This ensures intent detection, scope resolution, and all other logic is identical
+  autocmds.check_all_prompts()
 end
 
 --- Transform prompts within a line range (for visual selection)
+--- Uses the same processing logic as automatic mode for consistent results
 ---@param start_line number Start line (1-indexed)
 ---@param end_line number End line (1-indexed)
 local function cmd_transform_range(start_line, end_line)
   local parser = require("codetyper.parser")
-  local llm = require("codetyper.llm")
+  local autocmds = require("codetyper.autocmds")
   local logs_panel = require("codetyper.logs_panel")
   local logs = require("codetyper.agent.logs")
 
@@ -646,85 +561,11 @@ local function cmd_transform_range(start_line, end_line)
 
   utils.notify("Found " .. #prompts .. " prompt(s) in selection to transform...", vim.log.levels.INFO)
 
-  -- Build context for this file
-  local context = llm.build_context(filepath, "code_generation")
-
-  -- Process prompts in reverse order (bottom to top) to maintain line numbers
-  local sorted_prompts = {}
-  for i = #prompts, 1, -1 do
-    table.insert(sorted_prompts, prompts[i])
-  end
-
-  local pending = #sorted_prompts
-  local completed = 0
-  local errors = 0
-
-  for _, prompt in ipairs(sorted_prompts) do
+  -- Process each prompt using the same logic as automatic mode (skip processed check for manual mode)
+  for _, prompt in ipairs(prompts) do
     local clean_prompt = parser.clean_prompt(prompt.content)
-
-    local enhanced_prompt = "TASK: " .. clean_prompt .. "\n\n"
-    enhanced_prompt = enhanced_prompt .. "REQUIREMENTS:\n"
-    enhanced_prompt = enhanced_prompt .. "- Generate ONLY " .. (context.language or "code") .. " code\n"
-    enhanced_prompt = enhanced_prompt .. "- NO markdown code blocks (no ```)\n"
-    enhanced_prompt = enhanced_prompt .. "- NO explanations or comments about what you did\n"
-    enhanced_prompt = enhanced_prompt .. "- Match the coding style of the existing file exactly\n"
-    enhanced_prompt = enhanced_prompt .. "- Output must be ready to insert directly into the file\n"
-
     logs.info("Processing: " .. clean_prompt:sub(1, 40) .. "...")
-    utils.notify("Processing: " .. clean_prompt:sub(1, 40) .. "...", vim.log.levels.INFO)
-
-    llm.generate(enhanced_prompt, context, function(response, err)
-      if err then
-        logs.error("Failed: " .. err)
-        utils.notify("Failed: " .. err, vim.log.levels.ERROR)
-        errors = errors + 1
-      elseif response then
-        vim.schedule(function()
-          local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-          local p_start_line = prompt.start_line
-          local p_end_line = prompt.end_line
-
-          local start_line_content = lines[p_start_line] or ""
-          local end_line_content = lines[p_end_line] or ""
-
-          local codetyper = require("codetyper")
-          local config = codetyper.get_config()
-          local before_tag = ""
-          local after_tag = ""
-
-          local open_pos = start_line_content:find(utils.escape_pattern(config.patterns.open_tag))
-          if open_pos and open_pos > 1 then
-            before_tag = start_line_content:sub(1, open_pos - 1)
-          end
-
-          local close_pos = end_line_content:find(utils.escape_pattern(config.patterns.close_tag))
-          if close_pos then
-            local after_close = close_pos + #config.patterns.close_tag
-            if after_close <= #end_line_content then
-              after_tag = end_line_content:sub(after_close)
-            end
-          end
-
-          local replacement_lines = vim.split(response, "\n", { plain = true })
-
-          if before_tag ~= "" and #replacement_lines > 0 then
-            replacement_lines[1] = before_tag .. replacement_lines[1]
-          end
-          if after_tag ~= "" and #replacement_lines > 0 then
-            replacement_lines[#replacement_lines] = replacement_lines[#replacement_lines] .. after_tag
-          end
-
-          vim.api.nvim_buf_set_lines(bufnr, p_start_line - 1, p_end_line, false, replacement_lines)
-
-          completed = completed + 1
-          if completed + errors >= pending then
-            local msg = "Transform complete: " .. completed .. " succeeded, " .. errors .. " failed"
-            logs.info(msg)
-            utils.notify(msg, errors > 0 and vim.log.levels.WARN or vim.log.levels.INFO)
-          end
-        end)
-      end
-    end)
+    autocmds.process_single_prompt(bufnr, prompt, filepath, true)
   end
 end
 
@@ -862,9 +703,10 @@ local function cmd_forget(pattern)
 end
 
 --- Transform a single prompt at cursor position
+--- Uses the same processing logic as automatic mode for consistent results
 local function cmd_transform_at_cursor()
   local parser = require("codetyper.parser")
-  local llm = require("codetyper.llm")
+  local autocmds = require("codetyper.autocmds")
   local logs_panel = require("codetyper.logs_panel")
   local logs = require("codetyper.agent.logs")
 
@@ -888,70 +730,11 @@ local function cmd_transform_at_cursor()
   logs_panel.open()
 
   local clean_prompt = parser.clean_prompt(prompt.content)
-  local context = llm.build_context(filepath, "code_generation")
-
   logs.info("Transform cursor: " .. clean_prompt:sub(1, 40) .. "...")
-
-  -- Build enhanced user prompt
-  local enhanced_prompt = "TASK: " .. clean_prompt .. "\n\n"
-  enhanced_prompt = enhanced_prompt .. "REQUIREMENTS:\n"
-  enhanced_prompt = enhanced_prompt .. "- Generate ONLY " .. (context.language or "code") .. " code\n"
-  enhanced_prompt = enhanced_prompt .. "- NO markdown code blocks (no ```)\n"
-  enhanced_prompt = enhanced_prompt .. "- NO explanations or comments about what you did\n"
-  enhanced_prompt = enhanced_prompt .. "- Match the coding style of the existing file exactly\n"
-  enhanced_prompt = enhanced_prompt .. "- Output must be ready to insert directly into the file\n"
-
   utils.notify("Transforming: " .. clean_prompt:sub(1, 40) .. "...", vim.log.levels.INFO)
 
-  llm.generate(enhanced_prompt, context, function(response, err)
-    if err then
-      logs.error("Transform failed: " .. err)
-      utils.notify("Transform failed: " .. err, vim.log.levels.ERROR)
-      return
-    end
-
-    if response then
-      vim.schedule(function()
-        local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-        local start_line = prompt.start_line
-        local end_line = prompt.end_line
-
-        local start_line_content = lines[start_line] or ""
-        local end_line_content = lines[end_line] or ""
-
-        local codetyper = require("codetyper")
-        local config = codetyper.get_config()
-        local before_tag = ""
-        local after_tag = ""
-
-        local open_pos = start_line_content:find(utils.escape_pattern(config.patterns.open_tag))
-        if open_pos and open_pos > 1 then
-          before_tag = start_line_content:sub(1, open_pos - 1)
-        end
-
-        local close_pos = end_line_content:find(utils.escape_pattern(config.patterns.close_tag))
-        if close_pos then
-          local after_close = close_pos + #config.patterns.close_tag
-          if after_close <= #end_line_content then
-            after_tag = end_line_content:sub(after_close)
-          end
-        end
-
-        local replacement_lines = vim.split(response, "\n", { plain = true })
-
-        if before_tag ~= "" and #replacement_lines > 0 then
-          replacement_lines[1] = before_tag .. replacement_lines[1]
-        end
-        if after_tag ~= "" and #replacement_lines > 0 then
-          replacement_lines[#replacement_lines] = replacement_lines[#replacement_lines] .. after_tag
-        end
-
-        vim.api.nvim_buf_set_lines(bufnr, start_line - 1, end_line, false, replacement_lines)
-        logs.info("Transform complete!")
-        utils.notify("Transform complete!", vim.log.levels.INFO)
-      end)
-    end
-  end)
+  -- Use the same processing logic as automatic mode (skip processed check for manual mode)
+  autocmds.process_single_prompt(bufnr, prompt, filepath, true)
 end
 
 --- Main command dispatcher
@@ -1178,9 +961,14 @@ function M.setup()
   end, { desc = "View tree.log" })
 
   -- Ask panel commands
-  vim.api.nvim_create_user_command("CoderAsk", function()
-    cmd_ask()
-  end, { desc = "Open Ask panel" })
+  vim.api.nvim_create_user_command("CoderAsk", function(opts)
+    local selection = nil
+    -- Check if called from visual mode (range is set)
+    if opts.range > 0 then
+      selection = utils.get_visual_selection()
+    end
+    cmd_ask(selection)
+  end, { range = true, desc = "Open Ask panel (with optional visual selection)" })
 
   vim.api.nvim_create_user_command("CoderAskToggle", function()
     cmd_ask_toggle()
@@ -1206,9 +994,14 @@ function M.setup()
   end, { range = true, desc = "Transform /@ @/ tags in visual selection" })
 
   -- Agent commands
-  vim.api.nvim_create_user_command("CoderAgent", function()
-    cmd_agent()
-  end, { desc = "Open Agent panel" })
+  vim.api.nvim_create_user_command("CoderAgent", function(opts)
+    local selection = nil
+    -- Check if called from visual mode (range is set)
+    if opts.range > 0 then
+      selection = utils.get_visual_selection()
+    end
+    cmd_agent(selection)
+  end, { range = true, desc = "Open Agent panel (with optional visual selection)" })
 
   vim.api.nvim_create_user_command("CoderAgentToggle", function()
     cmd_agent_toggle()
@@ -1461,6 +1254,145 @@ function M.setup()
     local credentials = require("codetyper.credentials")
     credentials.interactive_switch_provider()
   end, { desc = "Switch active LLM provider" })
+
+  -- Conflict mode commands
+  vim.api.nvim_create_user_command("CoderConflictToggle", function()
+    local patch = require("codetyper.agent.patch")
+    local current = patch.is_conflict_mode()
+    patch.configure({ use_conflict_mode = not current })
+    utils.notify("Conflict mode " .. (not current and "enabled" or "disabled"), vim.log.levels.INFO)
+  end, { desc = "Toggle conflict mode for code changes" })
+
+  vim.api.nvim_create_user_command("CoderConflictResolveAll", function(opts)
+    local conflict = require("codetyper.agent.conflict")
+    local bufnr = vim.api.nvim_get_current_buf()
+    local keep = opts.args ~= "" and opts.args or "theirs"
+    if not vim.tbl_contains({ "ours", "theirs", "both", "none" }, keep) then
+      utils.notify("Invalid option. Use: ours, theirs, both, or none", vim.log.levels.ERROR)
+      return
+    end
+    conflict.resolve_all(bufnr, keep)
+    utils.notify("Resolved all conflicts with: " .. keep, vim.log.levels.INFO)
+  end, {
+    nargs = "?",
+    complete = function() return { "ours", "theirs", "both", "none" } end,
+    desc = "Resolve all conflicts (ours/theirs/both/none)"
+  })
+
+  vim.api.nvim_create_user_command("CoderConflictNext", function()
+    local conflict = require("codetyper.agent.conflict")
+    conflict.goto_next(vim.api.nvim_get_current_buf())
+  end, { desc = "Go to next conflict" })
+
+  vim.api.nvim_create_user_command("CoderConflictPrev", function()
+    local conflict = require("codetyper.agent.conflict")
+    conflict.goto_prev(vim.api.nvim_get_current_buf())
+  end, { desc = "Go to previous conflict" })
+
+  vim.api.nvim_create_user_command("CoderConflictStatus", function()
+    local conflict = require("codetyper.agent.conflict")
+    local patch = require("codetyper.agent.patch")
+    local bufnr = vim.api.nvim_get_current_buf()
+    local count = conflict.count_conflicts(bufnr)
+    local mode = patch.is_conflict_mode() and "enabled" or "disabled"
+    utils.notify(string.format("Conflicts in buffer: %d | Conflict mode: %s", count, mode), vim.log.levels.INFO)
+  end, { desc = "Show conflict status" })
+
+  vim.api.nvim_create_user_command("CoderConflictMenu", function()
+    local conflict = require("codetyper.agent.conflict")
+    local bufnr = vim.api.nvim_get_current_buf()
+    -- Ensure conflicts are processed first (sets up highlights and keymaps)
+    conflict.process(bufnr)
+    conflict.show_floating_menu(bufnr)
+  end, { desc = "Show conflict resolution menu" })
+
+  -- Manual commands to accept conflicts
+  vim.api.nvim_create_user_command("CoderConflictAcceptCurrent", function()
+    local conflict = require("codetyper.agent.conflict")
+    local bufnr = vim.api.nvim_get_current_buf()
+    conflict.process(bufnr) -- Ensure keymaps are set up
+    conflict.accept_ours(bufnr)
+  end, { desc = "Accept current (original) code" })
+
+  vim.api.nvim_create_user_command("CoderConflictAcceptIncoming", function()
+    local conflict = require("codetyper.agent.conflict")
+    local bufnr = vim.api.nvim_get_current_buf()
+    conflict.process(bufnr) -- Ensure keymaps are set up
+    conflict.accept_theirs(bufnr)
+  end, { desc = "Accept incoming (AI) code" })
+
+  vim.api.nvim_create_user_command("CoderConflictAcceptBoth", function()
+    local conflict = require("codetyper.agent.conflict")
+    local bufnr = vim.api.nvim_get_current_buf()
+    conflict.process(bufnr)
+    conflict.accept_both(bufnr)
+  end, { desc = "Accept both versions" })
+
+  vim.api.nvim_create_user_command("CoderConflictAcceptNone", function()
+    local conflict = require("codetyper.agent.conflict")
+    local bufnr = vim.api.nvim_get_current_buf()
+    conflict.process(bufnr)
+    conflict.accept_none(bufnr)
+  end, { desc = "Delete conflict (accept none)" })
+
+  vim.api.nvim_create_user_command("CoderConflictAutoMenu", function()
+    local conflict = require("codetyper.agent.conflict")
+    local conf = conflict.get_config()
+    local new_state = not conf.auto_show_menu
+    conflict.configure({ auto_show_menu = new_state, auto_show_next_menu = new_state })
+    utils.notify("Auto-show conflict menu " .. (new_state and "enabled" or "disabled"), vim.log.levels.INFO)
+  end, { desc = "Toggle auto-show conflict menu after code injection" })
+
+  -- Initialize conflict module
+  local conflict = require("codetyper.agent.conflict")
+  conflict.setup()
+
+  -- Linter validation commands
+  vim.api.nvim_create_user_command("CoderLintCheck", function()
+    local linter = require("codetyper.agent.linter")
+    local bufnr = vim.api.nvim_get_current_buf()
+    linter.validate_after_injection(bufnr, nil, nil, function(result)
+      if result then
+        if not result.has_errors and not result.has_warnings then
+          utils.notify("No lint errors found", vim.log.levels.INFO)
+        end
+      end
+    end)
+  end, { desc = "Check current buffer for lint errors" })
+
+  vim.api.nvim_create_user_command("CoderLintFix", function()
+    local linter = require("codetyper.agent.linter")
+    local bufnr = vim.api.nvim_get_current_buf()
+    local line_count = vim.api.nvim_buf_line_count(bufnr)
+    local result = linter.check_region(bufnr, 1, line_count)
+    if result.has_errors or result.has_warnings then
+      linter.request_ai_fix(bufnr, result)
+    else
+      utils.notify("No lint errors to fix", vim.log.levels.INFO)
+    end
+  end, { desc = "Request AI to fix lint errors in current buffer" })
+
+  vim.api.nvim_create_user_command("CoderLintQuickfix", function()
+    local linter = require("codetyper.agent.linter")
+    local bufnr = vim.api.nvim_get_current_buf()
+    local line_count = vim.api.nvim_buf_line_count(bufnr)
+    local result = linter.check_region(bufnr, 1, line_count)
+    if #result.diagnostics > 0 then
+      linter.show_in_quickfix(bufnr, result)
+    else
+      utils.notify("No lint errors to show", vim.log.levels.INFO)
+    end
+  end, { desc = "Show lint errors in quickfix list" })
+
+  vim.api.nvim_create_user_command("CoderLintToggleAuto", function()
+    local conflict = require("codetyper.agent.conflict")
+    local linter = require("codetyper.agent.linter")
+    local linter_config = linter.get_config()
+    local new_state = not linter_config.auto_save
+    linter.configure({ auto_save = new_state })
+    conflict.configure({ lint_after_accept = new_state, auto_fix_lint_errors = new_state })
+    utils.notify("Auto lint check " .. (new_state and "enabled" or "disabled"), vim.log.levels.INFO)
+  end, { desc = "Toggle automatic lint checking after code acceptance" })
 
   -- Setup default keymaps
   M.setup_keymaps()

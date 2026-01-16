@@ -124,7 +124,7 @@ end
 --- Retry event with additional context
 ---@param original_event table Original prompt event
 ---@param additional_context string Additional context from user
-local function retry_with_context(original_event, additional_context)
+local function retry_with_context(original_event, additional_context, attached_files)
 	-- Create new prompt content combining original + additional
 	local combined_prompt = string.format(
 		"%s\n\nAdditional context:\n%s",
@@ -138,6 +138,10 @@ local function retry_with_context(original_event, additional_context)
 	new_event.prompt_content = combined_prompt
 	new_event.attempt_count = 0
 	new_event.status = nil
+	-- Preserve any attached files provided by the context modal
+	if attached_files and #attached_files > 0 then
+		new_event.attached_files = attached_files
+	end
 
 	-- Log the retry
 	pcall(function()
@@ -150,6 +154,79 @@ local function retry_with_context(original_event, additional_context)
 
 	-- Queue the new event
 	queue.enqueue(new_event)
+end
+
+--- Try to parse requested file paths from an LLM response asking for more context
+---@param response string
+---@return string[] list of resolved full paths
+local function parse_requested_files(response)
+	if not response or response == "" then
+		return {}
+	end
+
+	local cwd = vim.fn.getcwd()
+	local results = {}
+	local seen = {}
+
+	-- Heuristics: capture backticked paths, lines starting with - or *, or raw paths with slashes and extension
+	for path in response:gmatch("`([%w%._%-%/]+%.[%w_]+)`") do
+		if not seen[path] then
+			table.insert(results, path)
+			seen[path] = true
+		end
+	end
+
+	for path in response:gmatch("([%w%._%-%/]+%.[%w_]+)") do
+		if not seen[path] then
+			-- Filter out common English words that match the pattern
+			if not path:match("^[Ii]$") and not path:match("^[Tt]his$") then
+				table.insert(results, path)
+				seen[path] = true
+			end
+		end
+	end
+
+	-- Also capture list items like '- src/foo.lua'
+	for line in response:gmatch("[^\\n]+") do
+		local m = line:match("^%s*[-*]%s*([%w%._%-%/]+%.[%w_]+)%s*$")
+		if m and not seen[m] then
+			table.insert(results, m)
+			seen[m] = true
+		end
+	end
+
+	-- Resolve each candidate to a full path by checking cwd and globbing
+	local resolved = {}
+	for _, p in ipairs(results) do
+		local candidate = p
+		local full = nil
+
+		-- If absolute or already rooted
+		if candidate:sub(1,1) == "/" and vim.fn.filereadable(candidate) == 1 then
+			full = candidate
+		else
+			-- Try relative to cwd
+			local try1 = cwd .. "/" .. candidate
+			if vim.fn.filereadable(try1) == 1 then
+				full = try1
+			else
+				-- Try globbing for filename anywhere in project
+				local basename = candidate
+				-- If candidate contains slashes, try the tail
+				local tail = candidate:match("[^/]+$") or candidate
+				local matches = vim.fn.globpath(cwd, "**/" .. tail, false, true)
+				if matches and #matches > 0 then
+					full = matches[1]
+				end
+			end
+		end
+
+		if full and vim.fn.filereadable(full) == 1 then
+			table.insert(resolved, full)
+		end
+	end
+
+	return resolved
 end
 
 --- Process worker result and decide next action
@@ -166,7 +243,87 @@ local function handle_worker_result(event, result)
 			})
 		end)
 
-		-- Open the context modal
+		-- Try to auto-attach any files the LLM specifically requested in its response
+		local requested = parse_requested_files(result.response or "")
+
+		-- Detect suggested shell commands the LLM may want executed (e.g., "run ls -la", "please run git status")
+		local function detect_suggested_commands(response)
+			if not response then
+				return {}
+			end
+			local cmds = {}
+			-- capture backticked commands: `ls -la`
+			for c in response:gmatch("`([^`]+)`") do
+				if #c > 1 and not c:match("%-%-help") then
+					table.insert(cmds, { label = c, cmd = c })
+				end
+			end
+			-- capture phrases like: run ls -la or run `ls -la`
+			for m in response:gmatch("[Rr]un%s+([%w%p%s%-_/]+)") do
+				local cand = m:gsub("^%s+",""):gsub("%s+$","")
+				if cand and #cand > 1 then
+					-- ignore long sentences; keep first line or command-like substring
+					local line = cand:match("[^\n]+") or cand
+					line = line:gsub("and then.*","")
+					line = line:gsub("please.*","")
+					if not line:match("%a+%s+files") then
+						table.insert(cmds, { label = line, cmd = line })
+					end
+				end
+			end
+			-- dedupe
+			local seen = {}
+			local out = {}
+			for _, v in ipairs(cmds) do
+				if v.cmd and not seen[v.cmd] then
+					seen[v.cmd] = true
+					table.insert(out, v)
+				end
+			end
+			return out
+		end
+
+		local suggested_cmds = detect_suggested_commands(result.response or "")
+		if suggested_cmds and #suggested_cmds > 0 then
+			-- Open modal and show suggested commands for user approval
+			context_modal.open(result.original_event or event, result.response or "", retry_with_context, suggested_cmds)
+			queue.update_status(event.id, "needs_context", { response = result.response })
+			return
+		end
+		if requested and #requested > 0 then
+			pcall(function()
+				local logs = require("codetyper.agent.logs")
+				logs.add({ type = "info", message = string.format("Auto-attaching %d requested file(s)", #requested) })
+			end)
+
+			-- Build attached_files entries
+			local attached = event.attached_files or {}
+			for _, full in ipairs(requested) do
+				local ok, content = pcall(function()
+					return table.concat(vim.fn.readfile(full), "\n")
+				end)
+				if ok and content then
+					table.insert(attached, {
+						path = vim.fn.fnamemodify(full, ":~:."),
+						full_path = full,
+						content = content,
+					})
+				end
+			end
+
+			-- Retry automatically with same prompt but attached files
+			local new_event = vim.deepcopy(result.original_event or event)
+			new_event.id = nil
+			new_event.attached_files = attached
+			new_event.attempt_count = 0
+			new_event.status = nil
+			queue.enqueue(new_event)
+
+			queue.update_status(event.id, "needs_context", { response = result.response })
+			return
+		end
+
+		-- If no files parsed, open modal for manual context entry
 		context_modal.open(result.original_event or event, result.response or "", retry_with_context)
 
 		-- Mark original event as needing context (not failed)
@@ -321,7 +478,7 @@ function M.schedule_patch_flush()
 		local safe, reason = M.is_safe_to_inject()
 		if safe then
 			waiting_to_flush = false
-			local applied, stale = patch.flush_pending()
+			local applied, stale = patch.flush_pending_smart()
 			if applied > 0 or stale > 0 then
 				pcall(function()
 					local logs = require("codetyper.agent.logs")
@@ -382,7 +539,7 @@ local function setup_autocmds()
 		callback = function()
 			vim.defer_fn(function()
 				if not M.is_completion_visible() then
-					patch.flush_pending()
+					patch.flush_pending_smart()
 				end
 			end, state.config.completion_delay_ms)
 		end,
@@ -394,7 +551,7 @@ local function setup_autocmds()
 		group = augroup,
 		callback = function()
 			if not M.is_insert_mode() and not M.is_completion_visible() then
-				patch.flush_pending()
+				patch.flush_pending_smart()
 			end
 		end,
 		desc = "Flush pending patches on CursorHold",
@@ -563,7 +720,7 @@ end
 
 --- Force flush all pending patches (ignores completion check)
 function M.force_flush()
-	return patch.flush_pending()
+	return patch.flush_pending_smart()
 end
 
 --- Update configuration
@@ -572,6 +729,35 @@ function M.configure(config)
 	for k, v in pairs(config) do
 		state.config[k] = v
 	end
+end
+
+--- Queue a prompt for processing
+--- This is a convenience function that creates a proper PromptEvent and enqueues it
+---@param opts table Prompt options
+---   - bufnr: number Source buffer number
+---   - filepath: string Source file path
+---   - target_path: string Target file for injection (can be same as filepath)
+---   - prompt_content: string The cleaned prompt text
+---   - range: {start_line: number, end_line: number} Line range of prompt tag
+---   - source: string|nil Source identifier (e.g., "transform_command", "autocmd")
+---   - priority: number|nil Priority (1=high, 2=normal, 3=low) default 2
+---@return table The enqueued event
+function M.queue_prompt(opts)
+	-- Build the PromptEvent structure
+	local event = {
+		bufnr = opts.bufnr,
+		filepath = opts.filepath,
+		target_path = opts.target_path or opts.filepath,
+		prompt_content = opts.prompt_content,
+		range = opts.range,
+		priority = opts.priority or 2,
+		source = opts.source or "manual",
+		-- Capture buffer state for staleness detection
+		changedtick = vim.api.nvim_buf_get_changedtick(opts.bufnr),
+	}
+
+	-- Enqueue through the queue module
+	return queue.enqueue(event)
 end
 
 return M

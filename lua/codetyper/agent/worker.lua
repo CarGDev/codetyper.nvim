@@ -83,6 +83,19 @@ local function needs_more_context(response)
 	return false
 end
 
+--- Check if response contains SEARCH/REPLACE blocks
+---@param response string
+---@return boolean
+local function has_search_replace_blocks(response)
+	if not response then
+		return false
+	end
+	-- Check for any of the supported SEARCH/REPLACE formats
+	return response:match("<<<<<<<%s*SEARCH") ~= nil
+		or response:match("%-%-%-%-%-%-%-?%s*SEARCH") ~= nil
+		or response:match("%[SEARCH%]") ~= nil
+end
+
 --- Clean LLM response to extract only code
 ---@param response string Raw LLM response
 ---@param filetype string|nil File type for language detection
@@ -106,6 +119,13 @@ local function clean_response(response, filetype)
 	-- Remove the original prompt tags /@ ... @/ if they appear in output
 	-- Use [%s%S] to match any character including newlines (Lua's . doesn't match newlines)
 	cleaned = cleaned:gsub("/@[%s%S]-@/", "")
+
+	-- IMPORTANT: If response contains SEARCH/REPLACE blocks, preserve them!
+	-- Don't extract from markdown or remove "explanations" that are actually part of the format
+	if has_search_replace_blocks(cleaned) then
+		-- Just trim whitespace and return - the blocks will be parsed by search_replace module
+		return cleaned:match("^%s*(.-)%s*$") or cleaned
+	end
 
 	-- Try to extract code from markdown code blocks
 	-- Match ```language\n...\n``` or just ```\n...\n```
@@ -352,6 +372,45 @@ local function format_indexed_context(indexed_context)
 	return "\n\n--- Project Context ---\n" .. table.concat(parts, "\n")
 end
 
+--- Check if this is an inline prompt (tags in target file, not a coder file)
+---@param event table
+---@return boolean
+local function is_inline_prompt(event)
+	-- Inline prompts have a range with start_line/end_line from tag detection
+	-- and the source file is the same as target (not a .coder. file)
+	if not event.range or not event.range.start_line then
+		return false
+	end
+	-- Check if source path (if any) equals target, or if target has no .coder. in it
+	local target = event.target_path or ""
+	if target:match("%.coder%.") then
+		return false
+	end
+	return true
+end
+
+--- Build file content with marked region for inline prompts
+---@param lines string[] File lines
+---@param start_line number 1-indexed
+---@param end_line number 1-indexed
+---@param prompt_content string The prompt inside the tags
+---@return string
+local function build_marked_file_content(lines, start_line, end_line, prompt_content)
+	local result = {}
+	for i, line in ipairs(lines) do
+		if i == start_line then
+			-- Mark the start of the region to be replaced
+			table.insert(result, ">>> REPLACE THIS REGION (lines " .. start_line .. "-" .. end_line .. ") <<<")
+			table.insert(result, "--- User request: " .. prompt_content:gsub("\n", " "):sub(1, 100) .. " ---")
+		end
+		table.insert(result, line)
+		if i == end_line then
+			table.insert(result, ">>> END OF REGION TO REPLACE <<<")
+		end
+	end
+	return table.concat(result, "\n")
+end
+
 --- Build prompt for code generation
 ---@param event table PromptEvent
 ---@return string prompt
@@ -361,11 +420,13 @@ local function build_prompt(event)
 
 	-- Get target file content for context
 	local target_content = ""
+	local target_lines = {}
 	if event.target_path then
 		local ok, lines = pcall(function()
 			return vim.fn.readfile(event.target_path)
 		end)
 		if ok and lines then
+			target_lines = lines
 			target_content = table.concat(lines, "\n")
 		end
 	end
@@ -458,6 +519,93 @@ local function build_prompt(event)
 		system_prompt = intent_mod.get_prompt_modifier(event.intent)
 	end
 
+	-- SPECIAL HANDLING: Inline prompts with /@ ... @/ tags
+	-- Uses SEARCH/REPLACE block format for reliable code editing
+	if is_inline_prompt(event) and event.range and event.range.start_line then
+		local start_line = event.range.start_line
+		local end_line = event.range.end_line or start_line
+
+		-- Build full file content WITHOUT the /@ @/ tags for cleaner context
+		local file_content_clean = {}
+		for i, line in ipairs(target_lines) do
+			-- Skip lines that are part of the tag
+			if i < start_line or i > end_line then
+				table.insert(file_content_clean, line)
+			end
+		end
+
+		user_prompt = string.format(
+			[[You are editing a %s file: %s
+
+TASK: %s
+
+FULL FILE CONTENT:
+```%s
+%s
+```
+
+IMPORTANT: The instruction above may ask you to make changes ANYWHERE in the file (e.g., "at the top", "after function X", etc.). Read the instruction carefully to determine WHERE to apply the change.
+
+INSTRUCTIONS:
+You MUST respond using SEARCH/REPLACE blocks. This format lets you precisely specify what to find and what to replace it with.
+
+FORMAT:
+<<<<<<< SEARCH
+[exact lines to find in the file - copy them exactly including whitespace]
+=======
+[new lines to replace them with]
+>>>>>>> REPLACE
+
+RULES:
+1. The SEARCH section must contain EXACT lines from the file (copy-paste them)
+2. Include 2-3 context lines to uniquely identify the location
+3. The REPLACE section contains the modified code
+4. You can use multiple SEARCH/REPLACE blocks for multiple changes
+5. Preserve the original indentation style
+6. If adding new code at the start/end of file, include the first/last few lines in SEARCH
+
+EXAMPLES:
+
+Example 1 - Adding code at the TOP of file:
+Task: "Add a comment at the top"
+<<<<<<< SEARCH
+// existing first line
+// existing second line
+=======
+// NEW COMMENT ADDED HERE
+// existing first line
+// existing second line
+>>>>>>> REPLACE
+
+Example 2 - Modifying a function:
+Task: "Add validation to setValue"
+<<<<<<< SEARCH
+export function setValue(key, value) {
+  cache.set(key, value);
+}
+=======
+export function setValue(key, value) {
+  if (!key) throw new Error("key required");
+  cache.set(key, value);
+}
+>>>>>>> REPLACE
+
+Now apply the requested changes using SEARCH/REPLACE blocks:]],
+			filetype,
+			vim.fn.fnamemodify(event.target_path or "", ":t"),
+			event.prompt_content,
+			filetype,
+			table.concat(file_content_clean, "\n"):sub(1, 8000) -- Limit size
+		)
+
+		context.system_prompt = system_prompt
+		context.formatted_prompt = user_prompt
+		context.is_inline_prompt = true
+		context.use_search_replace = true
+
+		return user_prompt, context
+	end
+
 	-- If we have a scope (function/method), include it in the prompt
 	if event.scope_text and event.scope and event.scope.type ~= "file" then
 		local scope_type = event.scope.type
@@ -490,6 +638,11 @@ Return ONLY the complete %s with implementation. No explanations, no duplicates.
 				event.prompt_content,
 				scope_type
 			)
+			-- Remind the LLM not to repeat the original file content; ask for only the new/updated code or a unified diff
+			user_prompt = user_prompt .. [[
+
+IMPORTANT: Do NOT repeat the existing code provided above. Return ONLY the new or modified code (the updated function body). If you modify the file, prefer outputting a unified diff patch using standard diff headers (--- a/<file> / +++ b/<file> and @@ hunks). No explanations, no markdown, no code fences.
+]]
 		-- For other replacement intents, provide the full scope to transform
 		elseif event.intent and intent_mod.is_replacement(event.intent) then
 			user_prompt = string.format(
@@ -530,6 +683,18 @@ Output only the code to insert, no explanations.]],
 				extra_context,
 				event.prompt_content
 			)
+
+			-- Remind the LLM not to repeat the full file content; ask for only the new/modified code or unified diff
+			user_prompt = user_prompt .. [[
+
+IMPORTANT: Do NOT repeat the full file content shown above. Return ONLY the new or modified code required to satisfy the request. If you modify the file, prefer outputting a unified diff patch using standard diff headers (--- a/<file> / +++ b/<file> and @@ hunks). No explanations, no markdown, no code fences.
+]]
+
+			-- Remind the LLM not to repeat the original file content; ask for only the inserted code or a unified diff
+			user_prompt = user_prompt .. [[
+
+IMPORTANT: Do NOT repeat the surrounding code provided above. Return ONLY the code to insert (the new snippet). If you modify multiple parts of the file, prefer outputting a unified diff patch using standard diff headers (--- a/<file> / +++ b/<file> and @@ hunks). No explanations, no markdown, no code fences.
+]]
 		end
 	else
 		-- No scope resolved, use full file context

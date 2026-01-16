@@ -1,7 +1,7 @@
 ---@mod codetyper.agent.tools Tool registry and orchestration
 ---@brief [[
 --- Registry for LLM tools with execution and schema generation.
---- Inspired by avante.nvim's tool system.
+--- Tool system for agent mode.
 ---@brief ]]
 
 local M = {}

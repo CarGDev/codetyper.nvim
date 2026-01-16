@@ -120,7 +120,7 @@ Default configuration: >lua
 5. LLM PROVIDERS                                      *codetyper-providers*
 
                                                     *codetyper-claude*
-Claude (Anthropic)~
+Claude~
 Best for complex reasoning and code generation.
 >lua
   llm = {

@@ -8,6 +8,8 @@ local tools = require("codetyper.agent.tools")
 local executor = require("codetyper.agent.executor")
 local parser = require("codetyper.agent.parser")
 local diff = require("codetyper.agent.diff")
+local diff_review = require("codetyper.agent.diff_review")
+local resume = require("codetyper.agent.resume")
 local utils = require("codetyper.utils")
 local logs = require("codetyper.agent.logs")
 
@@ -21,8 +23,11 @@ local state = {
   conversation = {},
   pending_tool_results = {},
   is_running = false,
-  max_iterations = 10,
+  max_iterations = 25, -- Increased for complex tasks (env setup, tests, fixes)
   current_iteration = 0,
+  original_prompt = "", -- Store for resume functionality
+  current_context = nil, -- Store context for resume
+  current_callbacks = nil, -- Store callbacks for continue
 }
 
 ---@class AgentCallbacks
@@ -38,6 +43,8 @@ function M.reset()
   state.pending_tool_results = {}
   state.is_running = false
   state.current_iteration = 0
+  -- Clear collected diffs
+  diff_review.clear()
 end
 
 --- Check if agent is currently running
@@ -67,6 +74,9 @@ function M.run(prompt, context, callbacks)
 
   state.is_running = true
   state.current_iteration = 0
+  state.original_prompt = prompt
+  state.current_context = context
+  state.current_callbacks = callbacks
 
   -- Add user message to conversation
   table.insert(state.conversation, {
@@ -91,9 +101,9 @@ function M.agent_loop(context, callbacks)
   logs.info(string.format("Agent loop iteration %d/%d", state.current_iteration, state.max_iterations))
 
   if state.current_iteration > state.max_iterations then
-    logs.error("Max iterations reached")
-    callbacks.on_error("Max iterations reached (" .. state.max_iterations .. ")")
-    state.is_running = false
+    logs.info("Max iterations reached, asking user to continue or stop")
+    -- Ask user if they want to continue
+    M.prompt_continue(context, callbacks)
     return
   end
 
@@ -222,8 +232,20 @@ function M.process_tool_calls(tool_calls, index, context, callbacks)
           end
           logs.tool(tool_call.name, "approved", log_msg)
 
-          -- Apply the change
+          -- Apply the change and collect for review
           executor.apply_change(result.diff_data, function(apply_result)
+            -- Collect the diff for end-of-session review
+            if result.diff_data.operation ~= "bash" then
+              diff_review.add({
+                path = result.diff_data.path,
+                operation = result.diff_data.operation,
+                original = result.diff_data.original,
+                modified = result.diff_data.modified,
+                approved = true,
+                applied = true,
+              })
+            end
+
             -- Store result for sending back to LLM
             table.insert(state.pending_tool_results, {
               tool_use_id = tool_call.id,
@@ -280,21 +302,16 @@ function M.continue_with_results(context, callbacks)
   local codetyper = require("codetyper")
   local config = codetyper.get_config()
 
-  -- Copilot uses Claude-like format for tool results
+  -- Copilot uses OpenAI format for tool results (role: "tool")
   if config.llm.provider == "copilot" then
-    -- Claude-style tool_result blocks
-    local content = {}
+    -- OpenAI-style tool messages - each result is a separate message
     for _, result in ipairs(state.pending_tool_results) do
-      table.insert(content, {
-        type = "tool_result",
-        tool_use_id = result.tool_use_id,
+      table.insert(state.conversation, {
+        role = "tool",
+        tool_call_id = result.tool_use_id,
         content = result.result,
       })
     end
-    table.insert(state.conversation, {
-      role = "user",
-      content = content,
-    })
   else
     -- Ollama format: plain text describing results
     local result_text = "Tool results:\n"
@@ -323,6 +340,116 @@ end
 ---@param max number Maximum iterations
 function M.set_max_iterations(max)
   state.max_iterations = max
+end
+
+--- Get the count of collected changes
+---@return number
+function M.get_changes_count()
+  return diff_review.count()
+end
+
+--- Show the diff review UI for all collected changes
+function M.show_diff_review()
+  diff_review.open()
+end
+
+--- Check if diff review is open
+---@return boolean
+function M.is_review_open()
+  return diff_review.is_open()
+end
+
+--- Prompt user to continue or stop at max iterations
+---@param context table File context
+---@param callbacks AgentCallbacks
+function M.prompt_continue(context, callbacks)
+  vim.schedule(function()
+    vim.ui.select({ "Continue (25 more iterations)", "Stop and save for later" }, {
+      prompt = string.format("Agent reached %d iterations. Continue?", state.max_iterations),
+    }, function(choice)
+      if choice and choice:match("^Continue") then
+        -- Reset iteration counter and continue
+        state.current_iteration = 0
+        logs.info("User chose to continue, resetting iteration counter")
+        M.agent_loop(context, callbacks)
+      else
+        -- Save state for later resume
+        logs.info("User chose to stop, saving state for resume")
+        resume.save(
+          state.conversation,
+          state.pending_tool_results,
+          state.current_iteration,
+          state.original_prompt
+        )
+        state.is_running = false
+        callbacks.on_text("Agent paused. Use /continue to resume later.")
+        callbacks.on_complete()
+      end
+    end)
+  end)
+end
+
+--- Continue a previously stopped agent session
+---@param callbacks AgentCallbacks
+---@return boolean Success
+function M.continue_session(callbacks)
+  if state.is_running then
+    utils.notify("Agent is already running", vim.log.levels.WARN)
+    return false
+  end
+
+  local saved = resume.load()
+  if not saved then
+    utils.notify("No saved agent session to continue", vim.log.levels.WARN)
+    return false
+  end
+
+  logs.info("Resuming agent session")
+  logs.info(string.format("Loaded %d messages, iteration %d", #saved.conversation, saved.iteration))
+
+  -- Restore state
+  state.conversation = saved.conversation
+  state.pending_tool_results = saved.pending_tool_results or {}
+  state.current_iteration = 0 -- Reset for fresh iterations
+  state.original_prompt = saved.original_prompt
+  state.is_running = true
+  state.current_callbacks = callbacks
+
+  -- Build context from current state
+  local llm = require("codetyper.llm")
+  local context = {}
+  local current_file = vim.fn.expand("%:p")
+  if current_file ~= "" and vim.fn.filereadable(current_file) == 1 then
+    context = llm.build_context(current_file, "agent")
+  end
+  state.current_context = context
+
+  -- Clear saved state
+  resume.clear()
+
+  -- Add continuation message
+  table.insert(state.conversation, {
+    role = "user",
+    content = "Continue where you left off. Complete the remaining tasks.",
+  })
+
+  -- Continue the loop
+  callbacks.on_text("Resuming agent session...")
+  M.agent_loop(context, callbacks)
+
+  return true
+end
+
+--- Check if there's a saved session to continue
+---@return boolean
+function M.has_saved_session()
+  return resume.has_saved_state()
+end
+
+--- Get info about saved session
+---@return table|nil
+function M.get_saved_session_info()
+  return resume.get_info()
 end
 
 return M

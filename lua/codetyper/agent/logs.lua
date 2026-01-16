@@ -165,10 +165,83 @@ function M.add(entry)
   M.log(entry.type or "info", entry.message or "", entry.data)
 end
 
---- Log thinking/reasoning step
+--- Log thinking/reasoning step (Claude Code style)
 ---@param step string Description of what's happening
 function M.thinking(step)
-  M.log("debug", "> " .. step)
+  M.log("thinking", step)
+end
+
+--- Log a reasoning/explanation message (shown prominently)
+---@param message string The reasoning message
+function M.reason(message)
+  M.log("reason", message)
+end
+
+--- Log file read operation
+---@param filepath string Path of file being read
+---@param lines? number Number of lines read
+function M.read(filepath, lines)
+  local msg = string.format("Read(%s)", vim.fn.fnamemodify(filepath, ":~:."))
+  if lines then
+    msg = msg .. string.format("\n  ⎿  Read %d lines", lines)
+  end
+  M.log("action", msg)
+end
+
+--- Log explore/search operation
+---@param description string What we're exploring
+function M.explore(description)
+  M.log("action", string.format("Explore(%s)", description))
+end
+
+--- Log explore done
+---@param tool_uses number Number of tool uses
+---@param tokens number Tokens used
+---@param duration number Duration in seconds
+function M.explore_done(tool_uses, tokens, duration)
+  M.log("result", string.format("  ⎿  Done (%d tool uses · %.1fk tokens · %.1fs)", tool_uses, tokens / 1000, duration))
+end
+
+--- Log update/edit operation
+---@param filepath string Path of file being edited
+---@param added? number Lines added
+---@param removed? number Lines removed
+function M.update(filepath, added, removed)
+  local msg = string.format("Update(%s)", vim.fn.fnamemodify(filepath, ":~:."))
+  if added or removed then
+    local parts = {}
+    if added and added > 0 then
+      table.insert(parts, string.format("Added %d lines", added))
+    end
+    if removed and removed > 0 then
+      table.insert(parts, string.format("Removed %d lines", removed))
+    end
+    if #parts > 0 then
+      msg = msg .. "\n  ⎿  " .. table.concat(parts, ", ")
+    end
+  end
+  M.log("action", msg)
+end
+
+--- Log a task/step that's in progress
+---@param task string Task name
+---@param status string Status message (optional)
+function M.task(task, status)
+  local msg = task
+  if status then
+    msg = msg .. " " .. status
+  end
+  M.log("task", msg)
+end
+
+--- Log task completion
+---@param next_task? string Next task (optional)
+function M.task_done(next_task)
+  local msg = "  ⎿  Done"
+  if next_task then
+    msg = msg .. "\n✶ " .. next_task
+  end
+  M.log("result", msg)
 end
 
 --- Register a listener for new log entries
@@ -223,6 +296,27 @@ end
 ---@param entry LogEntry
 ---@return string
 function M.format_entry(entry)
+  -- Claude Code style formatting for thinking/action entries
+  local thinking_types = { "thinking", "reason", "action", "task", "result" }
+  local is_thinking = vim.tbl_contains(thinking_types, entry.level)
+
+  if is_thinking then
+    local prefix = ({
+      thinking = "⏺",
+      reason = "⏺",
+      action = "⏺",
+      task = "✶",
+      result = "",
+    })[entry.level] or "⏺"
+
+    if prefix ~= "" then
+      return prefix .. " " .. entry.message
+    else
+      return entry.message
+    end
+  end
+
+  -- Traditional log format for other types
   local level_prefix = ({
     info = "i",
     debug = ".",
@@ -246,6 +340,60 @@ function M.format_entry(entry)
   end
 
   return base
+end
+
+--- Format entry for display in chat (compact Claude Code style)
+---@param entry LogEntry
+---@return string|nil Formatted string or nil to skip
+function M.format_for_chat(entry)
+  -- Skip certain log types in chat view
+  local skip_types = { "debug", "queue", "patch" }
+  if vim.tbl_contains(skip_types, entry.level) then
+    return nil
+  end
+
+  -- Claude Code style formatting
+  local thinking_types = { "thinking", "reason", "action", "task", "result" }
+  if vim.tbl_contains(thinking_types, entry.level) then
+    local prefix = ({
+      thinking = "⏺",
+      reason = "⏺",
+      action = "⏺",
+      task = "✶",
+      result = "",
+    })[entry.level] or "⏺"
+
+    if prefix ~= "" then
+      return prefix .. " " .. entry.message
+    else
+      return entry.message
+    end
+  end
+
+  -- Tool logs
+  if entry.level == "tool" then
+    return "⏺ " .. entry.message:gsub("^%[.-%] ", "")
+  end
+
+  -- Info/success
+  if entry.level == "info" or entry.level == "success" then
+    return "⏺ " .. entry.message
+  end
+
+  -- Errors
+  if entry.level == "error" then
+    return "⚠ " .. entry.message
+  end
+
+  -- Request/response (compact)
+  if entry.level == "request" then
+    return "⏺ " .. entry.message
+  end
+  if entry.level == "response" then
+    return "  ⎿ " .. entry.message
+  end
+
+  return nil
 end
 
 --- Estimate token count for a string (rough approximation)

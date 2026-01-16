@@ -219,4 +219,11 @@ function M.get_tool_names()
   return names
 end
 
+--- Optional setup function for future extensibility
+---@param opts table|nil Configuration options
+function M.setup(opts)
+  -- Currently a no-op. Plugins or tests may call setup(); keep for compatibility.
+end
+
 return M
+

@@ -1,4 +1,4 @@
----@mod codetyper.ask Ask window for Codetyper.nvim (similar to avante.nvim)
+---@mod codetyper.ask Ask window for Codetyper.nvim
 
 local M = {}
 
@@ -26,6 +26,7 @@ local state = {
 	agent_mode = false, -- Whether agent mode is enabled (can make file changes)
 	log_listener_id = nil, -- Listener ID for LLM logs
 	show_logs = true, -- Whether to show LLM logs in chat
+	selection_context = nil, -- Visual selection passed when opening
 }
 
 --- Get the ask window configuration
@@ -369,12 +370,20 @@ local function remove_log_listener()
 end
 
 --- Open the ask panel
-function M.open()
+---@param selection table|nil Visual selection context {text, start_line, end_line, filepath, filename, language}
+function M.open(selection)
 	-- Use the is_open() function which validates window state
 	if M.is_open() then
+		-- If already open and new selection provided, add it as context
+		if selection and selection.text and selection.text ~= "" then
+			M.add_selection_context(selection)
+		end
 		M.focus_input()
 		return
 	end
+
+	-- Store selection context for use in questions
+	state.selection_context = selection
 
 	local dims = calculate_dimensions()
 
@@ -479,6 +488,70 @@ function M.open()
 	-- Focus the input window and start insert mode
 	vim.api.nvim_set_current_win(state.input_win)
 	vim.cmd("startinsert")
+
+	-- If we have a selection, show it as context
+	if selection and selection.text and selection.text ~= "" then
+		vim.schedule(function()
+			M.add_selection_context(selection)
+		end)
+	end
+end
+
+--- Add visual selection as context in the chat
+---@param selection table Selection info {text, start_line, end_line, filepath, filename, language}
+function M.add_selection_context(selection)
+	if not state.output_buf or not vim.api.nvim_buf_is_valid(state.output_buf) then
+		return
+	end
+
+	state.selection_context = selection
+
+	vim.bo[state.output_buf].modifiable = true
+
+	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+
+	-- Format the selection display
+	local location = ""
+	if selection.filename then
+		location = selection.filename
+		if selection.start_line then
+			location = location .. ":" .. selection.start_line
+			if selection.end_line and selection.end_line ~= selection.start_line then
+				location = location .. "-" .. selection.end_line
+			end
+		end
+	end
+
+	local new_lines = {
+		"",
+		"┌─ 📋 Selected Code ─────────────────",
+		"│ " .. location,
+		"│",
+	}
+
+	-- Add the selected code with syntax hints
+	local lang = selection.language or "text"
+	for _, line in ipairs(vim.split(selection.text, "\n")) do
+		table.insert(new_lines, "│ " .. line)
+	end
+
+	table.insert(new_lines, "│")
+	table.insert(new_lines, "└─────────────────────────────────────")
+	table.insert(new_lines, "")
+	table.insert(new_lines, "Ask about this code or describe what you'd like to do with it.")
+
+	for _, line in ipairs(new_lines) do
+		table.insert(lines, line)
+	end
+
+	vim.api.nvim_buf_set_lines(state.output_buf, 0, -1, false, lines)
+	vim.bo[state.output_buf].modifiable = false
+
+	-- Scroll to bottom
+	if state.output_win and vim.api.nvim_win_is_valid(state.output_win) then
+		local line_count = vim.api.nvim_buf_line_count(state.output_buf)
+		vim.api.nvim_win_set_cursor(state.output_win, { line_count, 0 })
+	end
 end
 
 --- Show file picker for @ mentions
@@ -903,18 +976,49 @@ local function continue_submit(question, intent, context, file_context, file_cou
 
 	local client = llm.get_client()
 
-	-- Build full prompt WITH file contents
-	local full_prompt = question
-	if file_context ~= "" then
-		full_prompt = "USER QUESTION: "
-			.. question
-			.. "\n\n"
-			.. "ATTACHED FILE CONTENTS (please analyze these):"
-			.. file_context
+	-- Build recent conversation context (limit to last N entries)
+	local history_context = ""
+	do
+		local max_entries = 8
+		local total = #state.history
+		local start_i = 1
+		if total > max_entries then
+			start_i = total - max_entries + 1
+		end
+		if total > 0 then
+			history_context = "\n\n=== PREVIOUS CONVERSATION ===\n"
+			for i = start_i, total do
+				local m = state.history[i]
+				local role = (m.role == "assistant") and "ASSISTANT" or "USER"
+				history_context = history_context .. role .. ": " .. (m.content or "") .. "\n"
+			end
+			history_context = history_context .. "=== END PREVIOUS CONVERSATION ===\n\n"
+		end
 	end
 
-	-- Also add current file if no files were explicitly attached
-	if file_count == 0 and context.current_content and context.current_content ~= "" then
+	-- Build full prompt starting with recent conversation + user question
+	local full_prompt = history_context .. "USER QUESTION: " .. question
+
+	-- Add visual selection context if present
+	if state.selection_context and state.selection_context.text and state.selection_context.text ~= "" then
+		local sel = state.selection_context
+		local location = sel.filename or "unknown"
+		if sel.start_line then
+			location = location .. ":" .. sel.start_line
+			if sel.end_line and sel.end_line ~= sel.start_line then
+				location = location .. "-" .. sel.end_line
+			end
+		end
+		full_prompt = full_prompt .. "\n\nSELECTED CODE (" .. location .. "):\n```" .. (sel.language or "") .. "\n"
+		full_prompt = full_prompt .. sel.text .. "\n```"
+	end
+
+	if file_context ~= "" then
+		full_prompt = full_prompt .. "\n\nATTACHED FILE CONTENTS (please analyze these):" .. file_context
+	end
+
+	-- Also add current file if no files were explicitly attached and no selection
+	if file_count == 0 and not state.selection_context and context.current_content and context.current_content ~= "" then
 		full_prompt = "USER QUESTION: "
 			.. question
 			.. "\n\n"

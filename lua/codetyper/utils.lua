@@ -25,6 +25,25 @@ function M.get_project_root()
   return current
 end
 
+--- Check if current working directory IS a git repository root
+--- Only returns true if .git folder exists directly in cwd (not in parent)
+---@return boolean
+function M.is_git_project()
+  local cwd = vim.fn.getcwd()
+  local git_path = cwd .. "/.git"
+  -- Check if .git exists as a directory or file (for worktrees)
+  return vim.fn.isdirectory(git_path) == 1 or vim.fn.filereadable(git_path) == 1
+end
+
+--- Get git root directory (only if cwd is a git root)
+---@return string|nil Git root or nil if not a git project
+function M.get_git_root()
+  if M.is_git_project() then
+    return vim.fn.getcwd()
+  end
+  return nil
+end
+
 --- Check if a file is a coder file
 ---@param filepath string File path to check
 ---@return boolean
@@ -121,6 +140,58 @@ end
 ---@return string Escaped string
 function M.escape_pattern(str)
   return str:gsub("([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1")
+end
+
+--- Get visual selection text
+--- Call this BEFORE leaving visual mode or use marks '< and '>
+---@return table|nil Selection info {text: string, start_line: number, end_line: number, filepath: string} or nil
+function M.get_visual_selection()
+  local mode = vim.fn.mode()
+
+  -- Get marks - works in visual mode or after visual selection
+  local start_line = vim.fn.line("'<")
+  local end_line = vim.fn.line("'>")
+  local start_col = vim.fn.col("'<")
+  local end_col = vim.fn.col("'>")
+
+  -- If marks are not set (both 0), return nil
+  if start_line == 0 and end_line == 0 then
+    return nil
+  end
+
+  local bufnr = vim.api.nvim_get_current_buf()
+  local lines = vim.api.nvim_buf_get_lines(bufnr, start_line - 1, end_line, false)
+
+  if #lines == 0 then
+    return nil
+  end
+
+  -- Handle visual line mode - get full lines
+  local text
+  if mode == "V" or mode == "\22" then -- Visual line or Visual block
+    text = table.concat(lines, "\n")
+  else
+    -- Character-wise visual mode - trim first and last line
+    if #lines == 1 then
+      text = lines[1]:sub(start_col, end_col)
+    else
+      lines[1] = lines[1]:sub(start_col)
+      lines[#lines] = lines[#lines]:sub(1, end_col)
+      text = table.concat(lines, "\n")
+    end
+  end
+
+  local filepath = vim.fn.expand("%:p")
+  local filename = vim.fn.expand("%:t")
+
+  return {
+    text = text,
+    start_line = start_line,
+    end_line = end_line,
+    filepath = filepath,
+    filename = filename,
+    language = vim.bo[bufnr].filetype,
+  }
 end
 
 return M
