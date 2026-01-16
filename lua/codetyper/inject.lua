@@ -2,14 +2,14 @@
 
 local M = {}
 
-local utils = require("codetyper.utils")
+local utils = require("codetyper.support.utils")
 
 --- Inject generated code into target file
 ---@param target_path string Path to target file
 ---@param code string Generated code
 ---@param prompt_type string Type of prompt (refactor, add, document, etc.)
 function M.inject_code(target_path, code, prompt_type)
-  local window = require("codetyper.window")
+  local window = require("codetyper.adapters.nvim.windows")
 
   -- Normalize the target path
   target_path = vim.fn.fnamemodify(target_path, ":p")
@@ -109,7 +109,7 @@ function M.inject_add(bufnr, code)
   local lines = vim.split(code, "\n", { plain = true })
 
   -- Get cursor position in target window
-  local window = require("codetyper.window")
+  local window = require("codetyper.adapters.nvim.windows")
   local target_win = window.get_target_win()
 
   local insert_line

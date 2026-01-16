@@ -22,16 +22,16 @@ function M.setup(opts)
     return
   end
 
-  local config = require("codetyper.config")
+  local config = require("codetyper.config.defaults")
   M.config = config.setup(opts)
 
   -- Initialize modules
-  local commands = require("codetyper.commands")
-  local gitignore = require("codetyper.gitignore")
-  local autocmds = require("codetyper.autocmds")
-  local tree = require("codetyper.tree")
-  local completion = require("codetyper.completion")
-  local logs_panel = require("codetyper.logs_panel")
+  local commands = require("codetyper.adapters.nvim.commands")
+  local gitignore = require("codetyper.support.gitignore")
+  local autocmds = require("codetyper.adapters.nvim.autocmds")
+  local tree = require("codetyper.support.tree")
+  local completion = require("codetyper.features.completion.inline")
+  local logs_panel = require("codetyper.adapters.nvim.ui.logs_panel")
 
   -- Register commands
   commands.setup()
@@ -53,25 +53,25 @@ function M.setup(opts)
 
   -- Initialize project indexer if enabled
   if M.config.indexer and M.config.indexer.enabled then
-    local indexer = require("codetyper.indexer")
+    local indexer = require("codetyper.features.indexer")
     indexer.setup(M.config.indexer)
   end
 
   -- Initialize brain learning system if enabled
   if M.config.brain and M.config.brain.enabled then
-    local brain = require("codetyper.brain")
+    local brain = require("codetyper.core.memory")
     brain.setup(M.config.brain)
   end
 
   -- Setup inline ghost text suggestions (Copilot-style)
   if M.config.suggestion and M.config.suggestion.enabled then
-    local suggestion = require("codetyper.suggestion")
+    local suggestion = require("codetyper.features.completion.suggestion")
     suggestion.setup(M.config.suggestion)
   end
 
   -- Start the event-driven scheduler if enabled
   if M.config.scheduler and M.config.scheduler.enabled then
-    local scheduler = require("codetyper.agent.scheduler")
+    local scheduler = require("codetyper.core.scheduler.scheduler")
     scheduler.start(M.config.scheduler)
   end
 
@@ -80,7 +80,7 @@ function M.setup(opts)
   -- Auto-open Ask panel after a short delay (to let UI settle)
   if M.config.auto_open_ask then
     vim.defer_fn(function()
-      local ask = require("codetyper.ask")
+      local ask = require("codetyper.features.ask.engine")
       if not ask.is_open() then
         ask.open()
       end

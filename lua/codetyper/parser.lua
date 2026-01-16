@@ -2,7 +2,7 @@
 
 local M = {}
 
-local utils = require("codetyper.utils")
+local utils = require("codetyper.support.utils")
 
 --- Get config with safe fallback
 ---@return table config
