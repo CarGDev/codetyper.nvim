@@ -312,7 +312,9 @@ local function append_log_to_output(entry)
 	}
 
 	local icon = icons[entry.level] or "•"
-	local formatted = string.format("[%s] %s %s", entry.timestamp, icon, entry.message)
+	-- Sanitize message - replace newlines with spaces to prevent nvim_buf_set_lines error
+	local sanitized_message = entry.message:gsub("\n", " "):gsub("\r", "")
+	local formatted = string.format("[%s] %s %s", entry.timestamp, icon, sanitized_message)
 
 	vim.schedule(function()
 		if not state.output_buf or not vim.api.nvim_buf_is_valid(state.output_buf) then

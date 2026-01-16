@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-01-15
+
+### Added
+
+- **Cost Tracking System** - Track LLM API costs across sessions
+  - New `:CoderCost` command opens cost estimation floating window
+  - Session costs tracked in real-time
+  - All-time costs persisted in `.coder/cost_history.json`
+  - Per-model breakdown with token counts
+  - Pricing database for 50+ models (GPT-4/5, Claude, O-series, Gemini)
+  - Window keymaps: `q` close, `r` refresh, `c` clear session, `C` clear all
+
+- **Automatic Ollama Fallback** - Graceful degradation when API limits hit
+  - Automatically switches to Ollama when Copilot rate limits exceeded
+  - Detects local Ollama availability before fallback
+  - Notifies user of provider switch
+
+- **Enhanced Error Handling** - Better error messages for API failures
+  - Shows actual API response on parse errors (not generic "failed to parse")
+  - Improved rate limit detection and messaging
+  - Sanitized newlines in error notifications to prevent UI crashes
+
+- **Agent Tools System Improvements**
+  - New `to_openai_format()` and `to_claude_format()` functions
+  - `get_definitions()` for generic tool access
+  - Fixed tool call argument serialization (JSON strings vs tables)
+
+- **Credentials Management System** - Store API keys outside of config files
+  - New `:CoderAddApiKey` command for interactive credential setup
+  - `:CoderRemoveApiKey` to remove stored credentials
+  - `:CoderCredentials` to view credential status
+  - `:CoderSwitchProvider` to switch active LLM provider
+  - Credentials stored in `~/.local/share/nvim/codetyper/configuration.json`
+  - Priority: stored credentials > config > environment variables
+  - Supports all providers: Claude, OpenAI, Gemini, Copilot, Ollama
+
+### Changed
+
+- Cost window now shows both session and all-time statistics
+- Improved agent prompt templates with correct tool names
+- Better error context in LLM provider responses
+
+### Fixed
+
+- Fixed "Failed to parse Copilot response" error showing instead of actual error
+- Fixed `nvim_buf_set_lines` crash from newlines in error messages
+- Fixed `tools.definitions` nil error in agent initialization
+- Fixed tool name mismatch in agent prompts (write_file vs write)
+
+---
+
 ## [0.4.0] - 2026-01-13
 
 ### Added
@@ -194,7 +245,8 @@ scheduler = {
 - **Fixed** - Bug fixes
 - **Security** - Vulnerability fixes
 
-[Unreleased]: https://github.com/cargdev/codetyper.nvim/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/cargdev/codetyper.nvim/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/cargdev/codetyper.nvim/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/cargdev/codetyper.nvim/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/cargdev/codetyper.nvim/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/cargdev/codetyper.nvim/compare/v0.1.0...v0.2.0

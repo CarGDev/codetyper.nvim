@@ -111,7 +111,7 @@ function M.compute_relevance(node, opts)
   return score
 end
 
---- Traverse graph from seed nodes
+--- Traverse graph from seed nodes (basic traversal)
 ---@param seed_ids string[] Starting node IDs
 ---@param depth number Traversal depth
 ---@param edge_types? EdgeType[] Edge types to follow
@@ -155,6 +155,73 @@ local function traverse(seed_ids, depth, edge_types)
   end
 
   return discovered
+end
+
+--- Spreading activation - mimics human associative memory
+--- Activation spreads from seed nodes along edges, decaying by weight
+--- Nodes accumulate activation from multiple paths (like neural pathways)
+---@param seed_activations table<string, number> Initial activations {node_id: activation}
+---@param max_iterations number Max spread iterations (default 3)
+---@param decay number Activation decay per hop (default 0.5)
+---@param threshold number Minimum activation to continue spreading (default 0.1)
+---@return table<string, number> Final activations {node_id: accumulated_activation}
+local function spreading_activation(seed_activations, max_iterations, decay, threshold)
+  local edge_mod = get_edge_module()
+  max_iterations = max_iterations or 3
+  decay = decay or 0.5
+  threshold = threshold or 0.1
+
+  -- Accumulated activation for each node
+  local activation = {}
+  for node_id, act in pairs(seed_activations) do
+    activation[node_id] = act
+  end
+
+  -- Current frontier with their activation levels
+  local frontier = {}
+  for node_id, act in pairs(seed_activations) do
+    frontier[node_id] = act
+  end
+
+  -- Spread activation iteratively
+  for _ = 1, max_iterations do
+    local next_frontier = {}
+
+    for source_id, source_activation in pairs(frontier) do
+      -- Get all outgoing edges
+      local edges = edge_mod.get_edges(source_id, nil, "both")
+
+      for _, edge in ipairs(edges) do
+        -- Determine target (could be source or target of edge)
+        local target_id = edge.s == source_id and edge.t or edge.s
+
+        -- Calculate spreading activation
+        -- Activation = source_activation * edge_weight * decay
+        local edge_weight = edge.p and edge.p.w or 0.5
+        local spread_amount = source_activation * edge_weight * decay
+
+        -- Only spread if above threshold
+        if spread_amount >= threshold then
+          -- Accumulate activation (multiple paths add up)
+          activation[target_id] = (activation[target_id] or 0) + spread_amount
+
+          -- Add to next frontier if not already processed with higher activation
+          if not next_frontier[target_id] or next_frontier[target_id] < spread_amount then
+            next_frontier[target_id] = spread_amount
+          end
+        end
+      end
+    end
+
+    -- Stop if no more spreading
+    if vim.tbl_count(next_frontier) == 0 then
+      break
+    end
+
+    frontier = next_frontier
+  end
+
+  return activation
 end
 
 --- Execute a query across all dimensions
@@ -236,28 +303,49 @@ function M.execute(opts)
     end
   end
 
-  -- 4. Combine and deduplicate
+  -- 4. Combine all found nodes and compute seed activations
   local all_nodes = {}
+  local seed_activations = {}
+
   for _, category in pairs(results) do
     for id, node in pairs(category) do
       if not all_nodes[id] then
         all_nodes[id] = node
+        -- Compute initial activation based on relevance
+        local relevance = M.compute_relevance(node, opts)
+        seed_activations[id] = relevance
       end
     end
   end
 
-  -- 5. Score and rank
+  -- 5. Apply spreading activation - like human associative memory
+  -- Activation spreads from seed nodes along edges, accumulating
+  -- Nodes connected to multiple relevant seeds get higher activation
+  local final_activations = spreading_activation(
+    seed_activations,
+    opts.spread_iterations or 3,  -- How far activation spreads
+    opts.spread_decay or 0.5,     -- How much activation decays per hop
+    opts.spread_threshold or 0.05 -- Minimum activation to continue spreading
+  )
+
+  -- 6. Score and rank by combined activation
   local scored = {}
-  for id, node in pairs(all_nodes) do
-    local relevance = M.compute_relevance(node, opts)
-    table.insert(scored, { node = node, relevance = relevance })
+  for id, activation in pairs(final_activations) do
+    local node = all_nodes[id] or node_mod.get(id)
+    if node then
+      all_nodes[id] = node
+      -- Final score = spreading activation + base relevance
+      local base_relevance = M.compute_relevance(node, opts)
+      local final_score = (activation * 0.6) + (base_relevance * 0.4)
+      table.insert(scored, { node = node, relevance = final_score, activation = activation })
+    end
   end
 
   table.sort(scored, function(a, b)
     return a.relevance > b.relevance
   end)
 
-  -- 6. Apply limit
+  -- 7. Apply limit
   local limit = opts.limit or 50
   local result_nodes = {}
   local truncated = #scored > limit
@@ -266,7 +354,7 @@ function M.execute(opts)
     table.insert(result_nodes, scored[i].node)
   end
 
-  -- 7. Get edges between result nodes
+  -- 8. Get edges between result nodes
   local edge_mod = get_edge_module()
   local result_edges = {}
   local node_ids = {}
@@ -291,10 +379,16 @@ function M.execute(opts)
       file_count = vim.tbl_count(results.file),
       temporal_count = vim.tbl_count(results.temporal),
       total_scored = #scored,
+      seed_nodes = vim.tbl_count(seed_activations),
+      activated_nodes = vim.tbl_count(final_activations),
     },
     truncated = truncated,
   }
 end
+
+--- Expose spreading activation for direct use
+--- Useful for custom activation patterns or debugging
+M.spreading_activation = spreading_activation
 
 --- Find nodes by file
 ---@param filepath string File path

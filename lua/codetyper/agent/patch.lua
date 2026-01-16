@@ -2,9 +2,15 @@
 ---@brief [[
 --- Manages code patches with buffer snapshots for staleness detection.
 --- Patches are queued for safe injection when completion popup is not visible.
+--- Uses smart injection for intelligent import merging.
 ---@brief ]]
 
 local M = {}
+
+--- Lazy load inject module to avoid circular requires
+local function get_inject_module()
+	return require("codetyper.agent.inject")
+end
 
 ---@class BufferSnapshot
 ---@field bufnr number Buffer number
@@ -15,7 +21,8 @@ local M = {}
 ---@class PatchCandidate
 ---@field id string Unique patch ID
 ---@field event_id string Related PromptEvent ID
----@field target_bufnr number Target buffer for injection
+---@field source_bufnr number Source buffer where prompt tags are (coder file)
+---@field target_bufnr number Target buffer for injection (real file)
 ---@field target_path string Target file path
 ---@field original_snapshot BufferSnapshot Snapshot at event creation
 ---@field generated_code string Code to inject
@@ -171,7 +178,10 @@ end
 ---@param strategy string|nil Injection strategy (overrides intent-based)
 ---@return PatchCandidate
 function M.create_from_event(event, generated_code, confidence, strategy)
-	-- Get target buffer
+	-- Source buffer is where the prompt tags are (could be coder file)
+	local source_bufnr = event.bufnr
+
+	-- Get target buffer (where code should be injected - the real file)
 	local target_bufnr = vim.fn.bufnr(event.target_path)
 	if target_bufnr == -1 then
 		-- Try to find by filename
@@ -220,7 +230,8 @@ function M.create_from_event(event, generated_code, confidence, strategy)
 	return {
 		id = M.generate_id(),
 		event_id = event.id,
-		target_bufnr = target_bufnr,
+		source_bufnr = source_bufnr, -- Where prompt tags are (coder file)
+		target_bufnr = target_bufnr, -- Where code goes (real file)
 		target_path = event.target_path,
 		original_snapshot = snapshot,
 		generated_code = generated_code,
@@ -453,39 +464,56 @@ function M.apply(patch)
 	-- Prepare code lines
 	local code_lines = vim.split(patch.generated_code, "\n", { plain = true })
 
-	-- FIRST: Remove the prompt tags from the buffer before applying code
-	-- This prevents the infinite loop where tags stay and get re-detected
-	local tags_removed = remove_prompt_tags(target_bufnr)
+	-- FIRST: Remove the prompt tags from the SOURCE buffer (coder file), not target
+	-- The tags are in the coder file where the user wrote the prompt
+	-- Code goes to target file, tags get removed from source file
+	local source_bufnr = patch.source_bufnr
+	local tags_removed = 0
 
-	pcall(function()
-		if tags_removed > 0 then
-			local logs = require("codetyper.agent.logs")
-			logs.add({
-				type = "info",
-				message = string.format("Removed %d prompt tag(s) from buffer", tags_removed),
-			})
-		end
-	end)
+	if source_bufnr and vim.api.nvim_buf_is_valid(source_bufnr) then
+		tags_removed = remove_prompt_tags(source_bufnr)
 
-	-- Recalculate line count after tag removal
-	local line_count = vim.api.nvim_buf_line_count(target_bufnr)
+		pcall(function()
+			if tags_removed > 0 then
+				local logs = require("codetyper.agent.logs")
+				local source_name = vim.api.nvim_buf_get_name(source_bufnr)
+				logs.add({
+					type = "info",
+					message = string.format("Removed %d prompt tag(s) from %s",
+						tags_removed,
+						vim.fn.fnamemodify(source_name, ":t")),
+				})
+			end
+		end)
+	end
 
-	-- Apply based on strategy
+	-- Get filetype for smart injection
+	local filetype = vim.fn.fnamemodify(patch.target_path or "", ":e")
+
+	-- Use smart injection module for intelligent import handling
+	local inject = get_inject_module()
+	local inject_result = nil
+
+	-- Apply based on strategy using smart injection
 	local ok, err = pcall(function()
+		-- Prepare injection options
+		local inject_opts = {
+			strategy = patch.injection_strategy,
+			filetype = filetype,
+			sort_imports = true,
+		}
+
 		if patch.injection_strategy == "replace" and patch.injection_range then
 			-- Replace the scope range with the new code
-			-- The injection_range points to the function/method we're completing
 			local start_line = patch.injection_range.start_line
 			local end_line = patch.injection_range.end_line
 
 			-- Adjust for tag removal - find the new range by searching for the scope
 			-- After removing tags, line numbers may have shifted
-			-- Use the scope information to find the correct range
 			if patch.scope and patch.scope.type then
 				-- Try to find the scope using treesitter if available
 				local found_range = nil
 				pcall(function()
-					local ts_utils = require("nvim-treesitter.ts_utils")
 					local parsers = require("nvim-treesitter.parsers")
 					local parser = parsers.get_parser(target_bufnr)
 					if parser then
@@ -528,34 +556,38 @@ function M.apply(patch)
 			end
 
 			-- Clamp to valid range
+			local line_count = vim.api.nvim_buf_line_count(target_bufnr)
 			start_line = math.max(1, start_line)
 			end_line = math.min(line_count, end_line)
 
-			-- Replace the range (0-indexed for nvim_buf_set_lines)
-			vim.api.nvim_buf_set_lines(target_bufnr, start_line - 1, end_line, false, code_lines)
+			inject_opts.range = { start_line = start_line, end_line = end_line }
+		elseif patch.injection_strategy == "insert" and patch.injection_range then
+			inject_opts.range = { start_line = patch.injection_range.start_line }
+		end
 
-			pcall(function()
-				local logs = require("codetyper.agent.logs")
+		-- Use smart injection - handles imports automatically
+		inject_result = inject.inject(target_bufnr, patch.generated_code, inject_opts)
+
+		-- Log injection details
+		pcall(function()
+			local logs = require("codetyper.agent.logs")
+			if inject_result.imports_added > 0 then
 				logs.add({
 					type = "info",
-					message = string.format("Replacing lines %d-%d with %d lines of code", start_line, end_line, #code_lines),
+					message = string.format(
+						"%s %d import(s), injected %d body line(s)",
+						inject_result.imports_merged and "Merged" or "Added",
+						inject_result.imports_added,
+						inject_result.body_lines
+					),
 				})
-			end)
-		elseif patch.injection_strategy == "insert" and patch.injection_range then
-			-- Insert at the specified location
-			local insert_line = patch.injection_range.start_line
-			insert_line = math.max(1, math.min(line_count + 1, insert_line))
-			vim.api.nvim_buf_set_lines(target_bufnr, insert_line - 1, insert_line - 1, false, code_lines)
-		else
-			-- Default: append to end
-			-- Check if last line is empty, if not add a blank line for spacing
-			local last_line = vim.api.nvim_buf_get_lines(target_bufnr, line_count - 1, line_count, false)[1] or ""
-			if last_line:match("%S") then
-				-- Last line has content, add blank line for spacing
-				table.insert(code_lines, 1, "")
+			else
+				logs.add({
+					type = "info",
+					message = string.format("Injected %d line(s) of code", inject_result.body_lines),
+				})
 			end
-			vim.api.nvim_buf_set_lines(target_bufnr, line_count, line_count, false, code_lines)
-		end
+		end)
 	end)
 
 	if not ok then
@@ -575,6 +607,41 @@ function M.apply(patch)
 				lines_added = #code_lines,
 			},
 		})
+	end)
+
+	-- Learn from successful code generation - this builds neural pathways
+	-- The more code is successfully applied, the better the brain becomes
+	pcall(function()
+		local brain = require("codetyper.brain")
+		if brain.is_initialized() then
+			-- Learn the successful pattern
+			local intent_type = patch.intent and patch.intent.type or "unknown"
+			local scope_type = patch.scope and patch.scope.type or "file"
+			local scope_name = patch.scope and patch.scope.name or ""
+
+			-- Create a meaningful summary for this learning
+			local summary = string.format(
+				"Generated %s: %s %s in %s",
+				intent_type,
+				scope_type,
+				scope_name ~= "" and scope_name or "",
+				vim.fn.fnamemodify(patch.target_path or "", ":t")
+			)
+
+			brain.learn({
+				type = "code_completion",
+				file = patch.target_path,
+				timestamp = os.time(),
+				data = {
+					intent = intent_type,
+					code = patch.generated_code:sub(1, 500), -- Store first 500 chars
+					language = vim.fn.fnamemodify(patch.target_path or "", ":e"),
+					function_name = scope_name,
+					prompt = patch.prompt_content,
+					confidence = patch.confidence or 0.5,
+				},
+			})
+		end
 	end)
 
 	return true, nil

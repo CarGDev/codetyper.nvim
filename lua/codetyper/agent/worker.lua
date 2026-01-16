@@ -224,6 +224,86 @@ local function format_attached_files(attached_files)
 	return table.concat(parts, "")
 end
 
+--- Get coder companion file path for a target file
+---@param target_path string Target file path
+---@return string|nil Coder file path if exists
+local function get_coder_companion_path(target_path)
+	if not target_path or target_path == "" then
+		return nil
+	end
+
+	-- Skip if target is already a coder file
+	if target_path:match("%.coder%.") then
+		return nil
+	end
+
+	local dir = vim.fn.fnamemodify(target_path, ":h")
+	local name = vim.fn.fnamemodify(target_path, ":t:r") -- filename without extension
+	local ext = vim.fn.fnamemodify(target_path, ":e")
+
+	local coder_path = dir .. "/" .. name .. ".coder." .. ext
+	if vim.fn.filereadable(coder_path) == 1 then
+		return coder_path
+	end
+
+	return nil
+end
+
+--- Read and format coder companion context (business logic, pseudo-code)
+---@param target_path string Target file path
+---@return string Formatted coder context
+local function get_coder_context(target_path)
+	local coder_path = get_coder_companion_path(target_path)
+	if not coder_path then
+		return ""
+	end
+
+	local ok, lines = pcall(function()
+		return vim.fn.readfile(coder_path)
+	end)
+
+	if not ok or not lines or #lines == 0 then
+		return ""
+	end
+
+	local content = table.concat(lines, "\n")
+
+	-- Skip if only template comments (no actual content)
+	local stripped = content:gsub("^%s*", ""):gsub("%s*$", "")
+	if stripped == "" then
+		return ""
+	end
+
+	-- Check if there's meaningful content (not just template)
+	local has_content = false
+	for _, line in ipairs(lines) do
+		-- Skip comment lines that are part of the template
+		local trimmed = line:gsub("^%s*", "")
+		if not trimmed:match("^[%-#/]+%s*Coder companion")
+			and not trimmed:match("^[%-#/]+%s*Use /@ @/")
+			and not trimmed:match("^[%-#/]+%s*Example:")
+			and not trimmed:match("^<!%-%-")
+			and trimmed ~= ""
+			and not trimmed:match("^[%-#/]+%s*$") then
+			has_content = true
+			break
+		end
+	end
+
+	if not has_content then
+		return ""
+	end
+
+	local ext = vim.fn.fnamemodify(coder_path, ":e")
+	return string.format(
+		"\n\n--- Business Context / Pseudo-code ---\n" ..
+		"The following describes the intended behavior and design for this file:\n" ..
+		"```%s\n%s\n```",
+		ext,
+		content:sub(1, 4000) -- Limit to 4000 chars
+	)
+end
+
 --- Format indexed project context for inclusion in prompt
 ---@param indexed_context table|nil
 ---@return string
@@ -309,8 +389,53 @@ local function build_prompt(event)
 	-- Format attached files
 	local attached_content = format_attached_files(event.attached_files)
 
-	-- Combine attached files and indexed context
-	local extra_context = attached_content .. indexed_content
+	-- Get coder companion context (business logic, pseudo-code)
+	local coder_context = get_coder_context(event.target_path)
+
+	-- Get brain memories - contextual recall based on current task
+	local brain_context = ""
+	pcall(function()
+		local brain = require("codetyper.brain")
+		if brain.is_initialized() then
+			-- Query brain for relevant memories based on:
+			-- 1. Current file (file-specific patterns)
+			-- 2. Prompt content (semantic similarity)
+			-- 3. Intent type (relevant past generations)
+			local query_text = event.prompt_content or ""
+			if event.scope and event.scope.name then
+				query_text = event.scope.name .. " " .. query_text
+			end
+
+			local result = brain.query({
+				query = query_text,
+				file = event.target_path,
+				max_results = 5,
+				types = { "pattern", "correction", "convention" },
+			})
+
+			if result and result.nodes and #result.nodes > 0 then
+				local memories = { "\n\n--- Learned Patterns & Conventions ---" }
+				for _, node in ipairs(result.nodes) do
+					if node.c then
+						local summary = node.c.s or ""
+						local detail = node.c.d or ""
+						if summary ~= "" then
+							table.insert(memories, "• " .. summary)
+							if detail ~= "" and #detail < 200 then
+								table.insert(memories, "  " .. detail)
+							end
+						end
+					end
+				end
+				if #memories > 1 then
+					brain_context = table.concat(memories, "\n")
+				end
+			end
+		end
+	end)
+
+	-- Combine all context sources: brain memories first, then coder context, attached files, indexed
+	local extra_context = brain_context .. coder_context .. attached_content .. indexed_content
 
 	-- Build context with scope information
 	local context = {
@@ -502,21 +627,21 @@ function M.start(worker)
 		end
 	end, worker.timeout_ms)
 
-	-- Get client and execute
-	local client, client_err = get_client(worker.worker_type)
-	if not client then
-		M.complete(worker, nil, client_err)
-		return
-	end
-
 	local prompt, context = build_prompt(worker.event)
 
-	-- Call the LLM
-	client.generate(prompt, context, function(response, err, usage)
+	-- Check if smart selection is enabled (memory-based provider selection)
+	local use_smart_selection = false
+	pcall(function()
+		local codetyper = require("codetyper")
+		local config = codetyper.get_config()
+		use_smart_selection = config.llm.smart_selection ~= false -- Default to true
+	end)
+
+	-- Define the response handler
+	local function handle_response(response, err, usage_or_metadata)
 		-- Cancel timeout timer
 		if worker.timer then
 			pcall(function()
-				-- Timer might have already fired
 				if type(worker.timer) == "userdata" and worker.timer.stop then
 					worker.timer:stop()
 				end
@@ -527,8 +652,45 @@ function M.start(worker)
 			return -- Already timed out or cancelled
 		end
 
+		-- Extract usage from metadata if smart_generate was used
+		local usage = usage_or_metadata
+		if type(usage_or_metadata) == "table" and usage_or_metadata.provider then
+			-- This is metadata from smart_generate
+			usage = nil
+			-- Update worker type to reflect actual provider used
+			worker.worker_type = usage_or_metadata.provider
+			-- Log if pondering occurred
+			if usage_or_metadata.pondered then
+				pcall(function()
+					local logs = require("codetyper.agent.logs")
+					logs.add({
+						type = "info",
+						message = string.format(
+							"Pondering: %s (agreement: %.0f%%)",
+							usage_or_metadata.corrected and "corrected" or "validated",
+							(usage_or_metadata.agreement or 1) * 100
+						),
+					})
+				end)
+			end
+		end
+
 		M.complete(worker, response, err, usage)
-	end)
+	end
+
+	-- Use smart selection or direct client
+	if use_smart_selection then
+		local llm = require("codetyper.llm")
+		llm.smart_generate(prompt, context, handle_response)
+	else
+		-- Get client and execute directly
+		local client, client_err = get_client(worker.worker_type)
+		if not client then
+			M.complete(worker, nil, client_err)
+			return
+		end
+		client.generate(prompt, context, handle_response)
+	end
 end
 
 --- Complete worker execution

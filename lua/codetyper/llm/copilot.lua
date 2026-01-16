@@ -14,6 +14,51 @@ local AUTH_URL = "https://api.github.com/copilot_internal/v2/token"
 ---@field github_token table|nil
 M.state = nil
 
+--- Track if we've already suggested Ollama fallback this session
+local ollama_fallback_suggested = false
+
+--- Suggest switching to Ollama when rate limits are hit
+---@param error_msg string The error message that triggered this
+function M.suggest_ollama_fallback(error_msg)
+	if ollama_fallback_suggested then
+		return
+	end
+
+	-- Check if Ollama is available
+	local ollama_available = false
+	vim.fn.jobstart({ "curl", "-s", "http://localhost:11434/api/tags" }, {
+		on_exit = function(_, code)
+			if code == 0 then
+				ollama_available = true
+			end
+
+			vim.schedule(function()
+				if ollama_available then
+					-- Switch to Ollama automatically
+					local codetyper = require("codetyper")
+					local config = codetyper.get_config()
+					config.llm.provider = "ollama"
+
+					ollama_fallback_suggested = true
+					utils.notify(
+						"⚠️ Copilot rate limit reached. Switched to Ollama automatically.\n"
+							.. "Original error: "
+							.. error_msg:sub(1, 100),
+						vim.log.levels.WARN
+					)
+				else
+					utils.notify(
+						"⚠️ Copilot rate limit reached. Ollama not available.\n"
+							.. "Start Ollama with: ollama serve\n"
+							.. "Or wait for Copilot limits to reset.",
+						vim.log.levels.WARN
+					)
+				end
+			end)
+		end,
+	})
+end
+
 --- Get OAuth token from copilot.lua or copilot.vim config
 ---@return string|nil OAuth token
 local function get_oauth_token()
@@ -51,9 +96,16 @@ local function get_oauth_token()
 	return nil
 end
 
---- Get model from config
+--- Get model from stored credentials or config
 ---@return string Model name
 local function get_model()
+	-- Priority: stored credentials > config
+	local credentials = require("codetyper.credentials")
+	local stored_model = credentials.get_model("copilot")
+	if stored_model then
+		return stored_model
+	end
+
 	local codetyper = require("codetyper")
 	local config = codetyper.get_config()
 	return config.llm.copilot.model
@@ -204,21 +256,54 @@ local function make_request(token, body, callback)
 			local ok, response = pcall(vim.json.decode, response_text)
 
 			if not ok then
+				-- Show the actual response text as the error (truncated if too long)
+				local error_msg = response_text
+				if #error_msg > 200 then
+					error_msg = error_msg:sub(1, 200) .. "..."
+				end
+
+				-- Clean up common patterns
+				if response_text:match("<!DOCTYPE") or response_text:match("<html") then
+					error_msg = "Copilot API returned HTML error page. Service may be unavailable."
+				end
+
+				-- Check for rate limit and suggest Ollama fallback
+				if response_text:match("limit") or response_text:match("Upgrade") or response_text:match("quota") then
+					M.suggest_ollama_fallback(error_msg)
+				end
+
 				vim.schedule(function()
-					callback(nil, "Failed to parse Copilot response", nil)
+					callback(nil, error_msg, nil)
 				end)
 				return
 			end
 
 			if response.error then
+				local error_msg = response.error.message or "Copilot API error"
+				if response.error.code == "rate_limit_exceeded" or (error_msg:match("limit") and error_msg:match("plan")) then
+					error_msg = "Copilot rate limit: " .. error_msg
+					M.suggest_ollama_fallback(error_msg)
+				end
+
 				vim.schedule(function()
-					callback(nil, response.error.message or "Copilot API error", nil)
+					callback(nil, error_msg, nil)
 				end)
 				return
 			end
 
 			-- Extract usage info
 			local usage = response.usage or {}
+
+			-- Record usage for cost tracking
+			if usage.prompt_tokens or usage.completion_tokens then
+				local cost = require("codetyper.cost")
+				cost.record_usage(
+					get_model(),
+					usage.prompt_tokens or 0,
+					usage.completion_tokens or 0,
+					usage.prompt_tokens_details and usage.prompt_tokens_details.cached_tokens or 0
+				)
+			end
 
 			if response.choices and response.choices[1] and response.choices[1].message then
 				local code = llm.extract_code(response.choices[1].message.content)
@@ -362,20 +447,46 @@ function M.generate_with_tools(messages, context, tool_definitions, callback)
 		-- Format messages for Copilot (OpenAI-compatible format)
 		local copilot_messages = { { role = "system", content = system_prompt } }
 		for _, msg in ipairs(messages) do
-			if type(msg.content) == "string" then
-				table.insert(copilot_messages, { role = msg.role, content = msg.content })
-			elseif type(msg.content) == "table" then
-				local text_parts = {}
-				for _, part in ipairs(msg.content) do
-					if part.type == "tool_result" then
-						table.insert(text_parts, "[" .. (part.name or "tool") .. " result]: " .. (part.content or ""))
-					elseif part.type == "text" then
-						table.insert(text_parts, part.text or "")
+			if msg.role == "user" then
+				-- User messages - handle string or table content
+				if type(msg.content) == "string" then
+					table.insert(copilot_messages, { role = "user", content = msg.content })
+				elseif type(msg.content) == "table" then
+					-- Handle complex content (like tool results from user perspective)
+					local text_parts = {}
+					for _, part in ipairs(msg.content) do
+						if part.type == "tool_result" then
+							table.insert(text_parts, "[" .. (part.name or "tool") .. " result]: " .. (part.content or ""))
+						elseif part.type == "text" then
+							table.insert(text_parts, part.text or "")
+						end
+					end
+					if #text_parts > 0 then
+						table.insert(copilot_messages, { role = "user", content = table.concat(text_parts, "\n") })
 					end
 				end
-				if #text_parts > 0 then
-					table.insert(copilot_messages, { role = msg.role, content = table.concat(text_parts, "\n") })
+			elseif msg.role == "assistant" then
+				-- Assistant messages - must preserve tool_calls if present
+				local assistant_msg = {
+					role = "assistant",
+					content = type(msg.content) == "string" and msg.content or nil,
+				}
+				-- Preserve tool_calls for the API
+				if msg.tool_calls then
+					assistant_msg.tool_calls = msg.tool_calls
+					-- Ensure content is not nil when tool_calls present
+					if assistant_msg.content == nil then
+						assistant_msg.content = ""
+					end
 				end
+				table.insert(copilot_messages, assistant_msg)
+			elseif msg.role == "tool" then
+				-- Tool result messages - must have tool_call_id
+				table.insert(copilot_messages, {
+					role = "tool",
+					tool_call_id = msg.tool_call_id,
+					content = type(msg.content) == "string" and msg.content or vim.json.encode(msg.content),
+				})
 			end
 		end
 
@@ -396,6 +507,20 @@ function M.generate_with_tools(messages, context, tool_definitions, callback)
 		logs.debug(string.format("Estimated prompt: ~%d tokens", prompt_estimate))
 		logs.thinking("Sending to Copilot API...")
 
+		-- Log request to debug file
+		local debug_log_path = vim.fn.expand("~/.local/codetyper-debug.log")
+		local debug_f = io.open(debug_log_path, "a")
+		if debug_f then
+			debug_f:write(os.date("[%Y-%m-%d %H:%M:%S] ") .. "COPILOT REQUEST\n")
+			debug_f:write("Messages count: " .. #copilot_messages .. "\n")
+			for i, m in ipairs(copilot_messages) do
+				debug_f:write(string.format("  [%d] role=%s, has_tool_calls=%s, has_tool_call_id=%s\n",
+					i, m.role, tostring(m.tool_calls ~= nil), tostring(m.tool_call_id ~= nil)))
+			end
+			debug_f:write("---\n")
+			debug_f:close()
+		end
+
 		local headers = build_headers(token)
 		local cmd = {
 			"curl",
@@ -413,35 +538,97 @@ function M.generate_with_tools(messages, context, tool_definitions, callback)
 		table.insert(cmd, "-d")
 		table.insert(cmd, json_body)
 
+		-- Debug logging helper
+		local function debug_log(msg, data)
+			local log_path = vim.fn.expand("~/.local/codetyper-debug.log")
+			local f = io.open(log_path, "a")
+			if f then
+				f:write(os.date("[%Y-%m-%d %H:%M:%S] ") .. msg .. "\n")
+				if data then
+					f:write("DATA: " .. tostring(data):sub(1, 2000) .. "\n")
+				end
+				f:write("---\n")
+				f:close()
+			end
+		end
+
+		-- Prevent double callback calls
+		local callback_called = false
+
 		vim.fn.jobstart(cmd, {
 			stdout_buffered = true,
 			on_stdout = function(_, data)
+				if callback_called then
+					debug_log("on_stdout: callback already called, skipping")
+					return
+				end
+
 				if not data or #data == 0 or (data[1] == "" and #data == 1) then
+					debug_log("on_stdout: empty data")
 					return
 				end
 
 				local response_text = table.concat(data, "\n")
+				debug_log("on_stdout: received response", response_text)
+
 				local ok, response = pcall(vim.json.decode, response_text)
 
 				if not ok then
+					debug_log("JSON parse failed", response_text)
+					callback_called = true
+
+					-- Show the actual response text as the error (truncated if too long)
+					local error_msg = response_text
+					if #error_msg > 200 then
+						error_msg = error_msg:sub(1, 200) .. "..."
+					end
+
+					-- Clean up common patterns
+					if response_text:match("<!DOCTYPE") or response_text:match("<html") then
+						error_msg = "Copilot API returned HTML error page. Service may be unavailable."
+					end
+
+					-- Check for rate limit and suggest Ollama fallback
+					if response_text:match("limit") or response_text:match("Upgrade") or response_text:match("quota") then
+						M.suggest_ollama_fallback(error_msg)
+					end
+
 					vim.schedule(function()
-						logs.error("Failed to parse Copilot response")
-						callback(nil, "Failed to parse Copilot response")
+						logs.error(error_msg)
+						callback(nil, error_msg)
 					end)
 					return
 				end
 
 				if response.error then
+					callback_called = true
+					local error_msg = response.error.message or "Copilot API error"
+
+					-- Check for rate limit in structured error
+					if response.error.code == "rate_limit_exceeded" or (error_msg:match("limit") and error_msg:match("plan")) then
+						error_msg = "Copilot rate limit: " .. error_msg
+						M.suggest_ollama_fallback(error_msg)
+					end
+
 					vim.schedule(function()
-						logs.error(response.error.message or "Copilot API error")
-						callback(nil, response.error.message or "Copilot API error")
+						logs.error(error_msg)
+						callback(nil, error_msg)
 					end)
 					return
 				end
 
-				-- Log token usage
+				-- Log token usage and record cost
 				if response.usage then
 					logs.response(response.usage.prompt_tokens or 0, response.usage.completion_tokens or 0, "stop")
+
+					-- Record usage for cost tracking
+					local cost_tracker = require("codetyper.cost")
+					cost_tracker.record_usage(
+						get_model(),
+						response.usage.prompt_tokens or 0,
+						response.usage.completion_tokens or 0,
+						response.usage.prompt_tokens_details and response.usage.prompt_tokens_details.cached_tokens or 0
+					)
 				end
 
 				-- Convert to Claude-like format for parser compatibility
@@ -474,12 +661,19 @@ function M.generate_with_tools(messages, context, tool_definitions, callback)
 					end
 				end
 
+				callback_called = true
+				debug_log("on_stdout: success, calling callback")
 				vim.schedule(function()
 					callback(converted, nil)
 				end)
 			end,
 			on_stderr = function(_, data)
+				if callback_called then
+					return
+				end
 				if data and #data > 0 and data[1] ~= "" then
+					debug_log("on_stderr", table.concat(data, "\n"))
+					callback_called = true
 					vim.schedule(function()
 						logs.error("Copilot API request failed: " .. table.concat(data, "\n"))
 						callback(nil, "Copilot API request failed: " .. table.concat(data, "\n"))
@@ -487,7 +681,12 @@ function M.generate_with_tools(messages, context, tool_definitions, callback)
 				end
 			end,
 			on_exit = function(_, code)
+				debug_log("on_exit: code=" .. code .. ", callback_called=" .. tostring(callback_called))
+				if callback_called then
+					return
+				end
 				if code ~= 0 then
+					callback_called = true
 					vim.schedule(function()
 						logs.error("Copilot API request failed with code: " .. code)
 						callback(nil, "Copilot API request failed with code: " .. code)

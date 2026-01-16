@@ -32,6 +32,32 @@ function M.generate(prompt, context, callback)
 	client.generate(prompt, context, callback)
 end
 
+--- Smart generate with automatic provider selection based on brain memories
+--- Prefers Ollama when context is rich, falls back to Copilot otherwise.
+--- Implements verification pondering to reinforce Ollama accuracy over time.
+---@param prompt string The user's prompt
+---@param context table Context information
+---@param callback fun(response: string|nil, error: string|nil, metadata: table|nil) Callback
+function M.smart_generate(prompt, context, callback)
+	local selector = require("codetyper.llm.selector")
+	selector.smart_generate(prompt, context, callback)
+end
+
+--- Get accuracy statistics for providers
+---@return table Statistics for each provider
+function M.get_accuracy_stats()
+	local selector = require("codetyper.llm.selector")
+	return selector.get_accuracy_stats()
+end
+
+--- Report user feedback on response quality (for reinforcement learning)
+---@param provider string Which provider generated the response
+---@param was_correct boolean Whether the response was good
+function M.report_feedback(provider, was_correct)
+	local selector = require("codetyper.llm.selector")
+	selector.report_feedback(provider, was_correct)
+end
+
 --- Build the system prompt for code generation
 ---@param context table Context information
 ---@return string System prompt

@@ -8,25 +8,46 @@ local llm = require("codetyper.llm")
 --- OpenAI API endpoint
 local API_URL = "https://api.openai.com/v1/chat/completions"
 
---- Get API key from config or environment
+--- Get API key from stored credentials, config, or environment
 ---@return string|nil API key
 local function get_api_key()
+	-- Priority: stored credentials > config > environment
+	local credentials = require("codetyper.credentials")
+	local stored_key = credentials.get_api_key("openai")
+	if stored_key then
+		return stored_key
+	end
+
 	local codetyper = require("codetyper")
 	local config = codetyper.get_config()
 	return config.llm.openai.api_key or vim.env.OPENAI_API_KEY
 end
 
---- Get model from config
+--- Get model from stored credentials or config
 ---@return string Model name
 local function get_model()
+	-- Priority: stored credentials > config
+	local credentials = require("codetyper.credentials")
+	local stored_model = credentials.get_model("openai")
+	if stored_model then
+		return stored_model
+	end
+
 	local codetyper = require("codetyper")
 	local config = codetyper.get_config()
 	return config.llm.openai.model
 end
 
---- Get endpoint from config (allows custom endpoints like Azure, OpenRouter)
+--- Get endpoint from stored credentials or config (allows custom endpoints like Azure, OpenRouter)
 ---@return string API endpoint
 local function get_endpoint()
+	-- Priority: stored credentials > config > default
+	local credentials = require("codetyper.credentials")
+	local stored_endpoint = credentials.get_endpoint("openai")
+	if stored_endpoint then
+		return stored_endpoint
+	end
+
 	local codetyper = require("codetyper")
 	local config = codetyper.get_config()
 	return config.llm.openai.endpoint or API_URL
@@ -284,9 +305,18 @@ function M.generate_with_tools(messages, context, tool_definitions, callback)
 				return
 			end
 
-			-- Log token usage
+			-- Log token usage and record cost
 			if response.usage then
 				logs.response(response.usage.prompt_tokens or 0, response.usage.completion_tokens or 0, "stop")
+
+				-- Record usage for cost tracking
+				local cost = require("codetyper.cost")
+				cost.record_usage(
+					model,
+					response.usage.prompt_tokens or 0,
+					response.usage.completion_tokens or 0,
+					response.usage.prompt_tokens_details and response.usage.prompt_tokens_details.cached_tokens or 0
+				)
 			end
 
 			-- Convert to Claude-like format for parser compatibility

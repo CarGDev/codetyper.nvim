@@ -5,21 +5,33 @@ local M = {}
 local utils = require("codetyper.utils")
 local llm = require("codetyper.llm")
 
---- Get Ollama host from config
+--- Get Ollama host from stored credentials or config
 ---@return string Host URL
 local function get_host()
+	-- Priority: stored credentials > config
+	local credentials = require("codetyper.credentials")
+	local stored_host = credentials.get_ollama_host()
+	if stored_host then
+		return stored_host
+	end
+
 	local codetyper = require("codetyper")
 	local config = codetyper.get_config()
-
 	return config.llm.ollama.host
 end
 
---- Get model from config
+--- Get model from stored credentials or config
 ---@return string Model name
 local function get_model()
+	-- Priority: stored credentials > config
+	local credentials = require("codetyper.credentials")
+	local stored_model = credentials.get_model("ollama")
+	if stored_model then
+		return stored_model
+	end
+
 	local codetyper = require("codetyper")
 	local config = codetyper.get_config()
-
 	return config.llm.ollama.model
 end
 
@@ -199,47 +211,41 @@ function M.validate()
 	return true
 end
 
---- Build system prompt for agent mode with tool instructions
+--- Generate with tool use support for agentic mode (text-based tool calling)
+---@param messages table[] Conversation history
 ---@param context table Context information
----@return string System prompt
-local function build_agent_system_prompt(context)
+---@param tool_definitions table Tool definitions
+---@param callback fun(response: table|nil, error: string|nil) Callback with Claude-like response format
+function M.generate_with_tools(messages, context, tool_definitions, callback)
+	local logs = require("codetyper.agent.logs")
 	local agent_prompts = require("codetyper.prompts.agent")
 	local tools_module = require("codetyper.agent.tools")
 
-	local system_prompt = agent_prompts.system .. "\n\n"
-	system_prompt = system_prompt .. tools_module.to_prompt_format() .. "\n\n"
-	system_prompt = system_prompt .. agent_prompts.tool_instructions
+	logs.request("ollama", get_model())
+	logs.thinking("Preparing agent request...")
 
-	-- Add context about current file if available
-	if context.file_path then
-		system_prompt = system_prompt .. "\n\nCurrent working context:\n"
-		system_prompt = system_prompt .. "- File: " .. context.file_path .. "\n"
-		if context.language then
-			system_prompt = system_prompt .. "- Language: " .. context.language .. "\n"
+	-- Build system prompt with tool instructions
+	local system_prompt = llm.build_system_prompt(context)
+	system_prompt = system_prompt .. "\n\n" .. agent_prompts.system
+	system_prompt = system_prompt .. "\n\n" .. agent_prompts.tool_instructions
+
+	-- Add tool descriptions
+	system_prompt = system_prompt .. "\n\n## Available Tools\n"
+	system_prompt = system_prompt .. "Call tools by outputting JSON in this exact format:\n"
+	system_prompt = system_prompt .. '```json\n{"tool": "tool_name", "arguments": {...}}\n```\n\n'
+
+	for _, tool in ipairs(tool_definitions) do
+		local name = tool.name or (tool["function"] and tool["function"].name)
+		local desc = tool.description or (tool["function"] and tool["function"].description)
+		if name then
+			system_prompt = system_prompt .. string.format("### %s\n%s\n\n", name, desc or "")
 		end
 	end
-
-	-- Add project root info
-	local root = utils.get_project_root()
-	if root then
-		system_prompt = system_prompt .. "- Project root: " .. root .. "\n"
-	end
-
-	return system_prompt
-end
-
---- Build request body for Ollama API with tools (chat format)
----@param messages table[] Conversation messages
----@param context table Context information
----@return table Request body
-local function build_tools_request_body(messages, context)
-	local system_prompt = build_agent_system_prompt(context)
 
 	-- Convert messages to Ollama chat format
 	local ollama_messages = {}
 	for _, msg in ipairs(messages) do
 		local content = msg.content
-		-- Handle complex content (like tool results)
 		if type(content) == "table" then
 			local text_parts = {}
 			for _, part in ipairs(content) do
@@ -251,14 +257,10 @@ local function build_tools_request_body(messages, context)
 			end
 			content = table.concat(text_parts, "\n")
 		end
-
-		table.insert(ollama_messages, {
-			role = msg.role,
-			content = content,
-		})
+		table.insert(ollama_messages, { role = msg.role, content = content })
 	end
 
-	return {
+	local body = {
 		model = get_model(),
 		messages = ollama_messages,
 		system = system_prompt,
@@ -268,15 +270,14 @@ local function build_tools_request_body(messages, context)
 			num_predict = 4096,
 		},
 	}
-end
 
---- Make HTTP request to Ollama chat API
----@param body table Request body
----@param callback fun(response: string|nil, error: string|nil, usage: table|nil) Callback function
-local function make_chat_request(body, callback)
 	local host = get_host()
 	local url = host .. "/api/chat"
 	local json_body = vim.json.encode(body)
+
+	local prompt_estimate = logs.estimate_tokens(json_body)
+	logs.debug(string.format("Estimated prompt: ~%d tokens", prompt_estimate))
+	logs.thinking("Sending to Ollama API...")
 
 	local cmd = {
 		"curl",
@@ -302,196 +303,82 @@ local function make_chat_request(body, callback)
 
 			if not ok then
 				vim.schedule(function()
-					callback(nil, "Failed to parse Ollama response", nil)
+					logs.error("Failed to parse Ollama response")
+					callback(nil, "Failed to parse Ollama response")
 				end)
 				return
 			end
 
 			if response.error then
 				vim.schedule(function()
-					callback(nil, response.error or "Ollama API error", nil)
+					logs.error(response.error or "Ollama API error")
+					callback(nil, response.error or "Ollama API error")
 				end)
 				return
 			end
 
-			-- Extract usage info
-			local usage = {
-				prompt_tokens = response.prompt_eval_count or 0,
-				response_tokens = response.eval_count or 0,
-			}
+			-- Log token usage and record cost (Ollama is free but we track usage)
+			if response.prompt_eval_count or response.eval_count then
+				logs.response(response.prompt_eval_count or 0, response.eval_count or 0, "stop")
 
-			-- Return the message content for agent parsing
-			if response.message and response.message.content then
-				vim.schedule(function()
-					callback(response.message.content, nil, usage)
-				end)
-			else
-				vim.schedule(function()
-					callback(nil, "No response from Ollama", nil)
-				end)
+				-- Record usage for cost tracking (free for local models)
+				local cost = require("codetyper.cost")
+				cost.record_usage(
+					get_model(),
+					response.prompt_eval_count or 0,
+					response.eval_count or 0,
+					0 -- No cached tokens for Ollama
+				)
 			end
+
+			-- Parse the response text for tool calls
+			local content_text = response.message and response.message.content or ""
+			local converted = { content = {}, stop_reason = "end_turn" }
+
+			-- Try to extract JSON tool calls from response
+			local json_match = content_text:match("```json%s*(%b{})%s*```")
+			if json_match then
+				local ok_json, parsed = pcall(vim.json.decode, json_match)
+				if ok_json and parsed.tool then
+					table.insert(converted.content, {
+						type = "tool_use",
+						id = "call_" .. string.format("%x", os.time()) .. "_" .. string.format("%x", math.random(0, 0xFFFF)),
+						name = parsed.tool,
+						input = parsed.arguments or {},
+					})
+					logs.thinking("Tool call: " .. parsed.tool)
+					content_text = content_text:gsub("```json.-```", ""):gsub("^%s+", ""):gsub("%s+$", "")
+					converted.stop_reason = "tool_use"
+				end
+			end
+
+			-- Add text content
+			if content_text and content_text ~= "" then
+				table.insert(converted.content, 1, { type = "text", text = content_text })
+				logs.thinking("Response contains text")
+			end
+
+			vim.schedule(function()
+				callback(converted, nil)
+			end)
 		end,
 		on_stderr = function(_, data)
 			if data and #data > 0 and data[1] ~= "" then
 				vim.schedule(function()
-					callback(nil, "Ollama API request failed: " .. table.concat(data, "\n"), nil)
+					logs.error("Ollama API request failed: " .. table.concat(data, "\n"))
+					callback(nil, "Ollama API request failed: " .. table.concat(data, "\n"))
 				end)
 			end
 		end,
 		on_exit = function(_, code)
 			if code ~= 0 then
-				-- Don't double-report errors
+				vim.schedule(function()
+					logs.error("Ollama API request failed with code: " .. code)
+					callback(nil, "Ollama API request failed with code: " .. code)
+				end)
 			end
 		end,
 	})
-end
-
---- Generate response with tools using Ollama API
----@param messages table[] Conversation history
----@param context table Context information
----@param tools table Tool definitions (embedded in prompt for Ollama)
----@param callback fun(response: string|nil, error: string|nil) Callback function
-function M.generate_with_tools(messages, context, tools, callback)
-	local logs = require("codetyper.agent.logs")
-
-	-- Log the request
-	local model = get_model()
-	logs.request("ollama", model)
-	logs.thinking("Preparing API request...")
-
-	local body = build_tools_request_body(messages, context)
-
-	-- Estimate prompt tokens
-	local prompt_estimate = logs.estimate_tokens(vim.json.encode(body))
-	logs.debug(string.format("Estimated prompt: ~%d tokens", prompt_estimate))
-
-	make_chat_request(body, function(response, err, usage)
-		if err then
-			logs.error(err)
-			callback(nil, err)
-		else
-			-- Log token usage
-			if usage then
-				logs.response(usage.prompt_tokens or 0, usage.response_tokens or 0, "end_turn")
-			end
-
-			-- Log if response contains tool calls
-			if response then
-				local parser = require("codetyper.agent.parser")
-				local parsed = parser.parse_ollama_response(response)
-				if #parsed.tool_calls > 0 then
-					for _, tc in ipairs(parsed.tool_calls) do
-						logs.thinking("Tool call: " .. tc.name)
-					end
-				end
-				if parsed.text and parsed.text ~= "" then
-					logs.thinking("Response contains text")
-				end
-			end
-
-			callback(response, nil)
-		end
-	end)
-end
-
---- Generate with tool use support for agentic mode (simulated via prompts)
----@param messages table[] Conversation history
----@param context table Context information
----@param tool_definitions table Tool definitions
----@param callback fun(response: string|nil, error: string|nil) Callback with response text
-function M.generate_with_tools(messages, context, tool_definitions, callback)
-  local tools_module = require("codetyper.agent.tools")
-  local agent_prompts = require("codetyper.prompts.agent")
-
-  -- Build system prompt with agent instructions and tool definitions
-  local system_prompt = llm.build_system_prompt(context)
-  system_prompt = system_prompt .. "\n\n" .. agent_prompts.system
-  system_prompt = system_prompt .. "\n\n" .. tools_module.to_prompt_format()
-
-  -- Flatten messages to single prompt (Ollama's generate API)
-  local prompt_parts = {}
-  for _, msg in ipairs(messages) do
-    if type(msg.content) == "string" then
-      local role_prefix = msg.role == "user" and "User" or "Assistant"
-      table.insert(prompt_parts, role_prefix .. ": " .. msg.content)
-    elseif type(msg.content) == "table" then
-      -- Handle tool results
-      for _, item in ipairs(msg.content) do
-        if item.type == "tool_result" then
-          table.insert(prompt_parts, "Tool result: " .. item.content)
-        end
-      end
-    end
-  end
-
-  local body = {
-    model = get_model(),
-    system = system_prompt,
-    prompt = table.concat(prompt_parts, "\n\n"),
-    stream = false,
-    options = {
-      temperature = 0.2,
-      num_predict = 4096,
-    },
-  }
-
-  local host = get_host()
-  local url = host .. "/api/generate"
-  local json_body = vim.json.encode(body)
-
-  local cmd = {
-    "curl",
-    "-s",
-    "-X", "POST",
-    url,
-    "-H", "Content-Type: application/json",
-    "-d", json_body,
-  }
-
-  vim.fn.jobstart(cmd, {
-    stdout_buffered = true,
-    on_stdout = function(_, data)
-      if not data or #data == 0 or (data[1] == "" and #data == 1) then
-        return
-      end
-
-      local response_text = table.concat(data, "\n")
-      local ok, response = pcall(vim.json.decode, response_text)
-
-      if not ok then
-        vim.schedule(function()
-          callback(nil, "Failed to parse Ollama response")
-        end)
-        return
-      end
-
-      if response.error then
-        vim.schedule(function()
-          callback(nil, response.error or "Ollama API error")
-        end)
-        return
-      end
-
-      -- Return raw response text for parser to handle
-      vim.schedule(function()
-        callback(response.response or "", nil)
-      end)
-    end,
-    on_stderr = function(_, data)
-      if data and #data > 0 and data[1] ~= "" then
-        vim.schedule(function()
-          callback(nil, "Ollama API request failed: " .. table.concat(data, "\n"))
-        end)
-      end
-    end,
-    on_exit = function(_, code)
-      if code ~= 0 then
-        vim.schedule(function()
-          callback(nil, "Ollama API request failed with code: " .. code)
-        end)
-      end
-    end,
-  })
 end
 
 return M

@@ -9,6 +9,10 @@ local M = {}
 ---@param event LearnEvent Learning event
 ---@return boolean
 function M.detect(event)
+  if not event or not event.type then
+    return false
+  end
+
   local valid_types = {
     "code_completion",
     "file_indexed",

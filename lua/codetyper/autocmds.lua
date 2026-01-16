@@ -18,6 +18,16 @@ local processed_prompts = {}
 --- Track if we're currently asking for preferences
 local asking_preference = false
 
+--- Track if we're currently processing prompts (busy flag)
+local is_processing = false
+
+--- Track the previous mode for visual mode detection
+local previous_mode = "n"
+
+--- Debounce timer for prompt processing
+local prompt_process_timer = nil
+local PROMPT_PROCESS_DEBOUNCE_MS = 200 -- Wait 200ms after mode change before processing
+
 --- Generate a unique key for a prompt
 ---@param bufnr number Buffer number
 ---@param prompt table Prompt object
@@ -64,6 +74,20 @@ function M.setup()
 		desc = "Check for closed prompt tags on InsertLeave",
 	})
 
+	-- Track mode changes for visual mode detection
+	vim.api.nvim_create_autocmd("ModeChanged", {
+		group = group,
+		pattern = "*",
+		callback = function(ev)
+			-- Extract old mode from pattern (format: "old_mode:new_mode")
+			local old_mode = ev.match:match("^(.-):")
+			if old_mode then
+				previous_mode = old_mode
+			end
+		end,
+		desc = "Track previous mode for visual mode detection",
+	})
+
 	-- Auto-process prompts when entering normal mode (works on ALL files)
 	vim.api.nvim_create_autocmd("ModeChanged", {
 		group = group,
@@ -74,10 +98,33 @@ function M.setup()
 			if buftype ~= "" then
 				return
 			end
-			-- Slight delay to let buffer settle
-			vim.defer_fn(function()
+
+			-- Skip if currently processing (avoid concurrent processing)
+			if is_processing then
+				return
+			end
+
+			-- Skip if coming from visual mode (v, V, CTRL-V) - user is still editing
+			if previous_mode == "v" or previous_mode == "V" or previous_mode == "\22" then
+				return
+			end
+
+			-- Cancel any pending processing timer
+			if prompt_process_timer then
+				prompt_process_timer:stop()
+				prompt_process_timer = nil
+			end
+
+			-- Debounced processing - wait for user to truly be idle
+			prompt_process_timer = vim.defer_fn(function()
+				prompt_process_timer = nil
+				-- Double-check we're still in normal mode
+				local mode = vim.api.nvim_get_mode().mode
+				if mode ~= "n" then
+					return
+				end
 				M.check_all_prompts_with_preference()
-			end, 50)
+			end, PROMPT_PROCESS_DEBOUNCE_MS)
 		end,
 		desc = "Auto-process closed prompts when entering normal mode",
 	})
@@ -90,6 +137,10 @@ function M.setup()
 			-- Skip special buffers
 			local buftype = vim.bo.buftype
 			if buftype ~= "" then
+				return
+			end
+			-- Skip if currently processing
+			if is_processing then
 				return
 			end
 			local mode = vim.api.nvim_get_mode().mode
@@ -291,6 +342,12 @@ end
 
 --- Check if the buffer has a newly closed prompt and auto-process (works on ANY file)
 function M.check_for_closed_prompt()
+	-- Skip if already processing
+	if is_processing then
+		return
+	end
+	is_processing = true
+
 	local config = get_config_safe()
 	local parser = require("codetyper.parser")
 
@@ -299,6 +356,7 @@ function M.check_for_closed_prompt()
 
 	-- Skip if no file
 	if current_file == "" then
+		is_processing = false
 		return
 	end
 
@@ -308,6 +366,7 @@ function M.check_for_closed_prompt()
 	local lines = vim.api.nvim_buf_get_lines(bufnr, line - 1, line, false)
 
 	if #lines == 0 then
+		is_processing = false
 		return
 	end
 
@@ -323,6 +382,7 @@ function M.check_for_closed_prompt()
 
 			-- Check if already processed
 			if processed_prompts[prompt_key] then
+				is_processing = false
 				return
 			end
 
@@ -366,23 +426,38 @@ function M.check_for_closed_prompt()
 					-- Clean prompt content (strip file references)
 					local cleaned = parser.clean_prompt(parser.strip_file_references(prompt.content))
 
-					-- Resolve scope in target file FIRST (need it to adjust intent)
-					local target_bufnr = vim.fn.bufnr(target_path)
-					if target_bufnr == -1 then
-						target_bufnr = bufnr
-					end
+					-- Check if we're working from a coder file
+					local is_from_coder_file = utils.is_coder_file(current_file)
 
+					-- Resolve scope in target file FIRST (need it to adjust intent)
+					-- Only resolve scope if NOT from coder file (line numbers don't apply)
+					local target_bufnr = vim.fn.bufnr(target_path)
 					local scope = nil
 					local scope_text = nil
 					local scope_range = nil
 
-					scope = scope_mod.resolve_scope(target_bufnr, prompt.start_line, 1)
-					if scope and scope.type ~= "file" then
-						scope_text = scope.text
-						scope_range = {
-							start_line = scope.range.start_row,
-							end_line = scope.range.end_row,
-						}
+					if not is_from_coder_file then
+						-- Prompt is in the actual source file, use line position for scope
+						if target_bufnr == -1 then
+							target_bufnr = bufnr
+						end
+						scope = scope_mod.resolve_scope(target_bufnr, prompt.start_line, 1)
+						if scope and scope.type ~= "file" then
+							scope_text = scope.text
+							scope_range = {
+								start_line = scope.range.start_row,
+								end_line = scope.range.end_row,
+							}
+						end
+					else
+						-- Prompt is in coder file - load target if needed, but don't use scope
+						-- Code from coder files should append to target by default
+						if target_bufnr == -1 then
+							target_bufnr = vim.fn.bufadd(target_path)
+							if target_bufnr ~= 0 then
+								vim.fn.bufload(target_bufnr)
+							end
+						end
 					end
 
 					-- Detect intent from prompt
@@ -390,7 +465,8 @@ function M.check_for_closed_prompt()
 
 					-- IMPORTANT: If prompt is inside a function/method and intent is "add",
 					-- override to "complete" since we're completing the function body
-					if scope and (scope.type == "function" or scope.type == "method") then
+					-- But NOT for coder files - they should use "add/append" by default
+					if not is_from_coder_file and scope and (scope.type == "function" or scope.type == "method") then
 						if intent.type == "add" or intent.action == "insert" or intent.action == "append" then
 							-- Override to complete the function instead of adding new code
 							intent = {
@@ -401,6 +477,16 @@ function M.check_for_closed_prompt()
 								keywords = intent.keywords,
 							}
 						end
+					end
+
+					-- For coder files, default to "add" with "append" action
+					if is_from_coder_file and (intent.action == "replace" or intent.type == "complete") then
+						intent = {
+							type = intent.type == "complete" and "add" or intent.type,
+							confidence = intent.confidence,
+							action = "append",
+							keywords = intent.keywords,
+						}
 					end
 
 					-- Determine priority based on intent
@@ -446,6 +532,7 @@ function M.check_for_closed_prompt()
 			end
 		end
 	end
+	is_processing = false
 end
 
 --- Check and process all closed prompts in the buffer (works on ANY file)
@@ -507,7 +594,8 @@ function M.check_all_prompts()
 
 				-- Get target path - for coder files, get the target; for regular files, use self
 				local target_path
-				if utils.is_coder_file(current_file) then
+				local is_from_coder_file = utils.is_coder_file(current_file)
+				if is_from_coder_file then
 					target_path = utils.get_target_path(current_file)
 				else
 					target_path = current_file
@@ -520,22 +608,33 @@ function M.check_all_prompts()
 				local cleaned = parser.clean_prompt(parser.strip_file_references(prompt.content))
 
 				-- Resolve scope in target file FIRST (need it to adjust intent)
+				-- Only resolve scope if NOT from coder file (line numbers don't apply)
 				local target_bufnr = vim.fn.bufnr(target_path)
-				if target_bufnr == -1 then
-					target_bufnr = bufnr -- Use current buffer if target not loaded
-				end
-
 				local scope = nil
 				local scope_text = nil
 				local scope_range = nil
 
-				scope = scope_mod.resolve_scope(target_bufnr, prompt.start_line, 1)
-				if scope and scope.type ~= "file" then
-					scope_text = scope.text
-					scope_range = {
-						start_line = scope.range.start_row,
-						end_line = scope.range.end_row,
-					}
+				if not is_from_coder_file then
+					-- Prompt is in the actual source file, use line position for scope
+					if target_bufnr == -1 then
+						target_bufnr = bufnr
+					end
+					scope = scope_mod.resolve_scope(target_bufnr, prompt.start_line, 1)
+					if scope and scope.type ~= "file" then
+						scope_text = scope.text
+						scope_range = {
+							start_line = scope.range.start_row,
+							end_line = scope.range.end_row,
+						}
+					end
+				else
+					-- Prompt is in coder file - load target if needed
+					if target_bufnr == -1 then
+						target_bufnr = vim.fn.bufadd(target_path)
+						if target_bufnr ~= 0 then
+							vim.fn.bufload(target_bufnr)
+						end
+					end
 				end
 
 				-- Detect intent from prompt
@@ -543,7 +642,8 @@ function M.check_all_prompts()
 
 				-- IMPORTANT: If prompt is inside a function/method and intent is "add",
 				-- override to "complete" since we're completing the function body
-				if scope and (scope.type == "function" or scope.type == "method") then
+				-- But NOT for coder files - they should use "add/append" by default
+				if not is_from_coder_file and scope and (scope.type == "function" or scope.type == "method") then
 					if intent.type == "add" or intent.action == "insert" or intent.action == "append" then
 						-- Override to complete the function instead of adding new code
 						intent = {
@@ -554,6 +654,16 @@ function M.check_all_prompts()
 							keywords = intent.keywords,
 						}
 					end
+				end
+
+				-- For coder files, default to "add" with "append" action
+				if is_from_coder_file and (intent.action == "replace" or intent.type == "complete") then
+					intent = {
+						type = intent.type == "complete" and "add" or intent.type,
+						confidence = intent.confidence,
+						action = "append",
+						keywords = intent.keywords,
+					}
 				end
 
 				-- Determine priority based on intent
@@ -932,20 +1042,17 @@ function M.update_brain_from_file(filepath)
 
 	local summary = vim.fn.fnamemodify(filepath, ":t") .. " - " .. table.concat(parts, "; ")
 
-	-- Learn this pattern
+	-- Learn this pattern - use "pattern_detected" type to match the pattern learner
 	brain.learn({
-		type = "pattern",
+		type = "pattern_detected",
 		file = filepath,
-		content = {
-			summary = summary,
-			detail = #functions .. " functions, " .. #classes .. " classes",
-			code = nil,
-		},
-		context = {
-			file = filepath,
+		timestamp = os.time(),
+		data = {
+			name = summary,
+			description = #functions .. " functions, " .. #classes .. " classes",
 			language = ext,
-			functions = functions,
-			classes = classes,
+			symbols = vim.tbl_map(function(f) return f.name end, functions),
+			example = nil,
 		},
 	})
 end
@@ -997,6 +1104,126 @@ end
 
 --- Auto-index a file by creating/opening its coder companion
 ---@param bufnr number Buffer number
+--- Directories to ignore for coder file creation
+local ignored_directories = {
+	".git",
+	".coder",
+	".claude",
+	".vscode",
+	".idea",
+	"node_modules",
+	"vendor",
+	"dist",
+	"build",
+	"target",
+	"__pycache__",
+	".cache",
+	".npm",
+	".yarn",
+	"coverage",
+	".next",
+	".nuxt",
+	".svelte-kit",
+	"out",
+	"bin",
+	"obj",
+}
+
+--- Files to ignore for coder file creation (exact names or patterns)
+local ignored_files = {
+	-- Git files
+	".gitignore",
+	".gitattributes",
+	".gitmodules",
+	-- Lock files
+	"package-lock.json",
+	"yarn.lock",
+	"pnpm-lock.yaml",
+	"Cargo.lock",
+	"Gemfile.lock",
+	"poetry.lock",
+	"composer.lock",
+	-- Config files that don't need coder companions
+	".env",
+	".env.local",
+	".env.development",
+	".env.production",
+	".eslintrc",
+	".eslintrc.json",
+	".prettierrc",
+	".prettierrc.json",
+	".editorconfig",
+	".dockerignore",
+	"Dockerfile",
+	"docker-compose.yml",
+	"docker-compose.yaml",
+	".npmrc",
+	".yarnrc",
+	".nvmrc",
+	"tsconfig.json",
+	"jsconfig.json",
+	"babel.config.js",
+	"webpack.config.js",
+	"vite.config.js",
+	"rollup.config.js",
+	"jest.config.js",
+	"vitest.config.js",
+	".stylelintrc",
+	"tailwind.config.js",
+	"postcss.config.js",
+	-- Other non-code files
+	"README.md",
+	"CHANGELOG.md",
+	"LICENSE",
+	"LICENSE.md",
+	"CONTRIBUTING.md",
+	"Makefile",
+	"CMakeLists.txt",
+}
+
+--- Check if a file path contains an ignored directory
+---@param filepath string Full file path
+---@return boolean
+local function is_in_ignored_directory(filepath)
+	for _, dir in ipairs(ignored_directories) do
+		-- Check for /dirname/ or /dirname at end
+		if filepath:match("/" .. dir .. "/") or filepath:match("/" .. dir .. "$") then
+			return true
+		end
+		-- Also check for dirname/ at start (relative paths)
+		if filepath:match("^" .. dir .. "/") then
+			return true
+		end
+	end
+	return false
+end
+
+--- Check if a file should be ignored for coder companion creation
+---@param filepath string Full file path
+---@return boolean
+local function should_ignore_for_coder(filepath)
+	local filename = vim.fn.fnamemodify(filepath, ":t")
+
+	-- Check exact filename matches
+	for _, ignored in ipairs(ignored_files) do
+		if filename == ignored then
+			return true
+		end
+	end
+
+	-- Check if file starts with dot (hidden/config files)
+	if filename:match("^%.") then
+		return true
+	end
+
+	-- Check if in ignored directory
+	if is_in_ignored_directory(filepath) then
+		return true
+	end
+
+	return false
+end
+
 function M.auto_index_file(bufnr)
 	-- Skip if buffer is invalid
 	if not vim.api.nvim_buf_is_valid(bufnr) then
@@ -1031,6 +1258,11 @@ function M.auto_index_file(bufnr)
 		return
 	end
 
+	-- Skip ignored directories and files (node_modules, .git, config files, etc.)
+	if should_ignore_for_coder(filepath) then
+		return
+	end
+
 	-- Skip if auto_index is disabled in config
 	local codetyper = require("codetyper")
 	local config = codetyper.get_config()
@@ -1047,23 +1279,137 @@ function M.auto_index_file(bufnr)
 	-- Check if coder file already exists
 	local coder_exists = utils.file_exists(coder_path)
 
-	-- Create coder file with template if it doesn't exist
+	-- Create coder file with pseudo-code context if it doesn't exist
 	if not coder_exists then
 		local filename = vim.fn.fnamemodify(filepath, ":t")
-		local template = string.format(
-			[[-- Coder companion for %s
--- Use /@ @/ tags to write pseudo-code prompts
--- Example:
--- /@
--- Add a function that validates user input
--- - Check for empty strings
--- - Validate email format
--- @/
+		local ext = vim.fn.fnamemodify(filepath, ":e")
 
-]],
-			filename
-		)
-		utils.write_file(coder_path, template)
+		-- Determine comment style based on extension
+		local comment_prefix = "--"
+		local comment_block_start = "--[["
+		local comment_block_end = "]]"
+		if ext == "ts" or ext == "tsx" or ext == "js" or ext == "jsx" or ext == "java" or ext == "c" or ext == "cpp" or ext == "cs" or ext == "go" or ext == "rs" then
+			comment_prefix = "//"
+			comment_block_start = "/*"
+			comment_block_end = "*/"
+		elseif ext == "py" or ext == "rb" or ext == "yaml" or ext == "yml" then
+			comment_prefix = "#"
+			comment_block_start = '"""'
+			comment_block_end = '"""'
+		end
+
+		-- Read target file to analyze its structure
+		local content = ""
+		pcall(function()
+			local lines = vim.fn.readfile(filepath)
+			if lines then
+				content = table.concat(lines, "\n")
+			end
+		end)
+
+		-- Extract structure from the file
+		local functions = extract_functions(content, ext)
+		local classes = extract_classes(content, ext)
+		local imports = extract_imports(content, ext)
+
+		-- Build pseudo-code context
+		local pseudo_code = {}
+
+		-- Header
+		table.insert(pseudo_code, comment_prefix .. " ═══════════════════════════════════════════════════════════")
+		table.insert(pseudo_code, comment_prefix .. " CODER COMPANION: " .. filename)
+		table.insert(pseudo_code, comment_prefix .. " ═══════════════════════════════════════════════════════════")
+		table.insert(pseudo_code, comment_prefix .. " This file describes the business logic and behavior of " .. filename)
+		table.insert(pseudo_code, comment_prefix .. " Edit this pseudo-code to guide code generation.")
+		table.insert(pseudo_code, comment_prefix .. " Use /@ @/ tags for specific generation requests.")
+		table.insert(pseudo_code, comment_prefix .. "")
+
+		-- Module purpose
+		table.insert(pseudo_code, comment_prefix .. " ─────────────────────────────────────────────────────────────")
+		table.insert(pseudo_code, comment_prefix .. " MODULE PURPOSE:")
+		table.insert(pseudo_code, comment_prefix .. " ─────────────────────────────────────────────────────────────")
+		table.insert(pseudo_code, comment_prefix .. " TODO: Describe what this module/file is responsible for")
+		table.insert(pseudo_code, comment_prefix .. " Example: \"Handles user authentication and session management\"")
+		table.insert(pseudo_code, comment_prefix .. "")
+
+		-- Dependencies section
+		if #imports > 0 then
+			table.insert(pseudo_code, comment_prefix .. " ─────────────────────────────────────────────────────────────")
+			table.insert(pseudo_code, comment_prefix .. " DEPENDENCIES:")
+			table.insert(pseudo_code, comment_prefix .. " ─────────────────────────────────────────────────────────────")
+			for _, imp in ipairs(imports) do
+				table.insert(pseudo_code, comment_prefix .. " • " .. imp)
+			end
+			table.insert(pseudo_code, comment_prefix .. "")
+		end
+
+		-- Classes section
+		if #classes > 0 then
+			table.insert(pseudo_code, comment_prefix .. " ─────────────────────────────────────────────────────────────")
+			table.insert(pseudo_code, comment_prefix .. " CLASSES:")
+			table.insert(pseudo_code, comment_prefix .. " ─────────────────────────────────────────────────────────────")
+			for _, class in ipairs(classes) do
+				table.insert(pseudo_code, comment_prefix .. "")
+				table.insert(pseudo_code, comment_prefix .. " class " .. class.name .. ":")
+				table.insert(pseudo_code, comment_prefix .. "   PURPOSE: TODO - describe what this class represents")
+				table.insert(pseudo_code, comment_prefix .. "   RESPONSIBILITIES:")
+				table.insert(pseudo_code, comment_prefix .. "     - TODO: list main responsibilities")
+			end
+			table.insert(pseudo_code, comment_prefix .. "")
+		end
+
+		-- Functions section
+		if #functions > 0 then
+			table.insert(pseudo_code, comment_prefix .. " ─────────────────────────────────────────────────────────────")
+			table.insert(pseudo_code, comment_prefix .. " FUNCTIONS:")
+			table.insert(pseudo_code, comment_prefix .. " ─────────────────────────────────────────────────────────────")
+			for _, func in ipairs(functions) do
+				table.insert(pseudo_code, comment_prefix .. "")
+				table.insert(pseudo_code, comment_prefix .. " " .. func.name .. "():")
+				table.insert(pseudo_code, comment_prefix .. "   PURPOSE: TODO - what does this function do?")
+				table.insert(pseudo_code, comment_prefix .. "   INPUTS: TODO - describe parameters")
+				table.insert(pseudo_code, comment_prefix .. "   OUTPUTS: TODO - describe return value")
+				table.insert(pseudo_code, comment_prefix .. "   BEHAVIOR:")
+				table.insert(pseudo_code, comment_prefix .. "     - TODO: describe step-by-step logic")
+			end
+			table.insert(pseudo_code, comment_prefix .. "")
+		end
+
+		-- If empty file, provide starter template
+		if #functions == 0 and #classes == 0 then
+			table.insert(pseudo_code, comment_prefix .. " ─────────────────────────────────────────────────────────────")
+			table.insert(pseudo_code, comment_prefix .. " PLANNED STRUCTURE:")
+			table.insert(pseudo_code, comment_prefix .. " ─────────────────────────────────────────────────────────────")
+			table.insert(pseudo_code, comment_prefix .. " TODO: Describe what you want to build in this file")
+			table.insert(pseudo_code, comment_prefix .. "")
+			table.insert(pseudo_code, comment_prefix .. " Example pseudo-code:")
+			table.insert(pseudo_code, comment_prefix .. " /@")
+			table.insert(pseudo_code, comment_prefix .. " Create a module that:")
+			table.insert(pseudo_code, comment_prefix .. " 1. Exports a main function")
+			table.insert(pseudo_code, comment_prefix .. " 2. Handles errors gracefully")
+			table.insert(pseudo_code, comment_prefix .. " 3. Returns structured data")
+			table.insert(pseudo_code, comment_prefix .. " @/")
+			table.insert(pseudo_code, comment_prefix .. "")
+		end
+
+		-- Business rules section
+		table.insert(pseudo_code, comment_prefix .. " ─────────────────────────────────────────────────────────────")
+		table.insert(pseudo_code, comment_prefix .. " BUSINESS RULES:")
+		table.insert(pseudo_code, comment_prefix .. " ─────────────────────────────────────────────────────────────")
+		table.insert(pseudo_code, comment_prefix .. " TODO: Document any business rules, constraints, or requirements")
+		table.insert(pseudo_code, comment_prefix .. " Example:")
+		table.insert(pseudo_code, comment_prefix .. "   - Users must be authenticated before accessing this feature")
+		table.insert(pseudo_code, comment_prefix .. "   - Data must be validated before saving")
+		table.insert(pseudo_code, comment_prefix .. "   - Errors should be logged but not exposed to users")
+		table.insert(pseudo_code, comment_prefix .. "")
+
+		-- Footer with generation tags example
+		table.insert(pseudo_code, comment_prefix .. " ═══════════════════════════════════════════════════════════")
+		table.insert(pseudo_code, comment_prefix .. " Use /@ @/ tags below to request code generation:")
+		table.insert(pseudo_code, comment_prefix .. " ═══════════════════════════════════════════════════════════")
+		table.insert(pseudo_code, "")
+
+		utils.write_file(coder_path, table.concat(pseudo_code, "\n"))
 	end
 
 	-- Notify user about the coder companion

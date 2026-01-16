@@ -8,11 +8,11 @@ local M = {}
 
 --- Heuristic weights (must sum to 1.0)
 M.weights = {
-	length = 0.15,      -- Response length relative to prompt
+	length = 0.15, -- Response length relative to prompt
 	uncertainty = 0.30, -- Uncertainty phrases
-	syntax = 0.25,      -- Syntax completeness
-	repetition = 0.15,  -- Duplicate lines
-	truncation = 0.15,  -- Incomplete ending
+	syntax = 0.25, -- Syntax completeness
+	repetition = 0.15, -- Duplicate lines
+	truncation = 0.15, -- Incomplete ending
 }
 
 --- Uncertainty phrases that indicate low confidence
@@ -255,14 +255,15 @@ function M.score(response, prompt, context)
 	_ = context -- Reserved for future use
 
 	if not response or #response == 0 then
-		return 0, {
-			length = 0,
-			uncertainty = 0,
-			syntax = 0,
-			repetition = 0,
-			truncation = 0,
-			weighted_total = 0,
-		}
+		return 0,
+			{
+				length = 0,
+				uncertainty = 0,
+				syntax = 0,
+				repetition = 0,
+				truncation = 0,
+				weighted_total = 0,
+			}
 	end
 
 	local scores = {

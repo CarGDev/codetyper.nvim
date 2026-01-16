@@ -111,7 +111,11 @@ function M.agent_loop(context, callbacks)
   logs.thinking("Calling LLM with " .. #state.conversation .. " messages...")
 
   -- Generate with tools enabled
-  client.generate_with_tools(state.conversation, context, tools.definitions, function(response, err)
+  -- Ensure tools are loaded and get definitions
+  tools.setup()
+  local tool_defs = tools.to_openai_format()
+
+  client.generate_with_tools(state.conversation, context, tool_defs, function(response, err)
     if err then
       state.is_running = false
       callbacks.on_error(err)

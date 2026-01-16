@@ -83,6 +83,9 @@ local TS_QUERIES = {
 	},
 }
 
+-- Forward declaration for analyze_tree_generic (defined below)
+local analyze_tree_generic
+
 --- Hash file content for change detection
 ---@param content string
 ---@return string
@@ -256,7 +259,7 @@ end
 ---@param root TSNode
 ---@param bufnr number
 ---@return table
-local function analyze_tree_generic(root, bufnr)
+analyze_tree_generic = function(root, bufnr)
 	local result = {
 		functions = {},
 		classes = {},

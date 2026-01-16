@@ -20,8 +20,10 @@
 - 🛡️ **Completion-Aware**: Safe injection that doesn't fight with autocomplete
 - 📁 **Auto-Index**: Automatically create coder companion files on file open
 - 📜 **Logs Panel**: Real-time visibility into LLM requests and token usage
+- 💰 **Cost Tracking**: Persistent LLM cost estimation with session and all-time stats
 - 🔒 **Git Integration**: Automatically adds `.coder.*` files to `.gitignore`
 - 🌳 **Project Tree Logging**: Maintains a `tree.log` tracking your project structure
+- 🧠 **Brain System**: Knowledge graph that learns from your coding patterns
 
 ---
 
@@ -34,6 +36,8 @@
 - [LLM Providers](#-llm-providers)
 - [Commands Reference](#-commands-reference)
 - [Usage Guide](#-usage-guide)
+- [Logs Panel](#-logs-panel)
+- [Cost Tracking](#-cost-tracking)
 - [Agent Mode](#-agent-mode)
 - [Keymaps](#-keymaps)
 - [Health Check](#-health-check)
@@ -196,6 +200,32 @@ require("codetyper").setup({
 | `OPENAI_API_KEY` | OpenAI API key |
 | `GEMINI_API_KEY` | Google Gemini API key |
 
+### Credentials Management
+
+Instead of storing API keys in your config (which may be committed to git), you can use the credentials system:
+
+```vim
+:CoderAddApiKey
+```
+
+This command interactively prompts for:
+1. Provider selection (Claude, OpenAI, Gemini, Copilot, Ollama)
+2. API key (for cloud providers)
+3. Model name
+4. Custom endpoint (for OpenAI-compatible APIs)
+
+Credentials are stored securely in `~/.local/share/nvim/codetyper/configuration.json` (not in your config files).
+
+**Priority order for credentials:**
+1. Stored credentials (via `:CoderAddApiKey`)
+2. Config file settings
+3. Environment variables
+
+**Other credential commands:**
+- `:CoderCredentials` - View configured providers
+- `:CoderSwitchProvider` - Switch between configured providers
+- `:CoderRemoveApiKey` - Remove stored credentials
+
 ---
 
 ## 🔌 LLM Providers
@@ -255,49 +285,129 @@ llm = {
 
 ## 📝 Commands Reference
 
-### Main Commands
+All commands can be invoked via `:Coder {subcommand}` or their dedicated command aliases.
+
+### Core Commands
+
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `:Coder open` | `:CoderOpen` | Open the coder split view |
+| `:Coder close` | `:CoderClose` | Close the coder split view |
+| `:Coder toggle` | `:CoderToggle` | Toggle the coder split view |
+| `:Coder process` | `:CoderProcess` | Process the last prompt in coder file |
+| `:Coder status` | - | Show plugin status and configuration |
+| `:Coder focus` | - | Switch focus between coder and target windows |
+| `:Coder reset` | - | Reset processed prompts to allow re-processing |
+| `:Coder gitignore` | - | Force update .gitignore with coder patterns |
+
+### Ask Panel (Chat Interface)
+
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `:Coder ask` | `:CoderAsk` | Open the Ask panel |
+| `:Coder ask-toggle` | `:CoderAskToggle` | Toggle the Ask panel |
+| `:Coder ask-close` | - | Close the Ask panel |
+| `:Coder ask-clear` | `:CoderAskClear` | Clear chat history |
+
+### Agent Mode (Autonomous Coding)
+
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `:Coder agent` | `:CoderAgent` | Open the Agent panel |
+| `:Coder agent-toggle` | `:CoderAgentToggle` | Toggle the Agent panel |
+| `:Coder agent-close` | - | Close the Agent panel |
+| `:Coder agent-stop` | `:CoderAgentStop` | Stop the running agent |
+
+### Agentic Mode (IDE-like Multi-file Agent)
+
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `:Coder agentic-run <task>` | `:CoderAgenticRun <task>` | Run an agentic task (multi-file changes) |
+| `:Coder agentic-list` | `:CoderAgenticList` | List available agents |
+| `:Coder agentic-init` | `:CoderAgenticInit` | Initialize `.coder/agents/` and `.coder/rules/` |
+
+### Transform Commands (Inline Tag Processing)
+
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `:Coder transform` | `:CoderTransform` | Transform all `/@ @/` tags in file |
+| `:Coder transform-cursor` | `:CoderTransformCursor` | Transform tag at cursor position |
+| - | `:CoderTransformVisual` | Transform selected tags (visual mode) |
+
+### Project & Index Commands
+
+| Command | Alias | Description |
+|---------|-------|-------------|
+| - | `:CoderIndex` | Open coder companion for current file |
+| `:Coder index-project` | `:CoderIndexProject` | Index the entire project |
+| `:Coder index-status` | `:CoderIndexStatus` | Show project index status |
+
+### Tree & Structure Commands
+
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `:Coder tree` | `:CoderTree` | Refresh `.coder/tree.log` |
+| `:Coder tree-view` | `:CoderTreeView` | View `.coder/tree.log` in split |
+
+### Queue & Scheduler Commands
+
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `:Coder queue-status` | `:CoderQueueStatus` | Show scheduler and queue status |
+| `:Coder queue-process` | `:CoderQueueProcess` | Manually trigger queue processing |
+
+### Processing Mode Commands
+
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `:Coder auto-toggle` | `:CoderAutoToggle` | Toggle automatic/manual prompt processing |
+| `:Coder auto-set <mode>` | `:CoderAutoSet <mode>` | Set processing mode (`auto`/`manual`) |
+
+### Memory & Learning Commands
+
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `:Coder memories` | `:CoderMemories` | Show learned memories |
+| `:Coder forget [pattern]` | `:CoderForget [pattern]` | Clear memories (optionally matching pattern) |
+
+### Brain Commands (Knowledge Graph)
+
+| Command | Alias | Description |
+|---------|-------|-------------|
+| - | `:CoderBrain [action]` | Brain management (`stats`/`commit`/`flush`/`prune`) |
+| - | `:CoderFeedback <type>` | Give feedback to brain (`good`/`bad`/`stats`) |
+
+### LLM Statistics & Feedback
 
 | Command | Description |
 |---------|-------------|
-| `:Coder {subcommand}` | Main command with subcommands |
-| `:CoderOpen` | Open the coder split view |
-| `:CoderClose` | Close the coder split view |
-| `:CoderToggle` | Toggle the coder split view |
-| `:CoderProcess` | Process the last prompt |
+| `:Coder llm-stats` | Show LLM provider accuracy statistics |
+| `:Coder llm-feedback-good` | Report positive feedback on last response |
+| `:Coder llm-feedback-bad` | Report negative feedback on last response |
+| `:Coder llm-reset-stats` | Reset LLM accuracy statistics |
 
-### Ask Panel
+### Cost Tracking
 
-| Command | Description |
-|---------|-------------|
-| `:CoderAsk` | Open the Ask panel |
-| `:CoderAskToggle` | Toggle the Ask panel |
-| `:CoderAskClear` | Clear chat history |
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `:Coder cost` | `:CoderCost` | Show LLM cost estimation window |
+| `:Coder cost-clear` | - | Clear session cost tracking |
 
-### Agent Mode
+### Credentials Management
 
-| Command | Description |
-|---------|-------------|
-| `:CoderAgent` | Open the Agent panel |
-| `:CoderAgentToggle` | Toggle the Agent panel |
-| `:CoderAgentStop` | Stop the running agent |
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `:Coder add-api-key` | `:CoderAddApiKey` | Add or update LLM provider API key |
+| `:Coder remove-api-key` | `:CoderRemoveApiKey` | Remove LLM provider credentials |
+| `:Coder credentials` | `:CoderCredentials` | Show credentials status |
+| `:Coder switch-provider` | `:CoderSwitchProvider` | Switch active LLM provider |
 
-### Transform Commands
+### UI Commands
 
-| Command | Description |
-|---------|-------------|
-| `:CoderTransform` | Transform all /@ @/ tags in file |
-| `:CoderTransformCursor` | Transform tag at cursor position |
-| `:CoderTransformVisual` | Transform selected tags (visual mode) |
-
-### Utility Commands
-
-| Command | Description |
-|---------|-------------|
-| `:CoderIndex` | Open coder companion for current file |
-| `:CoderLogs` | Toggle logs panel |
-| `:CoderType` | Switch between Ask/Agent modes |
-| `:CoderTree` | Refresh tree.log |
-| `:CoderTreeView` | View tree.log |
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `:Coder type-toggle` | `:CoderType` | Show Ask/Agent mode switcher |
+| `:Coder logs-toggle` | `:CoderLogs` | Toggle logs panel |
 
 ---
 
@@ -381,6 +491,42 @@ The logs panel opens automatically when processing prompts with the scheduler en
 |-----|-------------|
 | `q` | Close logs panel |
 | `<Esc>` | Close logs panel |
+
+---
+
+## 💰 Cost Tracking
+
+Track your LLM API costs across sessions with the Cost Estimation window.
+
+### Features
+
+- **Session Tracking**: Monitor current session token usage and costs
+- **All-Time Tracking**: Persistent cost history stored per-project in `.coder/cost_history.json`
+- **Model Breakdown**: See costs by individual model
+- **Pricing Database**: Built-in pricing for 50+ models (GPT, Claude, Gemini, O-series, etc.)
+
+### Opening the Cost Window
+
+```vim
+:CoderCost
+```
+
+### Cost Window Keymaps
+
+| Key | Description |
+|-----|-------------|
+| `q` / `<Esc>` | Close window |
+| `r` | Refresh display |
+| `c` | Clear session costs |
+| `C` | Clear all history |
+
+### Supported Models
+
+The cost tracker includes pricing for:
+- **OpenAI**: GPT-4, GPT-4o, GPT-4o-mini, O1, O3, O4-mini, and more
+- **Anthropic**: Claude 3 Opus, Sonnet, Haiku, Claude 3.5 Sonnet/Haiku
+- **Local**: Ollama models (free, but usage tracked)
+- **Copilot**: Usage tracked (included in subscription)
 
 ---
 

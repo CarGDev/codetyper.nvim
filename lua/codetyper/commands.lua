@@ -287,6 +287,118 @@ local function cmd_agent_stop()
   end
 end
 
+--- Run the agentic loop with a task
+---@param task string The task to accomplish
+---@param agent_name? string Optional agent name
+local function cmd_agentic_run(task, agent_name)
+  local agentic = require("codetyper.agent.agentic")
+  local logs_panel = require("codetyper.logs_panel")
+  local logs = require("codetyper.agent.logs")
+
+  -- Open logs panel
+  logs_panel.open()
+
+  logs.info("Starting agentic task: " .. task:sub(1, 50) .. "...")
+  utils.notify("Running agentic task...", vim.log.levels.INFO)
+
+  -- Get current file for context
+  local current_file = vim.fn.expand("%:p")
+  local files = {}
+  if current_file ~= "" then
+    table.insert(files, current_file)
+  end
+
+  agentic.run({
+    task = task,
+    files = files,
+    agent = agent_name or "coder",
+    on_status = function(status)
+      logs.thinking(status)
+    end,
+    on_tool_start = function(name, args)
+      logs.info("Tool: " .. name)
+    end,
+    on_tool_end = function(name, result, err)
+      if err then
+        logs.error(name .. " failed: " .. err)
+      else
+        logs.debug(name .. " completed")
+      end
+    end,
+    on_file_change = function(path, action)
+      logs.info("File " .. action .. ": " .. path)
+    end,
+    on_message = function(msg)
+      if msg.role == "assistant" and type(msg.content) == "string" and msg.content ~= "" then
+        logs.thinking(msg.content:sub(1, 100) .. "...")
+      end
+    end,
+    on_complete = function(result, err)
+      if err then
+        logs.error("Task failed: " .. err)
+        utils.notify("Agentic task failed: " .. err, vim.log.levels.ERROR)
+      else
+        logs.info("Task completed successfully")
+        utils.notify("Agentic task completed!", vim.log.levels.INFO)
+        if result and result ~= "" then
+          -- Show summary in a float
+          vim.schedule(function()
+            vim.notify("Result:\n" .. result:sub(1, 500), vim.log.levels.INFO)
+          end)
+        end
+      end
+    end,
+  })
+end
+
+--- List available agents
+local function cmd_agentic_list()
+  local agentic = require("codetyper.agent.agentic")
+  local agents = agentic.list_agents()
+
+  local lines = {
+    "Available Agents",
+    "================",
+    "",
+  }
+
+  for _, agent in ipairs(agents) do
+    local badge = agent.builtin and "[builtin]" or "[custom]"
+    table.insert(lines, string.format("  %s %s", agent.name, badge))
+    table.insert(lines, string.format("    %s", agent.description))
+    table.insert(lines, "")
+  end
+
+  table.insert(lines, "Use :CoderAgenticRun <task> [agent] to run a task")
+  table.insert(lines, "Use :CoderAgenticInit to create custom agents")
+
+  utils.notify(table.concat(lines, "\n"))
+end
+
+--- Initialize .coder/agents/ and .coder/rules/ directories
+local function cmd_agentic_init()
+  local agentic = require("codetyper.agent.agentic")
+  agentic.init()
+
+  local agents_dir = vim.fn.getcwd() .. "/.coder/agents"
+  local rules_dir = vim.fn.getcwd() .. "/.coder/rules"
+
+  local lines = {
+    "Initialized Coder directories:",
+    "",
+    "  " .. agents_dir,
+    "    - example.md (template for custom agents)",
+    "",
+    "  " .. rules_dir,
+    "    - code-style.md (template for project rules)",
+    "",
+    "Edit these files to customize agent behavior.",
+    "Create new .md files to add more agents/rules.",
+  }
+
+  utils.notify(table.concat(lines, "\n"))
+end
+
 --- Show chat type switcher modal (Ask/Agent)
 local function cmd_type_toggle()
   local switcher = require("codetyper.chat_switcher")
@@ -844,6 +956,65 @@ end
 
 --- Main command dispatcher
 ---@param args table Command arguments
+--- Show LLM accuracy statistics
+local function cmd_llm_stats()
+  local llm = require("codetyper.llm")
+  local stats = llm.get_accuracy_stats()
+
+  local lines = {
+    "LLM Provider Accuracy Statistics",
+    "================================",
+    "",
+    string.format("Ollama:"),
+    string.format("  Total requests: %d", stats.ollama.total),
+    string.format("  Correct: %d", stats.ollama.correct),
+    string.format("  Accuracy: %.1f%%", stats.ollama.accuracy * 100),
+    "",
+    string.format("Copilot:"),
+    string.format("  Total requests: %d", stats.copilot.total),
+    string.format("  Correct: %d", stats.copilot.correct),
+    string.format("  Accuracy: %.1f%%", stats.copilot.accuracy * 100),
+    "",
+    "Note: Smart selection prefers Ollama when brain memories",
+    "provide enough context. Accuracy improves over time via",
+    "pondering (verification with other LLMs).",
+  }
+
+  vim.notify(table.concat(lines, "\n"), vim.log.levels.INFO)
+end
+
+--- Report feedback on last LLM response
+---@param was_good boolean Whether the response was good
+local function cmd_llm_feedback(was_good)
+  local llm = require("codetyper.llm")
+  -- Get the last used provider from logs or default
+  local provider = "ollama" -- Default assumption
+
+  -- Try to get actual last provider from logs
+  pcall(function()
+    local logs = require("codetyper.agent.logs")
+    local entries = logs.get(10)
+    for i = #entries, 1, -1 do
+      local entry = entries[i]
+      if entry.message and entry.message:match("^LLM:") then
+        provider = entry.message:match("LLM: (%w+)") or provider
+        break
+      end
+    end
+  end)
+
+  llm.report_feedback(provider, was_good)
+  local feedback_type = was_good and "positive" or "negative"
+  utils.notify(string.format("Reported %s feedback for %s", feedback_type, provider), vim.log.levels.INFO)
+end
+
+--- Reset LLM accuracy statistics
+local function cmd_llm_reset_stats()
+  local selector = require("codetyper.llm.selector")
+  selector.reset_accuracy_stats()
+  utils.notify("LLM accuracy statistics reset", vim.log.levels.INFO)
+end
+
 local function coder_cmd(args)
   local subcommand = args.fargs[1] or "toggle"
 
@@ -872,6 +1043,17 @@ local function coder_cmd(args)
     ["logs-toggle"] = cmd_logs_toggle,
     ["queue-status"] = cmd_queue_status,
     ["queue-process"] = cmd_queue_process,
+    -- Agentic commands
+    ["agentic-run"] = function(args)
+      local task = table.concat(vim.list_slice(args.fargs, 2), " ")
+      if task == "" then
+        utils.notify("Usage: Coder agentic-run <task> [agent]", vim.log.levels.WARN)
+        return
+      end
+      cmd_agentic_run(task)
+    end,
+    ["agentic-list"] = cmd_agentic_list,
+    ["agentic-init"] = cmd_agentic_init,
     ["index-project"] = cmd_index_project,
     ["index-status"] = cmd_index_status,
     memories = cmd_memories,
@@ -901,6 +1083,41 @@ local function coder_cmd(args)
         end
       end
     end,
+    -- LLM smart selection commands
+    ["llm-stats"] = cmd_llm_stats,
+    ["llm-feedback-good"] = function()
+      cmd_llm_feedback(true)
+    end,
+    ["llm-feedback-bad"] = function()
+      cmd_llm_feedback(false)
+    end,
+    ["llm-reset-stats"] = cmd_llm_reset_stats,
+    -- Cost tracking commands
+    ["cost"] = function()
+      local cost = require("codetyper.cost")
+      cost.toggle()
+    end,
+    ["cost-clear"] = function()
+      local cost = require("codetyper.cost")
+      cost.clear()
+    end,
+    -- Credentials management commands
+    ["add-api-key"] = function()
+      local credentials = require("codetyper.credentials")
+      credentials.interactive_add()
+    end,
+    ["remove-api-key"] = function()
+      local credentials = require("codetyper.credentials")
+      credentials.interactive_remove()
+    end,
+    ["credentials"] = function()
+      local credentials = require("codetyper.credentials")
+      credentials.show_status()
+    end,
+    ["switch-provider"] = function()
+      local credentials = require("codetyper.credentials")
+      credentials.interactive_switch_provider()
+    end,
   }
 
   local cmd_fn = commands[subcommand]
@@ -922,10 +1139,14 @@ function M.setup()
         "ask", "ask-close", "ask-toggle", "ask-clear",
         "transform", "transform-cursor",
         "agent", "agent-close", "agent-toggle", "agent-stop",
+        "agentic-run", "agentic-list", "agentic-init",
         "type-toggle", "logs-toggle",
         "queue-status", "queue-process",
         "index-project", "index-status", "memories", "forget",
         "auto-toggle", "auto-set",
+        "llm-stats", "llm-feedback-good", "llm-feedback-bad", "llm-reset-stats",
+        "cost", "cost-clear",
+        "add-api-key", "remove-api-key", "credentials", "switch-provider",
       }
     end,
     desc = "Codetyper.nvim commands",
@@ -996,6 +1217,31 @@ function M.setup()
   vim.api.nvim_create_user_command("CoderAgentStop", function()
     cmd_agent_stop()
   end, { desc = "Stop running agent" })
+
+  -- Agentic commands (full IDE-like agent functionality)
+  vim.api.nvim_create_user_command("CoderAgenticRun", function(opts)
+    local task = opts.args
+    if task == "" then
+      vim.ui.input({ prompt = "Task: " }, function(input)
+        if input and input ~= "" then
+          cmd_agentic_run(input)
+        end
+      end)
+    else
+      cmd_agentic_run(task)
+    end
+  end, {
+    desc = "Run agentic task (IDE-like multi-file changes)",
+    nargs = "*",
+  })
+
+  vim.api.nvim_create_user_command("CoderAgenticList", function()
+    cmd_agentic_list()
+  end, { desc = "List available agents" })
+
+  vim.api.nvim_create_user_command("CoderAgenticInit", function()
+    cmd_agentic_init()
+  end, { desc = "Initialize .coder/agents/ and .coder/rules/ directories" })
 
   -- Chat type switcher command
   vim.api.nvim_create_user_command("CoderType", function()
@@ -1074,6 +1320,147 @@ function M.setup()
       return { "auto", "manual" }
     end,
   })
+
+  -- Brain feedback command - teach the brain from your experience
+  vim.api.nvim_create_user_command("CoderFeedback", function(opts)
+    local brain = require("codetyper.brain")
+    if not brain.is_initialized() then
+      vim.notify("Brain not initialized", vim.log.levels.WARN)
+      return
+    end
+
+    local feedback_type = opts.args:lower()
+    local current_file = vim.fn.expand("%:p")
+
+    if feedback_type == "good" or feedback_type == "accept" or feedback_type == "+" then
+      -- Learn positive feedback
+      brain.learn({
+        type = "user_feedback",
+        file = current_file,
+        timestamp = os.time(),
+        data = {
+          feedback = "accepted",
+          description = "User marked code as good/accepted",
+        },
+      })
+      vim.notify("Brain: Learned positive feedback ✓", vim.log.levels.INFO)
+
+    elseif feedback_type == "bad" or feedback_type == "reject" or feedback_type == "-" then
+      -- Learn negative feedback
+      brain.learn({
+        type = "user_feedback",
+        file = current_file,
+        timestamp = os.time(),
+        data = {
+          feedback = "rejected",
+          description = "User marked code as bad/rejected",
+        },
+      })
+      vim.notify("Brain: Learned negative feedback ✗", vim.log.levels.INFO)
+
+    elseif feedback_type == "stats" or feedback_type == "status" then
+      -- Show brain stats
+      local stats = brain.stats()
+      local msg = string.format(
+        "Brain Stats:\n• Nodes: %d\n• Edges: %d\n• Pending: %d\n• Deltas: %d",
+        stats.node_count or 0,
+        stats.edge_count or 0,
+        stats.pending_changes or 0,
+        stats.delta_count or 0
+      )
+      vim.notify(msg, vim.log.levels.INFO)
+
+    else
+      vim.notify("Usage: CoderFeedback <good|bad|stats>", vim.log.levels.INFO)
+    end
+  end, {
+    desc = "Give feedback to the brain (good/bad/stats)",
+    nargs = "?",
+    complete = function()
+      return { "good", "bad", "stats" }
+    end,
+  })
+
+  -- Brain stats command
+  vim.api.nvim_create_user_command("CoderBrain", function(opts)
+    local brain = require("codetyper.brain")
+    if not brain.is_initialized() then
+      vim.notify("Brain not initialized", vim.log.levels.WARN)
+      return
+    end
+
+    local action = opts.args:lower()
+
+    if action == "stats" or action == "" then
+      local stats = brain.stats()
+      local lines = {
+        "╭─────────────────────────────────╮",
+        "│       CODETYPER BRAIN           │",
+        "╰─────────────────────────────────╯",
+        "",
+        string.format("  Nodes: %d", stats.node_count or 0),
+        string.format("  Edges: %d", stats.edge_count or 0),
+        string.format("  Deltas: %d", stats.delta_count or 0),
+        string.format("  Pending: %d", stats.pending_changes or 0),
+        "",
+        "  The more you use Codetyper,",
+        "  the smarter it becomes!",
+      }
+      vim.notify(table.concat(lines, "\n"), vim.log.levels.INFO)
+
+    elseif action == "commit" then
+      local hash = brain.commit("Manual commit")
+      if hash then
+        vim.notify("Brain: Committed changes (hash: " .. hash:sub(1, 8) .. ")", vim.log.levels.INFO)
+      else
+        vim.notify("Brain: Nothing to commit", vim.log.levels.INFO)
+      end
+
+    elseif action == "flush" then
+      brain.flush()
+      vim.notify("Brain: Flushed to disk", vim.log.levels.INFO)
+
+    elseif action == "prune" then
+      local pruned = brain.prune()
+      vim.notify("Brain: Pruned " .. pruned .. " low-value nodes", vim.log.levels.INFO)
+
+    else
+      vim.notify("Usage: CoderBrain <stats|commit|flush|prune>", vim.log.levels.INFO)
+    end
+  end, {
+    desc = "Brain management commands",
+    nargs = "?",
+    complete = function()
+      return { "stats", "commit", "flush", "prune" }
+    end,
+  })
+
+  -- Cost estimation command
+  vim.api.nvim_create_user_command("CoderCost", function()
+    local cost = require("codetyper.cost")
+    cost.toggle()
+  end, { desc = "Show LLM cost estimation window" })
+
+  -- Credentials management commands
+  vim.api.nvim_create_user_command("CoderAddApiKey", function()
+    local credentials = require("codetyper.credentials")
+    credentials.interactive_add()
+  end, { desc = "Add or update LLM provider API key" })
+
+  vim.api.nvim_create_user_command("CoderRemoveApiKey", function()
+    local credentials = require("codetyper.credentials")
+    credentials.interactive_remove()
+  end, { desc = "Remove LLM provider credentials" })
+
+  vim.api.nvim_create_user_command("CoderCredentials", function()
+    local credentials = require("codetyper.credentials")
+    credentials.show_status()
+  end, { desc = "Show credentials status" })
+
+  vim.api.nvim_create_user_command("CoderSwitchProvider", function()
+    local credentials = require("codetyper.credentials")
+    credentials.interactive_switch_provider()
+  end, { desc = "Switch active LLM provider" })
 
   -- Setup default keymaps
   M.setup_keymaps()
