@@ -4,45 +4,16 @@
 ---@brief ]]
 
 local Base = require("codetyper.agent.tools.base")
+local description = require("codetyper.prompts.agents.write").description
+local params = require("codetyper.params.agents.write")
 
 ---@class CoderTool
 local M = setmetatable({}, Base)
 
 M.name = "write"
-
-M.description = [[Creates or overwrites a file with new content.
-
-IMPORTANT:
-- This will completely replace the file contents
-- Use 'edit' tool for partial modifications
-- Parent directories will be created if needed]]
-
-M.params = {
-	{
-		name = "path",
-		description = "Path to the file to write",
-		type = "string",
-	},
-	{
-		name = "content",
-		description = "Content to write to the file",
-		type = "string",
-	},
-}
-
-M.returns = {
-	{
-		name = "success",
-		description = "Whether the file was written successfully",
-		type = "boolean",
-	},
-	{
-		name = "error",
-		description = "Error message if write failed",
-		type = "string",
-		optional = true,
-	},
-}
+M.description = description
+M.params = params.params
+M.returns = params.returns
 
 M.requires_confirmation = true
 

@@ -6,57 +6,17 @@
 ---@brief ]]
 
 local Base = require("codetyper.agent.tools.base")
+local description = require("codetyper.prompts.agent.edit").description
+local params = require("codetyper.params.agent.edit").params
+local returns = require("codetyper.params.agent.edit").returns
 
 ---@class CoderTool
 local M = setmetatable({}, Base)
 
 M.name = "edit"
-
-M.description = [[Makes a targeted edit to a file by replacing text.
-
-The old_string should match the content you want to replace. The tool uses multiple
-matching strategies with fallbacks:
-1. Exact match
-2. Whitespace-normalized match
-3. Indentation-flexible match
-4. Line-trimmed match
-5. Fuzzy anchor-based match
-
-For creating new files, use old_string="" and provide the full content in new_string.
-For large changes, consider using 'write' tool instead.]]
-
-M.params = {
-	{
-		name = "path",
-		description = "Path to the file to edit",
-		type = "string",
-	},
-	{
-		name = "old_string",
-		description = "Text to find and replace (empty string to create new file or append)",
-		type = "string",
-	},
-	{
-		name = "new_string",
-		description = "Text to replace with",
-		type = "string",
-	},
-}
-
-M.returns = {
-	{
-		name = "success",
-		description = "Whether the edit was applied",
-		type = "boolean",
-	},
-	{
-		name = "error",
-		description = "Error message if edit failed",
-		type = "string",
-		optional = true,
-	},
-}
-
+M.description = description
+M.params = params
+M.returns = returns
 M.requires_confirmation = false
 
 --- Normalize line endings to LF
@@ -211,11 +171,7 @@ local function levenshtein(s1, s2)
 	for i = 1, len1 do
 		for j = 1, len2 do
 			local cost = s1:sub(i, i) == s2:sub(j, j) and 0 or 1
-			matrix[i][j] = math.min(
-				matrix[i - 1][j] + 1,
-				matrix[i][j - 1] + 1,
-				matrix[i - 1][j - 1] + cost
-			)
+			matrix[i][j] = math.min(matrix[i - 1][j] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j - 1] + cost)
 		end
 	end
 
@@ -245,10 +201,13 @@ local function fuzzy_anchor_match(content, old_str, threshold)
 	local candidates = {}
 	for i, line in ipairs(content_lines) do
 		local trimmed = line:match("^%s*(.-)%s*$")
-		if trimmed == first_line or (
-			#first_line > 0 and
-			1 - (levenshtein(trimmed, first_line) / math.max(#trimmed, #first_line)) >= threshold
-		) then
+		if
+			trimmed == first_line
+			or (
+				#first_line > 0
+				and 1 - (levenshtein(trimmed, first_line) / math.max(#trimmed, #first_line)) >= threshold
+			)
+		then
 			table.insert(candidates, i)
 		end
 	end
@@ -258,10 +217,13 @@ local function fuzzy_anchor_match(content, old_str, threshold)
 		local expected_end = start_idx + #old_lines - 1
 		if expected_end <= #content_lines then
 			local end_line = content_lines[expected_end]:match("^%s*(.-)%s*$")
-			if end_line == last_line or (
-				#last_line > 0 and
-				1 - (levenshtein(end_line, last_line) / math.max(#end_line, #last_line)) >= threshold
-			) then
+			if
+				end_line == last_line
+				or (
+					#last_line > 0
+					and 1 - (levenshtein(end_line, last_line) / math.max(#end_line, #last_line)) >= threshold
+				)
+			then
 				-- Calculate positions
 				local before = table.concat(vim.list_slice(content_lines, 1, start_idx - 1), "\n")
 				local block = table.concat(vim.list_slice(content_lines, start_idx, expected_end), "\n")

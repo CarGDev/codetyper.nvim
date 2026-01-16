@@ -4,79 +4,20 @@
 ---@brief ]]
 
 local Base = require("codetyper.agent.tools.base")
+local description = require("codetyper.prompts.agent.bash").description
+local params = require("codetyper.params.agent.bash").params
+local returns = require("codetyper.params.agent.bash").returns
+local BANNED_COMMANDS = require("codetyper.commands.agents.banned").BANNED_COMMANDS
+local BANNED_PATTERNS = require("codetyper.commands.agents.banned").BANNED_PATTERNS
 
 ---@class CoderTool
 local M = setmetatable({}, Base)
 
 M.name = "bash"
-
-M.description = [[Executes a bash command in a shell.
-
-IMPORTANT RULES:
-- Do NOT use bash to read files (use 'view' tool instead)
-- Do NOT use bash to modify files (use 'write' or 'edit' tools instead)
-- Do NOT use interactive commands (vim, nano, less, etc.)
-- Commands timeout after 2 minutes by default
-
-Allowed uses:
-- Running builds (make, npm run build, cargo build)
-- Running tests (npm test, pytest, cargo test)
-- Git operations (git status, git diff, git commit)
-- Package management (npm install, pip install)
-- System info commands (ls, pwd, which)]]
-
-M.params = {
-	{
-		name = "command",
-		description = "The shell command to execute",
-		type = "string",
-	},
-	{
-		name = "cwd",
-		description = "Working directory for the command (optional)",
-		type = "string",
-		optional = true,
-	},
-	{
-		name = "timeout",
-		description = "Timeout in milliseconds (default: 120000)",
-		type = "integer",
-		optional = true,
-	},
-}
-
-M.returns = {
-	{
-		name = "stdout",
-		description = "Command output",
-		type = "string",
-	},
-	{
-		name = "error",
-		description = "Error message if command failed",
-		type = "string",
-		optional = true,
-	},
-}
-
+M.description = description
+M.params = params
+M.returns = returns
 M.requires_confirmation = true
-
---- Banned commands for safety
-local BANNED_COMMANDS = {
-	"rm -rf /",
-	"rm -rf /*",
-	"dd if=/dev/zero",
-	"mkfs",
-	":(){ :|:& };:",
-	"> /dev/sda",
-}
-
---- Banned patterns
-local BANNED_PATTERNS = {
-	"curl.*|.*sh",
-	"wget.*|.*sh",
-	"rm%s+%-rf%s+/",
-}
 
 --- Check if command is safe
 ---@param command string

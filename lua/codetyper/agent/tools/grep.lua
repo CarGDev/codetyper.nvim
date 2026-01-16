@@ -4,60 +4,17 @@
 ---@brief ]]
 
 local Base = require("codetyper.agent.tools.base")
+local description = require("codetyper.params.agent.grep").description
+local params = require("codetyper.prompts.agents.grep").params
+local returns = require("codetyper.prompts.agents.grep").returns
 
 ---@class CoderTool
 local M = setmetatable({}, Base)
 
 M.name = "grep"
-
-M.description = [[Searches for a pattern in files using ripgrep.
-
-Returns file paths and matching lines. Use this to find code by content.
-
-Example patterns:
-- "function foo" - Find function definitions
-- "import.*react" - Find React imports
-- "TODO|FIXME" - Find todo comments]]
-
-M.params = {
-	{
-		name = "pattern",
-		description = "Regular expression pattern to search for",
-		type = "string",
-	},
-	{
-		name = "path",
-		description = "Directory or file to search in (default: project root)",
-		type = "string",
-		optional = true,
-	},
-	{
-		name = "include",
-		description = "File glob pattern to include (e.g., '*.lua')",
-		type = "string",
-		optional = true,
-	},
-	{
-		name = "max_results",
-		description = "Maximum number of results (default: 50)",
-		type = "integer",
-		optional = true,
-	},
-}
-
-M.returns = {
-	{
-		name = "matches",
-		description = "JSON array of matches with file, line_number, and content",
-		type = "string",
-	},
-	{
-		name = "error",
-		description = "Error message if search failed",
-		type = "string",
-		optional = true,
-	},
-}
+M.description = description
+M.params = params
+M.returns = returns
 
 M.requires_confirmation = false
 
