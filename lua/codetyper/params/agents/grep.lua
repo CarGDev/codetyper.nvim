@@ -1,3 +1,5 @@
+local M = {}
+
 M.description = [[Searches for a pattern in files using ripgrep.
 
 Returns file paths and matching lines. Use this to find code by content.

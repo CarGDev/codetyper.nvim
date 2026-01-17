@@ -1,8 +1,8 @@
 ---@diagnostic disable: undefined-global
--- Tests for lua/codetyper/llm/init.lua
+-- Tests for lua/codetyper/core/llm/init.lua
 
 describe("llm", function()
-	local llm = require("codetyper.llm")
+	local llm = require("codetyper.core.llm")
 
 	describe("extract_code", function()
 		it("should extract code from markdown code block", function()

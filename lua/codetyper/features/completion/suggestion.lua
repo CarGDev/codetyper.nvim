@@ -255,52 +255,23 @@ function M.prev()
 	display_suggestion(state.suggestions[state.current_index])
 end
 
---- Get suggestions from brain/indexer
+--- Get suggestions from local sources (no agent dependencies)
+--- Uses only buffer-based completions and LSP for fast, reactive suggestions.
 ---@param prefix string Current word prefix
 ---@param context table Context info
 ---@return string[] suggestions
 local function get_suggestions(prefix, context)
 	local suggestions = {}
-
-	-- Get completions from brain
-	local ok_brain, brain = pcall(require, "codetyper.brain")
-	if ok_brain and brain.is_initialized and brain.is_initialized() then
-		local result = brain.query({
-			query = prefix,
-			max_results = 5,
-			types = { "pattern" },
-		})
-
-		if result and result.nodes then
-			for _, node in ipairs(result.nodes) do
-				if node.c and node.c.code then
-					table.insert(suggestions, node.c.code)
-				end
-			end
-		end
-	end
-
-	-- Get completions from indexer
-	local ok_indexer, indexer = pcall(require, "codetyper.indexer")
-	if ok_indexer then
-		local index = indexer.load_index()
-		if index and index.symbols then
-			for symbol, _ in pairs(index.symbols) do
-				if symbol:lower():find(prefix:lower(), 1, true) and symbol ~= prefix then
-					-- Just complete the symbol name
-					local completion = symbol:sub(#prefix + 1)
-					if completion ~= "" then
-						table.insert(suggestions, completion)
-					end
-				end
-			end
-		end
-	end
-
-	-- Buffer-based completions
-	local bufnr = vim.api.nvim_get_current_buf()
-	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 	local seen = {}
+
+	-- 1. LSP completions (if available, fast and accurate)
+	local bufnr = context.bufnr or vim.api.nvim_get_current_buf()
+	local clients = vim.lsp.get_clients({ bufnr = bufnr })
+	-- LSP completion would be async, so we skip it for inline suggestions
+	-- The user can use normal completion (<C-x><C-o>) for LSP
+
+	-- 2. Buffer-based completions (fast, local)
+	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 
 	for _, line in ipairs(lines) do
 		for word in line:gmatch("[%a_][%w_]*") do
@@ -314,6 +285,29 @@ local function get_suggestions(prefix, context)
 				local completion = word:sub(#prefix + 1)
 				if completion ~= "" then
 					table.insert(suggestions, completion)
+				end
+			end
+		end
+	end
+
+	-- 3. Get words from other open buffers (fast, local)
+	for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+		if buf ~= bufnr and vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].buftype == "" then
+			local buf_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+			for _, line in ipairs(buf_lines) do
+				for word in line:gmatch("[%a_][%w_]*") do
+					if
+						#word > #prefix
+						and word:lower():find(prefix:lower(), 1, true) == 1
+						and not seen[word]
+						and word ~= prefix
+					then
+						seen[word] = true
+						local completion = word:sub(#prefix + 1)
+						if completion ~= "" then
+							table.insert(suggestions, completion)
+						end
+					end
 				end
 			end
 		end

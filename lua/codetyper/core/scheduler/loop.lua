@@ -6,7 +6,28 @@
 
 local M = {}
 
-local prompts = require("codetyper.prompts.agents.loop")
+-- Fallback prompts (primary prompts are in Python agent or personas)
+local DEFAULT_SYSTEM_PROMPT = [[You are a helpful coding assistant with access to tools.
+
+Available tools:
+- view: Read file contents
+- grep: Search for patterns in files
+- glob: Find files by pattern
+- edit: Make targeted edits to files
+- write: Create or overwrite files
+- bash: Execute shell commands
+
+When you need to perform a task:
+1. Use tools to gather information
+2. Plan your approach
+3. Execute changes using appropriate tools
+4. Verify the results
+
+Always explain your reasoning before using tools.]]
+
+local DISPATCH_PROMPT = [[You are a research assistant. Your task is to find information and report back.
+You have access to: view (read files), grep (search content), glob (find files).
+Be thorough and report your findings clearly.]]
 
 ---@class AgentMessage
 ---@field role "system"|"user"|"assistant"|"tool"
@@ -347,7 +368,7 @@ end
 function M.create(task, opts)
 	opts = opts or {}
 
-	local system_prompt = opts.system_prompt or prompts.default_system_prompt
+	local system_prompt = opts.system_prompt or DEFAULT_SYSTEM_PROMPT
 
 	M.run(vim.tbl_extend("force", opts, {
 		system_prompt = system_prompt,
@@ -369,7 +390,7 @@ function M.dispatch(prompt, on_complete, opts)
 	end)
 
 	M.run({
-		system_prompt = prompts.dispatch_prompt,
+		system_prompt = DISPATCH_PROMPT,
 		user_input = prompt,
 		tools = opts.tools or safe_tools,
 		max_iterations = opts.max_iterations or 5,

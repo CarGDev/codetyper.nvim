@@ -1,3 +1,5 @@
+local M = {}
+
 M.params = {
 	{
 		name = "command",

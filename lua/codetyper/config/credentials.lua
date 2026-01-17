@@ -225,55 +225,33 @@ M.default_models = {
 	ollama = "deepseek-coder:6.7b",
 }
 
---- Available models for Copilot (GitHub Copilot Chat API)
---- Models with cost multipliers: 0x = free, 0.33x = discount, 1x = standard, 3x = premium
-M.copilot_models = {
-	-- Free tier (0x)
-	{ name = "gpt-4.1", cost = "0x" },
-	{ name = "gpt-4o", cost = "0x" },
-	{ name = "gpt-5-mini", cost = "0x" },
-	{ name = "grok-code-fast-1", cost = "0x" },
-	{ name = "raptor-mini", cost = "0x" },
-	-- Discount tier (0.33x)
-	{ name = "claude-haiku-4.5", cost = "0.33x" },
-	{ name = "gemini-3-flash", cost = "0.33x" },
-	{ name = "gpt-5.1-codex-mini", cost = "0.33x" },
-	-- Standard tier (1x)
-	{ name = "claude-sonnet-4", cost = "1x" },
-	{ name = "claude-sonnet-4.5", cost = "1x" },
-	{ name = "gemini-2.5-pro", cost = "1x" },
-	{ name = "gemini-3-pro", cost = "1x" },
-	{ name = "gpt-5", cost = "1x" },
-	{ name = "gpt-5-codex", cost = "1x" },
-	{ name = "gpt-5.1", cost = "1x" },
-	{ name = "gpt-5.1-codex", cost = "1x" },
-	{ name = "gpt-5.1-codex-max", cost = "1x" },
-	{ name = "gpt-5.2", cost = "1x" },
-	{ name = "gpt-5.2-codex", cost = "1x" },
-	-- Premium tier (3x)
-	{ name = "claude-opus-4.5", cost = "3x" },
+--- Fallback models for Copilot when API is unavailable
+--- These are used as defaults before models are fetched from the API
+M.copilot_fallback_models = {
+	"gpt-4.1",
+	"gpt-4o",
+	"claude-sonnet-4",
+	"claude-sonnet-4.5",
 }
 
 --- Get list of copilot model names (for completion)
+--- Prefers fetched models from API, falls back to hardcoded list
 ---@return string[]
 function M.get_copilot_model_names()
-	local names = {}
-	for _, model in ipairs(M.copilot_models) do
-		table.insert(names, model.name)
+	local copilot = require("codetyper.core.llm.copilot")
+	local api_names = copilot.get_model_names()
+	if #api_names > 0 then
+		return api_names
 	end
-	return names
+	return M.copilot_fallback_models
 end
 
---- Get cost for a copilot model
+--- Get model info from API cache
 ---@param model_name string
----@return string|nil
-function M.get_copilot_model_cost(model_name)
-	for _, model in ipairs(M.copilot_models) do
-		if model.name == model_name then
-			return model.cost
-		end
-	end
-	return nil
+---@return table|nil Model info with id, name, max_input_tokens, etc.
+function M.get_copilot_model_info(model_name)
+	local copilot = require("codetyper.core.llm.copilot")
+	return copilot.get_model_config(model_name)
 end
 
 --- Interactive command to add/update API key
@@ -327,29 +305,51 @@ function M.interactive_api_key(provider)
 	end)
 end
 
---- Interactive Copilot configuration (no API key, uses OAuth)
----@param silent? boolean If true, don't show the OAuth info message
-function M.interactive_copilot_config(silent)
-	if not silent then
-		utils.notify("Copilot uses OAuth from copilot.lua/copilot.vim - no API key needed", vim.log.levels.INFO)
+--- Show model selector with fetched models
+---@param models table Fetched models dictionary
+---@param current_model string Current model name
+local function show_copilot_model_selector(models, current_model)
+	-- Build model options from fetched models
+	local model_options = {}
+	for id, model in pairs(models) do
+		table.insert(model_options, {
+			id = id,
+			name = model.name or id,
+			max_input = model.max_input_tokens,
+			max_output = model.max_output_tokens,
+			tools = model.tools,
+		})
 	end
 
-	-- Get current model if configured
-	local current_model = M.get_model("copilot") or M.default_models.copilot
-	local current_cost = M.get_copilot_model_cost(current_model) or "?"
+	-- Sort by name
+	table.sort(model_options, function(a, b)
+		return a.id < b.id
+	end)
 
-	-- Build model options with "Custom..." option
-	local model_options = vim.deepcopy(M.copilot_models)
-	table.insert(model_options, { name = "Custom...", cost = "" })
+	-- Add custom option
+	table.insert(model_options, { id = "custom", name = "Custom..." })
 
 	vim.ui.select(model_options, {
-		prompt = "Select Copilot model (current: " .. current_model .. " — " .. current_cost .. "):",
+		prompt = "Select Copilot model (current: " .. current_model .. "):",
 		format_item = function(item)
-			local display = item.name
-			if item.cost and item.cost ~= "" then
-				display = display .. " — " .. item.cost
+			if item.id == "custom" then
+				return "Custom..."
 			end
-			if item.name == current_model then
+			local display = item.id
+			local info = {}
+			if item.max_input then
+				table.insert(info, string.format("%dk in", math.floor(item.max_input / 1000)))
+			end
+			if item.max_output then
+				table.insert(info, string.format("%dk out", math.floor(item.max_output / 1000)))
+			end
+			if item.tools then
+				table.insert(info, "tools")
+			end
+			if #info > 0 then
+				display = display .. " (" .. table.concat(info, ", ") .. ")"
+			end
+			if item.id == current_model then
 				display = display .. " [current]"
 			end
 			return display
@@ -359,8 +359,7 @@ function M.interactive_copilot_config(silent)
 			return -- Cancelled
 		end
 
-		if choice.name == "Custom..." then
-			-- Allow custom model input
+		if choice.id == "custom" then
 			vim.ui.input({
 				prompt = "Enter custom model name: ",
 				default = current_model,
@@ -374,10 +373,60 @@ function M.interactive_copilot_config(silent)
 			end)
 		else
 			M.save_and_notify("copilot", {
-				model = choice.name,
+				model = choice.id,
 				configured = true,
 			})
 		end
+	end)
+end
+
+--- Interactive Copilot configuration (no API key, uses OAuth)
+---@param silent? boolean If true, don't show the OAuth info message
+function M.interactive_copilot_config(silent)
+	if not silent then
+		utils.notify("Copilot uses OAuth from copilot.lua/copilot.vim - no API key needed", vim.log.levels.INFO)
+	end
+
+	-- Get current model if configured
+	local current_model = M.get_model("copilot") or M.default_models.copilot
+
+	-- Try to fetch models from API
+	local copilot = require("codetyper.core.llm.copilot")
+
+	-- Check if we have cached models
+	local cached_models = copilot.get_cached_models()
+	if cached_models and next(cached_models) then
+		show_copilot_model_selector(cached_models, current_model)
+		return
+	end
+
+	-- Fetch models from API
+	utils.notify("Fetching available models from Copilot API...", vim.log.levels.INFO)
+
+	copilot.get_models(function(models, err)
+		if err then
+			utils.notify("Failed to fetch models: " .. err .. "\nUsing fallback list.", vim.log.levels.WARN)
+			-- Fall back to simple input
+			vim.ui.input({
+				prompt = "Enter model name (current: " .. current_model .. "): ",
+				default = current_model,
+			}, function(model_name)
+				if model_name and model_name ~= "" then
+					M.save_and_notify("copilot", {
+						model = model_name,
+						configured = true,
+					})
+				end
+			end)
+			return
+		end
+
+		if not models or not next(models) then
+			utils.notify("No models available from API", vim.log.levels.WARN)
+			return
+		end
+
+		show_copilot_model_selector(models, current_model)
 	end)
 end
 

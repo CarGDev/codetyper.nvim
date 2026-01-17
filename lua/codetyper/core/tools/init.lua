@@ -7,6 +7,35 @@ local M = {}
 --- Tool definitions in a provider-agnostic format
 M.definitions = require("codetyper.params.agents.tools").definitions
 
+--- Registry for tool implementations
+local registry = require("codetyper.core.tools.registry")
+
+--- Get a tool by name (delegates to registry)
+---@param name string Tool name
+---@return CoderTool|nil
+function M.get(name)
+  -- Ensure tools are loaded
+  if not registry.get(name) then
+    registry.load_builtins()
+  end
+  return registry.get(name)
+end
+
+--- Register a tool (delegates to registry)
+---@param tool CoderTool Tool to register
+function M.register(tool)
+  registry.register(tool)
+end
+
+--- Get all registered tools
+---@return table<string, CoderTool>
+function M.get_all()
+  if vim.tbl_count(registry.get_all()) == 0 then
+    registry.load_builtins()
+  end
+  return registry.get_all()
+end
+
 --- Convert tool definitions to Claude API format
 ---@return table[] Tools in Claude's expected format
 function M.to_claude_format()
@@ -41,9 +70,14 @@ end
 --- Convert tool definitions to prompt format for Ollama
 ---@return string Formatted tool descriptions for system prompt
 function M.to_prompt_format()
-  local prompts = require("codetyper.prompts.agents.tools").instructions
+  -- Inline tool instructions (prompts moved to Python agent)
+  local intro = "You have access to the following tools. To use a tool, respond with a JSON block."
+  local header = "To call a tool, output a JSON block like this:"
+  local example = '```json\n{"tool": "tool_name", "parameters": {"param1": "value1"}}\n```'
+  local footer = "After receiving tool results, continue your response or call another tool.\nWhen you're done, just respond normally without any tool calls."
+
   local lines = {
-    prompts.intro,
+    intro,
     "",
   }
 
@@ -62,10 +96,10 @@ function M.to_prompt_format()
 
   table.insert(lines, "---")
   table.insert(lines, "")
-  table.insert(lines, prompts.header)
-  table.insert(lines, prompts.example)
+  table.insert(lines, header)
+  table.insert(lines, example)
   table.insert(lines, "")
-  table.insert(lines, prompts.footer)
+  table.insert(lines, footer)
 
   return table.concat(lines, "\n")
 end

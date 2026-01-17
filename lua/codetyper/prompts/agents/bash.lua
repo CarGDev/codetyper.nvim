@@ -1,16 +1,23 @@
-M.description = [[Executes a bash command in a shell.
+---@mod codetyper.prompts.agents.bash Bash tool description
+local M = {}
 
-IMPORTANT RULES:
-- Do NOT use bash to read files (use 'view' tool instead)
-- Do NOT use bash to modify files (use 'write' or 'edit' tools instead)
-- Do NOT use interactive commands (vim, nano, less, etc.)
-- Commands timeout after 2 minutes by default
+M.description = [[Executes a shell command in bash.
 
-Allowed uses:
-- Running builds (make, npm run build, cargo build)
-- Running tests (npm test, pytest, cargo test)
-- Git operations (git status, git diff, git commit)
-- Package management (npm install, pip install)
-- System info commands (ls, pwd, which)]]
+Usage notes:
+- Provide the command to execute
+- Optionally specify working directory (cwd)
+- Optionally specify timeout in milliseconds (default: 120000)
+- Returns the command output (stdout and stderr combined)
+- Exit code 0 indicates success, non-zero indicates failure
+
+SAFETY:
+- Dangerous commands (rm -rf /, sudo, etc.) are blocked
+- All commands require user approval before execution
+- Commands run in a sandboxed environment when possible
+
+Examples:
+- List files: {"command": "ls -la"}
+- Run tests: {"command": "npm test", "cwd": "/path/to/project"}
+- Check git status: {"command": "git status"}]]
 
 return M

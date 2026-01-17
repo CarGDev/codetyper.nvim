@@ -403,7 +403,7 @@ end
 
 --- Show chat type switcher modal (Ask/Agent)
 local function cmd_type_toggle()
-  local switcher = require("codetyper.chat_switcher")
+  local switcher = require("codetyper.adapters.nvim.ui.switcher")
   switcher.show()
 end
 
@@ -729,9 +729,14 @@ local function cmd_transform_at_cursor()
   -- Open the logs panel to show generation progress
   logs_panel.open()
 
-  local clean_prompt = parser.clean_prompt(prompt.content)
-  logs.info("Transform cursor: " .. clean_prompt:sub(1, 40) .. "...")
-  utils.notify("Transforming: " .. clean_prompt:sub(1, 40) .. "...", vim.log.levels.INFO)
+  local clean_prompt = prompt.content and parser.clean_prompt(prompt.content) or ""
+  if clean_prompt and clean_prompt ~= "" then
+    logs.info("Transform cursor: " .. clean_prompt:sub(1, 40) .. "...")
+    utils.notify("Transforming: " .. clean_prompt:sub(1, 40) .. "...", vim.log.levels.INFO)
+  else
+    logs.info("Transform cursor: (empty prompt)")
+    utils.notify("Transforming prompt...", vim.log.levels.INFO)
+  end
 
   -- Use the same processing logic as automatic mode (skip processed check for manual mode)
   autocmds.process_single_prompt(bufnr, prompt, filepath, true)
@@ -886,23 +891,23 @@ local function coder_cmd(args)
     end,
     -- Credentials management commands
     ["add-api-key"] = function()
-      local credentials = require("codetyper.credentials")
+      local credentials = require("codetyper.config.credentials")
       credentials.interactive_add()
     end,
     ["remove-api-key"] = function()
-      local credentials = require("codetyper.credentials")
+      local credentials = require("codetyper.config.credentials")
       credentials.interactive_remove()
     end,
     ["credentials"] = function()
-      local credentials = require("codetyper.credentials")
+      local credentials = require("codetyper.config.credentials")
       credentials.show_status()
     end,
     ["switch-provider"] = function()
-      local credentials = require("codetyper.credentials")
+      local credentials = require("codetyper.config.credentials")
       credentials.interactive_switch_provider()
     end,
     ["model"] = function(args)
-      local credentials = require("codetyper.credentials")
+      local credentials = require("codetyper.config.credentials")
       local codetyper = require("codetyper")
       local config = codetyper.get_config()
       local provider = config.llm.provider
@@ -1257,28 +1262,28 @@ function M.setup()
 
   -- Credentials management commands
   vim.api.nvim_create_user_command("CoderAddApiKey", function()
-    local credentials = require("codetyper.credentials")
+    local credentials = require("codetyper.config.credentials")
     credentials.interactive_add()
   end, { desc = "Add or update LLM provider API key" })
 
   vim.api.nvim_create_user_command("CoderRemoveApiKey", function()
-    local credentials = require("codetyper.credentials")
+    local credentials = require("codetyper.config.credentials")
     credentials.interactive_remove()
   end, { desc = "Remove LLM provider credentials" })
 
   vim.api.nvim_create_user_command("CoderCredentials", function()
-    local credentials = require("codetyper.credentials")
+    local credentials = require("codetyper.config.credentials")
     credentials.show_status()
   end, { desc = "Show credentials status" })
 
   vim.api.nvim_create_user_command("CoderSwitchProvider", function()
-    local credentials = require("codetyper.credentials")
+    local credentials = require("codetyper.config.credentials")
     credentials.interactive_switch_provider()
   end, { desc = "Switch active LLM provider" })
 
   -- Quick model switcher command (Copilot only)
   vim.api.nvim_create_user_command("CoderModel", function(opts)
-    local credentials = require("codetyper.credentials")
+    local credentials = require("codetyper.config.credentials")
     local codetyper = require("codetyper")
     local config = codetyper.get_config()
     local provider = config.llm.provider
@@ -1304,7 +1309,7 @@ function M.setup()
     desc = "Quick switch Copilot model (only available with Copilot provider)",
     complete = function()
       local codetyper = require("codetyper")
-      local credentials = require("codetyper.credentials")
+      local credentials = require("codetyper.config.credentials")
       local config = codetyper.get_config()
       if config.llm.provider == "copilot" then
         return credentials.get_copilot_model_names()

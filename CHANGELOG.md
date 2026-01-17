@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-01-16
+
+### Added
+
+- **Inline Tag Transform with Diff Approval** - Transform `/@...@/` tags in any file with conflict resolution
+  - LLM now receives actual file content WITH tags for accurate SEARCH/REPLACE blocks
+  - SEARCH text includes the `/@...@/` markers for precise matching
+  - REPLACE text contains new code without markers
+  - Conflict mode enabled by default (`use_conflict_mode = true`)
+  - Auto-jump to first conflict after code injection
+  - Full diff approval workflow: original (with tags) vs AI suggestion
+
+- **Improved Inline Prompt System** - Better handling of inline prompts
+  - Prompt instructions explicitly tell LLM to include tags in SEARCH
+  - File content sent with line range indicators for tag locations
+  - Clear example in prompt showing correct SEARCH/REPLACE format
+
+### Changed
+
+- **SEARCH/REPLACE Tag Handling** - Tags no longer removed before matching
+  - Removed premature tag removal that caused SEARCH/REPLACE failures
+  - Tags in "OURS" section preserved in conflict mode for accurate diff
+  - Fallback injection range now properly set for inline prompts
+
+- **Conflict Mode Default** - Now enabled by default
+  - `use_conflict_mode = true` in patch params
+  - `auto_jump_to_conflict = true` for immediate navigation
+  - Tags remain in conflict markers for user review
+
+### Fixed
+
+- Fixed SEARCH/REPLACE failing when LLM generated blocks without `/@...@/` tags
+- Fixed "Block X: Could not find search text in file" errors for inline prompts
+- Fixed fallback injection showing "lines 0-0" instead of actual tag range
+- Fixed conflict markers being corrupted by tag removal after insertion
+- Fixed prompt content not being extracted correctly from inline tags
+
+---
+
 ## [0.6.0] - 2026-01-16
 
 ### Added
@@ -247,7 +286,8 @@ scheduler = {
 - **Fixed** - Bug fixes
 - **Security** - Vulnerability fixes
 
-[Unreleased]: https://github.com/cargdev/codetyper.nvim/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/cargdev/codetyper.nvim/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/cargdev/codetyper.nvim/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/cargdev/codetyper.nvim/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/cargdev/codetyper.nvim/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/cargdev/codetyper.nvim/compare/v0.3.0...v0.4.0

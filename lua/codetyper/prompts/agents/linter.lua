@@ -1,13 +1,11 @@
----@mod codetyper.prompts.agents.linter Linter prompts
-local M = {}
+---@mod codetyper.prompts.agents.linter (DEPRECATED)
+---
+--- Linter prompts migrated to Python agent. This shim provides
+--- backward-compatible placeholders.
 
-M.fix_request = [[
-Fix the following linter errors in this code:
+local PLACEHOLDER = "[PROMPTS_MOVED_TO_AGENT] Linter prompts are managed by the Python agent."
+local M = setmetatable({}, { __index = function() return PLACEHOLDER end })
 
-ERRORS:
-%s
-
-CODE (lines %d-%d):
-%s]]
+M.fix_request = PLACEHOLDER
 
 return M

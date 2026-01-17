@@ -6,7 +6,9 @@
 ---@brief ]]
 
 local Base = require("codetyper.core.tools.base")
-local description = require("codetyper.prompts.agents.edit").description
+local file_ops = require("codetyper.core.tools.file_ops")
+local _ok_desc, _agents_edit = pcall(require, "codetyper.prompts.agents.edit")
+local description = (_ok_desc and _agents_edit.description) or "[PROMPTS_MOVED_TO_AGENT] Tool descriptions are now managed by the Python agent."
 local params = require("codetyper.params.agents.edit").params
 local returns = require("codetyper.params.agents.edit").returns
 
@@ -323,13 +325,8 @@ function M.func(input, opts)
 			return nil, "Failed to create file: " .. input.path
 		end
 
-		-- Reload buffer if open
-		local bufnr = vim.fn.bufnr(path)
-		if bufnr ~= -1 and vim.api.nvim_buf_is_valid(bufnr) then
-			vim.api.nvim_buf_call(bufnr, function()
-				vim.cmd("edit!")
-			end)
-		end
+		-- Post-write processing: lint, format, save
+		file_ops.post_write_process(path, opts.on_log)
 
 		if opts.on_complete then
 			opts.on_complete(true, nil)
@@ -373,13 +370,8 @@ function M.func(input, opts)
 		return nil, "Failed to write file: " .. input.path
 	end
 
-	-- Reload buffer if open
-	local bufnr = vim.fn.bufnr(path)
-	if bufnr ~= -1 and vim.api.nvim_buf_is_valid(bufnr) then
-		vim.api.nvim_buf_call(bufnr, function()
-			vim.cmd("edit!")
-		end)
-	end
+	-- Post-write processing: lint, format, save
+	file_ops.post_write_process(path, opts.on_log)
 
 	if opts.on_complete then
 		opts.on_complete(true, nil)

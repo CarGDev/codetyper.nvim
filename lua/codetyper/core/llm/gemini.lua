@@ -12,7 +12,7 @@ local API_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 ---@return string|nil API key
 local function get_api_key()
 	-- Priority: stored credentials > config > environment
-	local credentials = require("codetyper.credentials")
+	local credentials = require("codetyper.config.credentials")
 	local stored_key = credentials.get_api_key("gemini")
 	if stored_key then
 		return stored_key
@@ -27,7 +27,7 @@ end
 ---@return string Model name
 local function get_model()
 	-- Priority: stored credentials > config
-	local credentials = require("codetyper.credentials")
+	local credentials = require("codetyper.config.credentials")
 	local stored_model = credentials.get_model("gemini")
 	if stored_model then
 		return stored_model

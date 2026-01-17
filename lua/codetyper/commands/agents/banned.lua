@@ -1,3 +1,5 @@
+local M = {}
+
 --- Banned commands for safety
 M.BANNED_COMMANDS = {
 	"rm -rf /",

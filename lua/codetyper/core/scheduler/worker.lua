@@ -508,77 +508,69 @@ local function build_prompt(event)
 		local start_line = event.range.start_line
 		local end_line = event.range.end_line or start_line
 
-		-- Build full file content WITHOUT the /@ @/ tags for cleaner context
-		local file_content_clean = {}
-		for i, line in ipairs(target_lines) do
-			-- Skip lines that are part of the tag
-			if i < start_line or i > end_line then
-				table.insert(file_content_clean, line)
-			end
-		end
+		-- Send the ACTUAL file content WITH tags to the LLM
+		-- The SEARCH block must include the tags so SEARCH/REPLACE can find and replace them
+		local file_content = table.concat(target_lines, "\n")
 
 		user_prompt = string.format(
 			[[You are editing a %s file: %s
 
 TASK: %s
 
-FULL FILE CONTENT:
+FULL FILE CONTENT (note the /@ @/ markers on lines %d-%d):
 ```%s
 %s
 ```
 
-IMPORTANT: The instruction above may ask you to make changes ANYWHERE in the file (e.g., "at the top", "after function X", etc.). Read the instruction carefully to determine WHERE to apply the change.
+IMPORTANT: The file contains /@ ... @/ markers that indicate where the user wants changes.
+The SEARCH text MUST include these markers exactly as they appear in the file.
+The REPLACE text should contain the new code WITHOUT the markers.
 
 INSTRUCTIONS:
 You MUST respond using SEARCH/REPLACE blocks. This format lets you precisely specify what to find and what to replace it with.
 
 FORMAT:
 <<<<<<< SEARCH
-[exact lines to find in the file - copy them exactly including whitespace]
+[exact lines from the file INCLUDING the /@ and @/ markers]
 =======
-[new lines to replace them with]
+[new lines to replace them with - WITHOUT the markers]
 >>>>>>> REPLACE
 
 RULES:
-1. The SEARCH section must contain EXACT lines from the file (copy-paste them)
-2. Include 2-3 context lines to uniquely identify the location
-3. The REPLACE section contains the modified code
-4. You can use multiple SEARCH/REPLACE blocks for multiple changes
+1. The SEARCH section must contain EXACT lines from the file (copy-paste them exactly)
+2. CRITICAL: Include the /@ and @/ markers in SEARCH if they appear in the region you're replacing
+3. The REPLACE section contains the new code WITHOUT the /@ @/ markers
+4. Include 1-2 context lines around the markers to uniquely identify the location
 5. Preserve the original indentation style
-6. If adding new code at the start/end of file, include the first/last few lines in SEARCH
 
-EXAMPLES:
+EXAMPLE:
+File content:
+```
+# Config
+/@add logging@/
+# End
+```
 
-Example 1 - Adding code at the TOP of file:
-Task: "Add a comment at the top"
+Correct response:
 <<<<<<< SEARCH
-// existing first line
-// existing second line
+# Config
+/@add logging@/
+# End
 =======
-// NEW COMMENT ADDED HERE
-// existing first line
-// existing second line
+# Config
+import logging
+logging.basicConfig(level=logging.INFO)
+# End
 >>>>>>> REPLACE
 
-Example 2 - Modifying a function:
-Task: "Add validation to setValue"
-<<<<<<< SEARCH
-export function setValue(key, value) {
-  cache.set(key, value);
-}
-=======
-export function setValue(key, value) {
-  if (!key) throw new Error("key required");
-  cache.set(key, value);
-}
->>>>>>> REPLACE
-
-Now apply the requested changes using SEARCH/REPLACE blocks:]],
+Now apply the requested changes. Remember to include the /@ @/ markers in SEARCH:]],
 			filetype,
 			vim.fn.fnamemodify(event.target_path or "", ":t"),
 			event.prompt_content,
+			start_line,
+			end_line,
 			filetype,
-			table.concat(file_content_clean, "\n"):sub(1, 8000) -- Limit size
+			file_content:sub(1, 8000) -- Limit size
 		)
 
 		context.system_prompt = system_prompt

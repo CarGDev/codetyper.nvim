@@ -7,6 +7,8 @@ M.config = {
 	max_age_ms = 3600000, -- 1 hour TTL
 	staleness_check = true,
 	use_search_replace_parser = true, -- Enable new parsing logic
+	use_conflict_mode = true, -- Show diff for approval before applying changes
+	auto_jump_to_conflict = true, -- Jump to first conflict after creating
 }
 
 return M

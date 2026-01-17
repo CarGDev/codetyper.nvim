@@ -4,7 +4,11 @@
 
 local M = {}
 
+-- Chat is a pure conversational adapter. Forward messages to the Python agent
+-- via the transport client; the agent owns decision-making and tool usage.
+-- The agent module (Lua) handles the agentic loop for Lua-based execution.
 local agent = require("codetyper.features.agents")
+local agent_client = require("codetyper.transport.agent_client")
 local logs = require("codetyper.adapters.nvim.ui.logs")
 local utils = require("codetyper.support.utils")
 
@@ -18,6 +22,7 @@ local utils = require("codetyper.support.utils")
 ---@field is_open boolean Whether the UI is open
 ---@field log_listener_id number|nil Listener ID for logs
 ---@field referenced_files table Files referenced with @
+---@field referenced_folders table Folders referenced with @/
 
 local state = {
   chat_buf = nil,
@@ -29,6 +34,7 @@ local state = {
   is_open = false,
   log_listener_id = nil,
   referenced_files = {},
+  referenced_folders = {},
   selection_context = nil, -- Visual selection passed when opening
 }
 
@@ -261,18 +267,69 @@ local function create_callbacks()
   }
 end
 
---- Build file context from referenced files
+--- Build file context from referenced files and folders (with auto-expanded imports)
 ---@return string Context string
 local function build_file_context()
   local context = ""
+  local included_paths = {} -- Track included files to avoid duplicates
 
+  -- Try to load imports module for auto-expanding dependencies
+  local imports_ok, imports = pcall(require, "codetyper.support.imports")
+
+  -- Add individual files with their imports
   for filename, filepath in pairs(state.referenced_files) do
+    -- Skip if already included
+    if included_paths[filepath] then
+      goto continue_file
+    end
+
     local content = utils.read_file(filepath)
     if content and content ~= "" then
       local ext = vim.fn.fnamemodify(filepath, ":e")
       context = context .. "\n\n=== FILE: " .. filename .. " ===\n"
       context = context .. "Path: " .. filepath .. "\n"
       context = context .. "```" .. (ext or "text") .. "\n" .. content .. "\n```\n"
+      included_paths[filepath] = true
+
+      -- Auto-expand imports for this file
+      if imports_ok then
+        local file_imports = imports.find_imports_recursive(filepath, 2, 15)
+        if next(file_imports) then
+          context = context .. "\n--- DEPENDENCIES OF " .. filename .. " ---\n"
+          for imp_path, imp_data in pairs(file_imports) do
+            if not included_paths[imp_path] then
+              included_paths[imp_path] = true
+
+              local imp_ext = vim.fn.fnamemodify(imp_path, ":e")
+              context = context .. "\n--- " .. imp_data.filename .. " (imported as '" .. imp_data.import_path .. "') ---\n"
+              context = context .. "Path: " .. imp_path .. "\n"
+              context = context .. "```" .. (imp_ext or "text") .. "\n" .. imp_data.content .. "\n```\n"
+            end
+          end
+        end
+      end
+    end
+
+    ::continue_file::
+  end
+
+  -- Add folder contents
+  for folder_name, folder_data in pairs(state.referenced_folders) do
+    context = context .. "\n\n=== FOLDER: " .. folder_name .. " (" .. #folder_data.files .. " files) ===\n"
+    context = context .. "Path: " .. folder_data.path .. "\n"
+
+    for _, file in ipairs(folder_data.files) do
+      -- Skip if already included via imports
+      if included_paths[file.path] then
+        goto continue_folder_file
+      end
+
+      local ext = vim.fn.fnamemodify(file.path, ":e")
+      context = context .. "\n--- " .. file.name .. " ---\n"
+      context = context .. "```" .. (ext or "text") .. "\n" .. file.content .. "\n```\n"
+      included_paths[file.path] = true
+
+      ::continue_folder_file::
     end
   end
 
@@ -308,6 +365,7 @@ local function submit_input()
     agent.reset()
     logs.clear()
     state.referenced_files = {}
+    state.referenced_folders = {}
     if state.chat_buf and vim.api.nvim_buf_is_valid(state.chat_buf) then
       vim.bo[state.chat_buf].modifiable = true
       vim.api.nvim_buf_set_lines(state.chat_buf, 0, -1, false, {
@@ -371,8 +429,9 @@ local function submit_input()
   add_message("user", display_input)
   logs.info("User: " .. input:sub(1, 40) .. (input:len() > 40 and "..." or ""))
 
-  -- Clear referenced files after use
+  -- Clear referenced files/folders after use
   state.referenced_files = {}
+  state.referenced_folders = {}
 
   -- Check if agent is already running
   if agent.is_running() then
@@ -410,8 +469,62 @@ local function submit_input()
 
   logs.thinking("Starting...")
 
-  -- Run the agent
-  agent.run(full_input, context, create_callbacks())
+  -- Run the agent by forwarding the full input and context to the Python agent.
+  -- The Lua chat UI is a pure conversational adapter: it does not make decisions
+  -- or execute tools itself. The Python agent returns structured responses.
+
+  local send_ok, send_err
+  local params = {
+    context = full_input,
+    prompt = full_input,
+    files = {},
+  }
+
+  -- Attach current file content if available into params.files
+  if current_file ~= "" and vim.fn.filereadable(current_file) == 1 then
+    local content = utils.read_file(current_file)
+    params.files = { [vim.fn.fnamemodify(current_file, ":t")] = content }
+  end
+
+  agent_client.classify_intent(params.context, params.prompt, {}, function(intent, err)
+    if err then
+      add_message("system", "Agent error: " .. err, "DiagnosticError")
+      logs.error("Agent classify_intent error: " .. err)
+      return
+    end
+
+    -- Display intent summary from agent
+    local intent_text = string.format("Intent: s (confidence: .2f)", intent.intent or "unknown", intent.confidence or 0)
+    add_message("system", intent_text)
+
+    -- Request plan from the agent if intent indicates modification
+    if intent.intent and intent.intent ~= "ask" and not intent.needs_clarification then
+      agent_client.build_plan(intent.intent, params.context, params.files, function(plan, perr)
+        if perr then
+          add_message("system", "Agent plan error: " .. perr, "DiagnosticError")
+          logs.error("Agent build_plan error: " .. perr)
+          return
+        end
+
+        -- Present plan summary to user
+        local formatted = require("codetyper.transport.protocol").parse_plan_response(plan)
+        add_message("assistant", "Plan: " .. (formatted and "(see plan)" or "(no plan)"))
+
+        -- If plan needs clarification, show questions
+        if plan.needs_clarification then
+          for _, q in ipairs(plan.clarification_questions or {}) do
+            add_message("assistant", "Clarify: " .. q)
+          end
+        else
+          -- Ask user whether to execute (chat MUST NOT decide) — present prompt to user
+          add_message("system", "Plan ready. Type /execute to run the plan, or /review to inspect.")
+        end
+      end)
+    else
+      -- For non-action intents, present agent's response text (if any)
+      add_message("assistant", intent.reasoning or "Agent classified the intent.")
+    end
+  end)
 end
 
 --- Show file picker for @ mentions
@@ -466,6 +579,176 @@ function M.add_file_reference(filepath, filename)
   M.focus_input()
 end
 
+--- Get files from a folder recursively (respects gitignore)
+---@param folder_path string Path to folder
+---@param max_files? number Maximum files to include (default 50)
+---@return table files List of {path, name, content}
+local function get_folder_files(folder_path, max_files)
+  max_files = max_files or 50
+  local files = {}
+  local gitignore = require("codetyper.support.gitignore")
+
+  local skip_patterns = {
+    "%.git/", "node_modules/", "%.next/", "dist/", "build/",
+    "%.cache/", "__pycache__/", "%.pyc$", "%.min%.js$",
+    "%.min%.css$", "%.map$", "%.lock$", "package%-lock%.json$", "yarn%.lock$",
+  }
+
+  local function should_skip(path)
+    for _, pattern in ipairs(skip_patterns) do
+      if path:match(pattern) then return true end
+    end
+    return false
+  end
+
+  local function scan_dir(dir, depth)
+    if depth > 5 or #files >= max_files then return end
+    local handle = vim.loop.fs_scandir(dir)
+    if not handle then return end
+
+    while #files < max_files do
+      local name, type = vim.loop.fs_scandir_next(handle)
+      if not name then break end
+      local full_path = dir .. "/" .. name
+
+      if not should_skip(full_path) and not gitignore.is_ignored(full_path) then
+        if type == "directory" then
+          scan_dir(full_path, depth + 1)
+        elseif type == "file" then
+          local content = utils.read_file(full_path)
+          if content and #content < 100000 then
+            table.insert(files, {
+              path = full_path,
+              name = full_path:sub(#folder_path + 2),
+              content = content,
+            })
+          end
+        end
+      end
+    end
+  end
+
+  scan_dir(folder_path, 0)
+  return files
+end
+
+--- Recursively scan for directories
+---@param base_path string Base path
+---@param relative_path string Relative path from base
+---@param depth number Current depth
+---@param max_depth number Maximum depth
+---@param results table Results table to append to
+local function scan_directories(base_path, relative_path, depth, max_depth, results)
+  if depth > max_depth then return end
+
+  local full_path = base_path
+  if relative_path ~= "" then
+    full_path = base_path .. "/" .. relative_path
+  end
+
+  local handle = vim.loop.fs_scandir(full_path)
+  if not handle then return end
+
+  local skip = {
+    ["node_modules"] = true, [".git"] = true, [".next"] = true,
+    ["dist"] = true, ["build"] = true, [".cache"] = true,
+    ["__pycache__"] = true, ["vendor"] = true, ["target"] = true,
+  }
+
+  while true do
+    local name, type = vim.loop.fs_scandir_next(handle)
+    if not name then break end
+
+    if type == "directory" and not name:match("^%.") and not skip[name] then
+      local dir_relative = relative_path == "" and name or (relative_path .. "/" .. name)
+      table.insert(results, {
+        display = dir_relative .. "/",
+        path = base_path .. "/" .. dir_relative,
+      })
+      scan_directories(base_path, dir_relative, depth + 1, max_depth, results)
+    end
+  end
+end
+
+--- Show folder picker
+function M.show_folder_picker()
+  local has_telescope, _ = pcall(require, "telescope.builtin")
+
+  if has_telescope then
+    local pickers = require("telescope.pickers")
+    local finders = require("telescope.finders")
+    local conf = require("telescope.config").values
+    local actions = require("telescope.actions")
+    local action_state = require("telescope.actions.state")
+
+    local cwd = vim.fn.getcwd()
+    local dirs = { { display = "./", path = cwd } }
+
+    -- Recursively scan for directories (up to 4 levels deep)
+    scan_directories(cwd, "", 0, 4, dirs)
+
+    -- Sort alphabetically
+    table.sort(dirs, function(a, b) return a.display < b.display end)
+
+    pickers.new({}, {
+      prompt_title = "Select folder to attach (Ctrl+d)",
+      finder = finders.new_table({
+        results = dirs,
+        entry_maker = function(entry)
+          return { value = entry, display = "📁 " .. entry.display, ordinal = entry.display }
+        end,
+      }),
+      sorter = conf.generic_sorter({}),
+      attach_mappings = function(prompt_bufnr)
+        actions.select_default:replace(function()
+          actions.close(prompt_bufnr)
+          local selection = action_state.get_selected_entry()
+          if selection then
+            M.add_folder_reference(selection.value.path, selection.value.display)
+          end
+        end)
+        return true
+      end,
+    }):find()
+  else
+    vim.ui.input({ prompt = "Folder path: " }, function(input)
+      if input and input ~= "" then
+        local folder_path = vim.fn.fnamemodify(input, ":p")
+        local folder_name = vim.fn.fnamemodify(folder_path, ":t") .. "/"
+        M.add_folder_reference(folder_path, folder_name)
+      end
+    end)
+  end
+end
+
+--- Add a folder reference
+---@param folder_path string Full path to the folder
+---@param folder_name string Display name
+function M.add_folder_reference(folder_path, folder_name)
+  folder_path = vim.fn.fnamemodify(folder_path, ":p"):gsub("/$", "")
+
+  local stat = vim.loop.fs_stat(folder_path)
+  if not stat or stat.type ~= "directory" then
+    utils.notify("Not a valid directory: " .. folder_name, vim.log.levels.ERROR)
+    return
+  end
+
+  local files = get_folder_files(folder_path)
+  if #files == 0 then
+    utils.notify("No readable files in folder: " .. folder_name, vim.log.levels.WARN)
+    return
+  end
+
+  state.referenced_folders[folder_name] = { path = folder_path, files = files }
+
+  local total_size = 0
+  for _, f in ipairs(files) do total_size = total_size + #f.content end
+
+  add_message("system", string.format("Attached folder: %s (%d files, %.1fKB)", folder_name, #files, total_size/1024), "DiagnosticHint")
+  logs.debug("Attached folder: " .. folder_name .. " (" .. #files .. " files)")
+  M.focus_input()
+end
+
 --- Include current file context
 function M.include_current_file()
   -- Get the file from the window that's not the agent sidebar
@@ -514,7 +797,7 @@ end
 
 --- Show chat mode switcher modal
 function M.show_chat_switcher()
-  local switcher = require("codetyper.chat_switcher")
+  local switcher = require("codetyper.adapters.nvim.ui.switcher")
   switcher.show()
 end
 
@@ -556,6 +839,7 @@ function M.open(selection)
   -- Clear previous state
   logs.clear()
   state.referenced_files = {}
+  state.referenced_folders = {}
 
   -- Create chat buffer
   state.chat_buf = vim.api.nvim_create_buf(false, true)
@@ -656,6 +940,7 @@ function M.open(selection)
   vim.keymap.set("i", "<CR>", submit_input, input_opts)
   vim.keymap.set("n", "<CR>", submit_input, input_opts)
   vim.keymap.set("i", "@", M.show_file_picker, input_opts)
+  vim.keymap.set("i", "<C-d>", M.show_folder_picker, input_opts)
   vim.keymap.set({ "n", "i" }, "<C-f>", M.include_current_file, input_opts)
   vim.keymap.set("n", "<Tab>", M.focus_chat, input_opts)
   vim.keymap.set("n", "q", M.close, input_opts)
@@ -668,6 +953,7 @@ function M.open(selection)
   vim.keymap.set("n", "i", M.focus_input, chat_opts)
   vim.keymap.set("n", "<CR>", M.focus_input, chat_opts)
   vim.keymap.set("n", "@", M.show_file_picker, chat_opts)
+  vim.keymap.set("n", "<C-d>", M.show_folder_picker, chat_opts)
   vim.keymap.set("n", "<C-f>", M.include_current_file, chat_opts)
   vim.keymap.set("n", "<Tab>", M.focus_logs, chat_opts)
   vim.keymap.set("n", "q", M.close, chat_opts)
@@ -787,6 +1073,7 @@ function M.close()
   state.logs_win = nil
   state.is_open = false
   state.referenced_files = {}
+  state.referenced_folders = {}
 
   -- Reset agent conversation
   agent.reset()

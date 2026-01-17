@@ -155,6 +155,17 @@ end
 ---@return boolean
 ---@return string|nil reason
 function M.is_stale(patch)
+	-- For SEARCH/REPLACE patches, we use fuzzy matching so staleness
+	-- is less critical - the SEARCH text will either be found or not.
+	-- Only mark stale if the buffer is completely invalid.
+	if patch.use_search_replace then
+		if not vim.api.nvim_buf_is_valid(patch.original_snapshot.bufnr) then
+			return true, "buffer_invalid"
+		end
+		-- For SEARCH/REPLACE, we trust the fuzzy matching to handle changes
+		return false, nil
+	end
+
 	return M.is_snapshot_stale(patch.original_snapshot)
 end
 
@@ -235,6 +246,21 @@ function M.create_from_event(event, generated_code, confidence, strategy)
 	-- If we have SEARCH/REPLACE blocks, use that strategy
 	if use_search_replace then
 		injection_strategy = "search_replace"
+		-- IMPORTANT: Also set injection_range for fallback when SEARCH/REPLACE fails
+		-- For inline prompts, use the tag range; for coder files, use scope range
+		if is_inline and event.range then
+			injection_range = {
+				start_line = event.range.start_line,
+				end_line = event.range.end_line,
+			}
+		elseif event.scope_range then
+			injection_range = event.scope_range
+		elseif event.range then
+			injection_range = {
+				start_line = event.range.start_line,
+				end_line = event.range.end_line,
+			}
+		end
 		pcall(function()
 			local logs = require("codetyper.adapters.nvim.ui.logs")
 			logs.add({
@@ -568,19 +594,10 @@ function M.apply(patch)
 	if patch.use_search_replace and patch.search_replace_blocks and #patch.search_replace_blocks > 0 then
 		local search_replace = get_search_replace_module()
 
-		-- Remove the /@ @/ tags first (they shouldn't be in the file anymore)
-		if is_inline_prompt and source_bufnr and vim.api.nvim_buf_is_valid(source_bufnr) then
-			tags_removed = remove_prompt_tags(source_bufnr)
-			if tags_removed > 0 then
-				pcall(function()
-					local logs = require("codetyper.adapters.nvim.ui.logs")
-					logs.add({
-						type = "info",
-						message = string.format("Removed %d prompt tag(s)", tags_removed),
-					})
-				end)
-			end
-		end
+		-- NOTE: For inline prompts, we do NOT remove tags before SEARCH/REPLACE.
+		-- The SEARCH text from the LLM should include the tag content (e.g., "/@...@/"),
+		-- and the REPLACE text will naturally replace it with the new code.
+		-- Removing tags first would break the match since the SEARCH text won't be found.
 
 		-- Apply SEARCH/REPLACE blocks
 		local success, err = search_replace.apply_to_buffer(target_bufnr, patch.search_replace_blocks)
@@ -999,10 +1016,10 @@ function M.apply_with_conflict(patch)
 		end
 
 		if applied_count > 0 then
-			-- Remove tags for inline prompts after inserting conflicts
-			if is_inline_prompt and source_bufnr and vim.api.nvim_buf_is_valid(source_bufnr) then
-				remove_prompt_tags(source_bufnr)
-			end
+			-- NOTE: For inline prompts in conflict mode, we do NOT remove tags.
+			-- The tags are now part of the "OURS" section in the conflict markers.
+			-- When the user accepts the AI suggestion, tags go away naturally.
+			-- When they keep "OURS", they keep the tags to edit manually.
 
 			-- Process conflicts (highlight, keymaps) and show menu
 			conflict.process_and_show_menu(target_bufnr)
@@ -1030,10 +1047,8 @@ function M.apply_with_conflict(patch)
 		local end_line = patch.injection_range.end_line
 		local new_lines = vim.split(patch.generated_code, "\n", { plain = true })
 
-		-- Remove tags for inline prompts
-		if is_inline_prompt and source_bufnr and vim.api.nvim_buf_is_valid(source_bufnr) then
-			remove_prompt_tags(source_bufnr)
-		end
+		-- NOTE: For inline prompts in conflict mode, we do NOT remove tags.
+		-- Tags become part of the "OURS" section in conflict markers.
 
 		-- Insert conflict markers
 		conflict.insert_conflict(target_bufnr, start_line, end_line, new_lines, "AI SUGGESTION")

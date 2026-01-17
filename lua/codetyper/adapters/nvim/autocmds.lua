@@ -33,7 +33,11 @@ local PROMPT_PROCESS_DEBOUNCE_MS = 200 -- Wait 200ms after mode change before pr
 ---@param prompt table Prompt object
 ---@return string Unique key
 local function get_prompt_key(bufnr, prompt)
-	return string.format("%d:%d:%d:%s", bufnr, prompt.start_line, prompt.end_line, prompt.content:sub(1, 50))
+	local content_preview = ""
+	if prompt.content and type(prompt.content) == "string" then
+		content_preview = prompt.content:sub(1, 50)
+	end
+	return string.format("%d:%d:%d:%s", bufnr, prompt.start_line or 0, prompt.end_line or 0, content_preview)
 end
 
 --- Schedule tree update with debounce
@@ -389,147 +393,162 @@ function M.check_for_closed_prompt()
 			-- Mark as processed
 			processed_prompts[prompt_key] = true
 
-			-- Check if scheduler is enabled
-			local codetyper = require("codetyper")
-			local ct_config = codetyper.get_config()
-			local scheduler_enabled = ct_config and ct_config.scheduler and ct_config.scheduler.enabled
+			-- Route to appropriate handler
+			vim.schedule(function()
+				local logs_panel = require("codetyper.adapters.nvim.ui.logs_panel")
+				local inline_agent = require("codetyper.features.agents.inline")
 
-			if scheduler_enabled then
-				-- Event-driven: emit to queue
-				vim.schedule(function()
-					local queue = require("codetyper.core.events.queue")
-					local patch_mod = require("codetyper.core.diff.patch")
-					local intent_mod = require("codetyper.core.intent")
-					local scope_mod = require("codetyper.core.scope")
-					local logs_panel = require("codetyper.adapters.nvim.ui.logs_panel")
+				-- Open logs panel to show progress
+				logs_panel.ensure_open()
 
-					-- Open logs panel to show progress
-					logs_panel.ensure_open()
+				-- Get target path
+				local target_path
+				if utils.is_coder_file(current_file) then
+					target_path = utils.get_target_path(current_file)
+				else
+					target_path = current_file
+				end
 
-					-- Take buffer snapshot
-					local snapshot = patch_mod.snapshot_buffer(bufnr, {
-						start_line = prompt.start_line,
-						end_line = prompt.end_line,
+				-- Read attached files before cleaning
+				local attached_files = read_attached_files(prompt.content, current_file)
+
+				-- Clean prompt content (strip file references for display)
+				local cleaned = parser.clean_prompt(parser.strip_file_references(prompt.content))
+
+				-- DECISION: Use inline agent for complex operations, patch system for simple edits
+				-- The inline agent uses tool-calling to materialize program state from intent
+				-- The patch system uses SEARCH/REPLACE for targeted text transformations
+				local use_agent = inline_agent.should_use_agent(prompt.content)
+
+				if use_agent then
+					-- IN-FILE AGENT MODE: Full agentic behavior with tool calling
+					-- This treats /@ @/ as a conversational agent embedded in the file
+					utils.notify("In-file agent mode activated", vim.log.levels.INFO)
+
+					inline_agent.run({
+						bufnr = bufnr,
+						prompt_content = prompt.content, -- Keep full content for agent
+						prompt_range = {
+							start_line = prompt.start_line,
+							end_line = prompt.end_line,
+						},
+						target_path = target_path,
+						attached_files = attached_files,
+						on_status = function(status)
+							-- Status updates shown in logs panel
+						end,
+						on_complete = function(success, err)
+							if not success and err then
+								utils.notify("Agent error: " .. err, vim.log.levels.ERROR)
+							end
+						end,
 					})
+				else
+					-- PATCH MODE: Use scheduler for simple, targeted edits
+					local codetyper = require("codetyper")
+					local ct_config = codetyper.get_config()
+					local scheduler_enabled = ct_config and ct_config.scheduler and ct_config.scheduler.enabled
 
-					-- Get target path - for coder files, get the target; for regular files, use self
-					local target_path
-					if utils.is_coder_file(current_file) then
-						target_path = utils.get_target_path(current_file)
-					else
-						target_path = current_file
-					end
+					if scheduler_enabled then
+						local queue = require("codetyper.core.events.queue")
+						local patch_mod = require("codetyper.core.diff.patch")
+						local intent_mod = require("codetyper.core.intent")
+						local scope_mod = require("codetyper.core.scope")
 
-					-- Read attached files before cleaning
-					local attached_files = read_attached_files(prompt.content, current_file)
+						-- Take buffer snapshot
+						local snapshot = patch_mod.snapshot_buffer(bufnr, {
+							start_line = prompt.start_line,
+							end_line = prompt.end_line,
+						})
 
-					-- Clean prompt content (strip file references)
-					local cleaned = parser.clean_prompt(parser.strip_file_references(prompt.content))
+						local is_from_coder_file = utils.is_coder_file(current_file)
+						local target_bufnr = vim.fn.bufnr(target_path)
+						local scope = nil
+						local scope_text = nil
+						local scope_range = nil
 
-					-- Check if we're working from a coder file
-					local is_from_coder_file = utils.is_coder_file(current_file)
-
-					-- Resolve scope in target file FIRST (need it to adjust intent)
-					-- Only resolve scope if NOT from coder file (line numbers don't apply)
-					local target_bufnr = vim.fn.bufnr(target_path)
-					local scope = nil
-					local scope_text = nil
-					local scope_range = nil
-
-					if not is_from_coder_file then
-						-- Prompt is in the actual source file, use line position for scope
-						if target_bufnr == -1 then
-							target_bufnr = bufnr
-						end
-						scope = scope_mod.resolve_scope(target_bufnr, prompt.start_line, 1)
-						if scope and scope.type ~= "file" then
-							scope_text = scope.text
-							scope_range = {
-								start_line = scope.range.start_row,
-								end_line = scope.range.end_row,
-							}
-						end
-					else
-						-- Prompt is in coder file - load target if needed, but don't use scope
-						-- Code from coder files should append to target by default
-						if target_bufnr == -1 then
-							target_bufnr = vim.fn.bufadd(target_path)
-							if target_bufnr ~= 0 then
-								vim.fn.bufload(target_bufnr)
+						if not is_from_coder_file then
+							if target_bufnr == -1 then
+								target_bufnr = bufnr
+							end
+							scope = scope_mod.resolve_scope(target_bufnr, prompt.start_line, 1)
+							if scope and scope.type ~= "file" then
+								scope_text = scope.text
+								scope_range = {
+									start_line = scope.range.start_row,
+									end_line = scope.range.end_row,
+								}
+							end
+						else
+							if target_bufnr == -1 then
+								target_bufnr = vim.fn.bufadd(target_path)
+								if target_bufnr ~= 0 then
+									vim.fn.bufload(target_bufnr)
+								end
 							end
 						end
-					end
 
-					-- Detect intent from prompt
-					local intent = intent_mod.detect(cleaned)
+						local intent = intent_mod.detect(cleaned)
 
-					-- IMPORTANT: If prompt is inside a function/method and intent is "add",
-					-- override to "complete" since we're completing the function body
-					-- But NOT for coder files - they should use "add/append" by default
-					if not is_from_coder_file and scope and (scope.type == "function" or scope.type == "method") then
-						if intent.type == "add" or intent.action == "insert" or intent.action == "append" then
-							-- Override to complete the function instead of adding new code
+						if not is_from_coder_file and scope and (scope.type == "function" or scope.type == "method") then
+							if intent.type == "add" or intent.action == "insert" or intent.action == "append" then
+								intent = {
+									type = "complete",
+									scope_hint = "function",
+									confidence = intent.confidence,
+									action = "replace",
+									keywords = intent.keywords,
+								}
+							end
+						end
+
+						if is_from_coder_file and (intent.action == "replace" or intent.type == "complete") then
 							intent = {
-								type = "complete",
-								scope_hint = "function",
+								type = intent.type == "complete" and "add" or intent.type,
 								confidence = intent.confidence,
-								action = "replace",
+								action = "append",
 								keywords = intent.keywords,
 							}
 						end
+
+						local priority = 2
+						if intent.type == "fix" or intent.type == "complete" then
+							priority = 1
+						elseif intent.type == "test" or intent.type == "document" then
+							priority = 3
+						end
+
+						queue.enqueue({
+							id = queue.generate_id(),
+							bufnr = bufnr,
+							range = { start_line = prompt.start_line, end_line = prompt.end_line },
+							timestamp = os.clock(),
+							changedtick = snapshot.changedtick,
+							content_hash = snapshot.content_hash,
+							prompt_content = cleaned,
+							target_path = target_path,
+							priority = priority,
+							status = "pending",
+							attempt_count = 0,
+							intent = intent,
+							scope = scope,
+							scope_text = scope_text,
+							scope_range = scope_range,
+							attached_files = attached_files,
+						})
+
+						local scope_info = scope
+								and scope.type ~= "file"
+								and string.format(" [%s: %s]", scope.type, scope.name or "anonymous")
+							or ""
+						utils.notify(string.format("Prompt queued: %s%s", intent.type, scope_info), vim.log.levels.INFO)
+					else
+						-- Legacy: direct processing
+						utils.notify("Processing prompt...", vim.log.levels.INFO)
+						vim.cmd("CoderProcess")
 					end
-
-					-- For coder files, default to "add" with "append" action
-					if is_from_coder_file and (intent.action == "replace" or intent.type == "complete") then
-						intent = {
-							type = intent.type == "complete" and "add" or intent.type,
-							confidence = intent.confidence,
-							action = "append",
-							keywords = intent.keywords,
-						}
-					end
-
-					-- Determine priority based on intent
-					local priority = 2 -- Normal
-					if intent.type == "fix" or intent.type == "complete" then
-						priority = 1 -- High priority for fixes and completions
-					elseif intent.type == "test" or intent.type == "document" then
-						priority = 3 -- Lower priority for tests and docs
-					end
-
-					-- Enqueue the event
-					queue.enqueue({
-						id = queue.generate_id(),
-						bufnr = bufnr,
-						range = { start_line = prompt.start_line, end_line = prompt.end_line },
-						timestamp = os.clock(),
-						changedtick = snapshot.changedtick,
-						content_hash = snapshot.content_hash,
-						prompt_content = cleaned,
-						target_path = target_path,
-						priority = priority,
-						status = "pending",
-						attempt_count = 0,
-						intent = intent,
-						scope = scope,
-						scope_text = scope_text,
-						scope_range = scope_range,
-						attached_files = attached_files,
-					})
-
-					local scope_info = scope
-							and scope.type ~= "file"
-							and string.format(" [%s: %s]", scope.type, scope.name or "anonymous")
-						or ""
-					utils.notify(string.format("Prompt queued: %s%s", intent.type, scope_info), vim.log.levels.INFO)
-				end)
-			else
-				-- Legacy: direct processing
-				utils.notify("Processing prompt...", vim.log.levels.INFO)
-				vim.schedule(function()
-					vim.cmd("CoderProcess")
-				end)
-			end
+				end
+			end)
 		end
 	end
 	is_processing = false
@@ -543,15 +562,9 @@ end
 ---@param skip_processed_check? boolean Skip the processed check (for manual mode)
 function M.process_single_prompt(bufnr, prompt, current_file, skip_processed_check)
 	local parser = require("codetyper.parser")
-	local scheduler = require("codetyper.core.scheduler.scheduler")
 
 	if not prompt.content or prompt.content == "" then
 		return
-	end
-
-	-- Ensure scheduler is running
-	if not scheduler.status().running then
-		scheduler.start()
 	end
 
 	-- Generate unique key for this prompt
@@ -567,20 +580,11 @@ function M.process_single_prompt(bufnr, prompt, current_file, skip_processed_che
 
 	-- Process this prompt
 	vim.schedule(function()
-		local queue = require("codetyper.core.events.queue")
-		local patch_mod = require("codetyper.core.diff.patch")
-		local intent_mod = require("codetyper.core.intent")
-		local scope_mod = require("codetyper.core.scope")
 		local logs_panel = require("codetyper.adapters.nvim.ui.logs_panel")
+		local inline_agent = require("codetyper.features.agents.inline")
 
 		-- Open logs panel to show progress
 		logs_panel.ensure_open()
-
-		-- Take buffer snapshot
-		local snapshot = patch_mod.snapshot_buffer(bufnr, {
-			start_line = prompt.start_line,
-			end_line = prompt.end_line,
-		})
 
 		-- Get target path - for coder files, get the target; for regular files, use self
 		local target_path
@@ -594,101 +598,160 @@ function M.process_single_prompt(bufnr, prompt, current_file, skip_processed_che
 		-- Read attached files before cleaning
 		local attached_files = read_attached_files(prompt.content, current_file)
 
-		-- Clean prompt content (strip file references)
-		local cleaned = parser.clean_prompt(parser.strip_file_references(prompt.content))
+		-- DECISION: Use inline agent for complex operations, patch system for simple edits
+		-- The inline agent uses tool-calling to materialize program state from intent
+		-- The patch system uses SEARCH/REPLACE for targeted text transformations
+		local use_agent = inline_agent.should_use_agent(prompt.content)
 
-		-- Resolve scope in target file FIRST (need it to adjust intent)
-		-- Only resolve scope if NOT from coder file (line numbers don't apply)
-		local target_bufnr = vim.fn.bufnr(target_path)
-		local scope = nil
-		local scope_text = nil
-		local scope_range = nil
+		-- Log the routing decision
+		pcall(function()
+			local logs = require("codetyper.adapters.nvim.ui.logs")
+			logs.add({
+				type = "info",
+				message = string.format("Routing decision: %s mode", use_agent and "AGENT" or "PATCH"),
+				data = { prompt_preview = prompt.content:sub(1, 50) },
+			})
+		end)
 
-		if not is_from_coder_file then
-			-- Prompt is in the actual source file, use line position for scope
-			if target_bufnr == -1 then
-				target_bufnr = bufnr
-			end
-			scope = scope_mod.resolve_scope(target_bufnr, prompt.start_line, 1)
-			if scope and scope.type ~= "file" then
-				scope_text = scope.text
-				scope_range = {
-					start_line = scope.range.start_row,
-					end_line = scope.range.end_row,
-				}
-			end
+		if use_agent then
+			-- IN-FILE AGENT MODE: Full agentic behavior with tool calling
+			-- This treats /@ @/ as a conversational agent embedded in the file
+			utils.notify("In-file agent mode activated", vim.log.levels.INFO)
+
+			inline_agent.run({
+				bufnr = bufnr,
+				prompt_content = prompt.content, -- Keep full content for agent
+				prompt_range = {
+					start_line = prompt.start_line,
+					end_line = prompt.end_line,
+				},
+				target_path = target_path,
+				attached_files = attached_files,
+				on_status = function(status)
+					-- Status updates shown in logs panel
+				end,
+				on_complete = function(success, err)
+					if not success and err then
+						utils.notify("Agent error: " .. err, vim.log.levels.ERROR)
+					end
+				end,
+			})
 		else
-			-- Prompt is in coder file - load target if needed
-			if target_bufnr == -1 then
-				target_bufnr = vim.fn.bufadd(target_path)
-				if target_bufnr ~= 0 then
-					vim.fn.bufload(target_bufnr)
+			-- PATCH MODE: Use scheduler for simple, targeted edits
+			local scheduler = require("codetyper.core.scheduler.scheduler")
+
+			-- Ensure scheduler is running
+			if not scheduler.status().running then
+				scheduler.start()
+			end
+
+			local queue = require("codetyper.core.events.queue")
+			local patch_mod = require("codetyper.core.diff.patch")
+			local intent_mod = require("codetyper.core.intent")
+			local scope_mod = require("codetyper.core.scope")
+
+			-- Take buffer snapshot
+			local snapshot = patch_mod.snapshot_buffer(bufnr, {
+				start_line = prompt.start_line,
+				end_line = prompt.end_line,
+			})
+
+			-- Clean prompt content (strip file references)
+			local cleaned = parser.clean_prompt(parser.strip_file_references(prompt.content))
+
+			-- Resolve scope in target file FIRST (need it to adjust intent)
+			-- Only resolve scope if NOT from coder file (line numbers don't apply)
+			local target_bufnr = vim.fn.bufnr(target_path)
+			local scope = nil
+			local scope_text = nil
+			local scope_range = nil
+
+			if not is_from_coder_file then
+				-- Prompt is in the actual source file, use line position for scope
+				if target_bufnr == -1 then
+					target_bufnr = bufnr
+				end
+				scope = scope_mod.resolve_scope(target_bufnr, prompt.start_line, 1)
+				if scope and scope.type ~= "file" then
+					scope_text = scope.text
+					scope_range = {
+						start_line = scope.range.start_row,
+						end_line = scope.range.end_row,
+					}
+				end
+			else
+				-- Prompt is in coder file - load target if needed
+				if target_bufnr == -1 then
+					target_bufnr = vim.fn.bufadd(target_path)
+					if target_bufnr ~= 0 then
+						vim.fn.bufload(target_bufnr)
+					end
 				end
 			end
-		end
 
-		-- Detect intent from prompt
-		local intent = intent_mod.detect(cleaned)
+			-- Detect intent from prompt
+			local intent = intent_mod.detect(cleaned)
 
-		-- IMPORTANT: If prompt is inside a function/method and intent is "add",
-		-- override to "complete" since we're completing the function body
-		-- But NOT for coder files - they should use "add/append" by default
-		if not is_from_coder_file and scope and (scope.type == "function" or scope.type == "method") then
-			if intent.type == "add" or intent.action == "insert" or intent.action == "append" then
-				-- Override to complete the function instead of adding new code
+			-- IMPORTANT: If prompt is inside a function/method and intent is "add",
+			-- override to "complete" since we're completing the function body
+			-- But NOT for coder files - they should use "add/append" by default
+			if not is_from_coder_file and scope and (scope.type == "function" or scope.type == "method") then
+				if intent.type == "add" or intent.action == "insert" or intent.action == "append" then
+					-- Override to complete the function instead of adding new code
+					intent = {
+						type = "complete",
+						scope_hint = "function",
+						confidence = intent.confidence,
+						action = "replace",
+						keywords = intent.keywords,
+					}
+				end
+			end
+
+			-- For coder files, default to "add" with "append" action
+			if is_from_coder_file and (intent.action == "replace" or intent.type == "complete") then
 				intent = {
-					type = "complete",
-					scope_hint = "function",
+					type = intent.type == "complete" and "add" or intent.type,
 					confidence = intent.confidence,
-					action = "replace",
+					action = "append",
 					keywords = intent.keywords,
 				}
 			end
+
+			-- Determine priority based on intent
+			local priority = 2
+			if intent.type == "fix" or intent.type == "complete" then
+				priority = 1
+			elseif intent.type == "test" or intent.type == "document" then
+				priority = 3
+			end
+
+			-- Enqueue the event
+			queue.enqueue({
+				id = queue.generate_id(),
+				bufnr = bufnr,
+				range = { start_line = prompt.start_line, end_line = prompt.end_line },
+				timestamp = os.clock(),
+				changedtick = snapshot.changedtick,
+				content_hash = snapshot.content_hash,
+				prompt_content = cleaned,
+				target_path = target_path,
+				priority = priority,
+				status = "pending",
+				attempt_count = 0,
+				intent = intent,
+				scope = scope,
+				scope_text = scope_text,
+				scope_range = scope_range,
+				attached_files = attached_files,
+			})
+
+			local scope_info = scope
+					and scope.type ~= "file"
+					and string.format(" [%s: %s]", scope.type, scope.name or "anonymous")
+				or ""
+			utils.notify(string.format("Prompt queued: %s%s", intent.type, scope_info), vim.log.levels.INFO)
 		end
-
-		-- For coder files, default to "add" with "append" action
-		if is_from_coder_file and (intent.action == "replace" or intent.type == "complete") then
-			intent = {
-				type = intent.type == "complete" and "add" or intent.type,
-				confidence = intent.confidence,
-				action = "append",
-				keywords = intent.keywords,
-			}
-		end
-
-		-- Determine priority based on intent
-		local priority = 2
-		if intent.type == "fix" or intent.type == "complete" then
-			priority = 1
-		elseif intent.type == "test" or intent.type == "document" then
-			priority = 3
-		end
-
-		-- Enqueue the event
-		queue.enqueue({
-			id = queue.generate_id(),
-			bufnr = bufnr,
-			range = { start_line = prompt.start_line, end_line = prompt.end_line },
-			timestamp = os.clock(),
-			changedtick = snapshot.changedtick,
-			content_hash = snapshot.content_hash,
-			prompt_content = cleaned,
-			target_path = target_path,
-			priority = priority,
-			status = "pending",
-			attempt_count = 0,
-			intent = intent,
-			scope = scope,
-			scope_text = scope_text,
-			scope_range = scope_range,
-			attached_files = attached_files,
-		})
-
-		local scope_info = scope
-				and scope.type ~= "file"
-				and string.format(" [%s: %s]", scope.type, scope.name or "anonymous")
-			or ""
-		utils.notify(string.format("Prompt queued: %s%s", intent.type, scope_info), vim.log.levels.INFO)
 	end)
 end
 

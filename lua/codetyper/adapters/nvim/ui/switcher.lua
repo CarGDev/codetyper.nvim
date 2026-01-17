@@ -1,4 +1,4 @@
----@mod codetyper.chat_switcher Modal picker to switch between Ask and Agent modes
+---@mod codetyper.adapters.nvim.ui.switcher Modal picker to switch between Ask and Agent modes
 
 local M = {}
 

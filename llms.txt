@@ -21,51 +21,102 @@ Instead of having an AI generate entire files, Codetyper lets developers maintai
 
 ```
 lua/codetyper/
-├── init.lua              # Main entry, setup function
-├── config.lua            # Configuration management
-├── types.lua             # Lua type definitions
-├── utils.lua             # Utility functions
-├── commands.lua          # Vim command definitions
-├── window.lua            # Split window management
-├── parser.lua            # Parses /@ @/ tags
-├── gitignore.lua         # Manages .gitignore entries
-├── autocmds.lua          # Autocommands for tag detection
-├── inject.lua            # Code injection strategies
-├── health.lua            # Health check for :checkhealth
-├── tree.lua              # Project tree logging
-├── logs_panel.lua        # Standalone logs panel UI
-├── cost.lua              # LLM cost tracking
-├── credentials.lua       # Secure credential storage
-├── llm/
-│   ├── init.lua          # LLM interface, provider selection
-│   ├── claude.lua        # Claude API client
-│   ├── openai.lua        # OpenAI API client
-│   ├── gemini.lua        # Google Gemini API client
-│   ├── copilot.lua       # GitHub Copilot client
-│   └── ollama.lua        # Ollama API client (local)
-├── agent/
-│   ├── init.lua          # Agent system entry point
-│   ├── ui.lua            # Agent panel UI
-│   ├── logs.lua          # Logging system
-│   ├── tools.lua         # Tool definitions (read, edit, write, bash)
-│   ├── executor.lua      # Tool execution logic
-│   ├── parser.lua        # Parse tool calls from responses
-│   ├── queue.lua         # Event queue with priority heap
-│   ├── patch.lua         # Patch candidates with staleness detection
-│   ├── confidence.lua    # Response confidence scoring
-│   ├── worker.lua        # Async LLM worker
-│   ├── scheduler.lua     # Event scheduler
-│   ├── scope.lua         # Tree-sitter scope resolution
-│   ├── intent.lua        # Intent detection from prompts
-│   ├── conflict.lua      # Git-style conflict resolution
-│   ├── linter.lua        # LSP diagnostics validation
-│   └── search_replace.lua # SEARCH/REPLACE block parsing
-├── ask/
-│   ├── init.lua          # Ask panel entry point
-│   └── ui.lua            # Ask panel UI (chat interface)
-└── prompts/
-    ├── init.lua          # System prompts for code generation
-    └── agent.lua         # Agent-specific prompts
+├── init.lua                    # Main entry, setup function
+├── parser.lua                  # Parses /@ @/ tags, thin wrapper over detector modules
+│
+├── adapters/nvim/              # Neovim-specific adapters
+│   ├── autocmds.lua            # Autocommands for tag detection
+│   ├── commands.lua            # Vim command definitions
+│   ├── windows.lua             # Split window management
+│   ├── health.lua              # Health check for :checkhealth
+│   └── ui/
+│       ├── ask.lua             # Ask panel UI
+│       ├── chat.lua            # Agent chat panel UI
+│       ├── switcher.lua        # Ask/Agent mode switcher
+│       ├── diff_review.lua     # Diff review UI
+│       ├── logs.lua            # Logging system
+│       └── logs_panel.lua      # Standalone logs panel UI
+│
+├── config/                     # Configuration modules
+│   ├── config.lua              # Configuration management
+│   ├── credentials.lua         # Secure credential storage
+│   └── preferences.lua         # User preferences (auto/manual mode)
+│
+├── core/                       # Core business logic
+│   ├── cost.lua                # LLM cost tracking
+│   ├── intent.lua              # Intent detection from prompts
+│   ├── memory.lua              # Brain/memory interface
+│   ├── diff/
+│   │   ├── conflict.lua        # Git-style conflict resolution
+│   │   ├── inject.lua          # Code injection strategies
+│   │   ├── patch.lua           # Patch candidates with staleness detection
+│   │   └── search_replace.lua  # SEARCH/REPLACE block parsing
+│   ├── events/
+│   │   └── queue.lua           # Event queue with priority heap
+│   ├── llm/
+│   │   ├── init.lua            # LLM interface, provider selection
+│   │   ├── claude.lua          # Claude API client
+│   │   ├── openai.lua          # OpenAI API client
+│   │   ├── gemini.lua          # Google Gemini API client
+│   │   ├── copilot.lua         # GitHub Copilot client
+│   │   ├── ollama.lua          # Ollama API client (local)
+│   │   └── selector.lua        # Smart LLM selection with confidence
+│   ├── scheduler/
+│   │   ├── scheduler.lua       # Event scheduler
+│   │   ├── worker.lua          # Async LLM worker
+│   │   └── loop.lua            # Main scheduling loop
+│   └── tools/
+│       ├── init.lua            # Tool definitions (read, edit, write, bash)
+│       ├── edit.lua            # Edit file tool
+│       ├── write.lua           # Write file tool
+│       └── file_ops.lua        # File operations utilities
+│
+├── detector/                   # Tag detection modules
+│   ├── inline_tags.lua         # Detect /@ @/ tags in content
+│   ├── ranges.lua              # Range detection utilities
+│   └── triggers.lua            # Trigger detection
+│
+├── features/                   # Feature modules
+│   ├── agents/
+│   │   ├── init.lua            # Agent system entry point
+│   │   ├── engine.lua          # Agentic loop execution
+│   │   ├── brain.lua           # Brain/knowledge graph
+│   │   ├── memory.lua          # Memory management
+│   │   ├── linter.lua          # LSP diagnostics validation
+│   │   ├── inline.lua          # Inline agent processing
+│   │   └── planner.lua         # Task planning
+│   ├── ask/
+│   │   └── engine.lua          # Ask panel engine
+│   ├── completion/
+│   │   └── suggestion.lua      # Completion suggestions
+│   └── indexer/
+│       ├── init.lua            # Project indexer
+│       └── memory.lua          # Index memory storage
+│
+├── params/                     # Parameter/config definitions
+│   └── agents/
+│       ├── conflict.lua        # Conflict resolution params
+│       ├── patch.lua           # Patch application params
+│       └── ...                 # Other tool params
+│
+├── prompts/                    # LLM prompt templates
+│   ├── init.lua                # System prompts for code generation
+│   ├── agents/                 # Agent-specific prompts
+│   │   ├── init.lua            # Agent prompt builder
+│   │   ├── bash.lua            # Bash tool prompt
+│   │   ├── edit.lua            # Edit tool prompt
+│   │   ├── grep.lua            # Grep tool prompt
+│   │   ├── write.lua           # Write tool prompt
+│   │   └── personas.lua        # Agent personas
+│   ├── ask.lua                 # Ask panel prompts
+│   ├── code.lua                # Code generation prompts
+│   └── system.lua              # System-level prompts
+│
+└── support/                    # Support utilities
+    ├── utils.lua               # General utility functions
+    ├── tree.lua                # Project tree logging
+    ├── gitignore.lua           # Manages .gitignore entries
+    └── imports.lua             # Import path utilities
 ```
 
 ## .coder/ Folder
@@ -197,7 +248,29 @@ Autonomous coding assistant with tool access:
 - `write_file` - Create or overwrite files
 - `bash` - Execute shell commands
 
-### 6. Event-Driven Scheduler
+### 6. Inline Tag Transform Flow
+
+When a user writes `/@...@/` tags in any file:
+
+```
+1. User writes: /@add validation@/ in file
+2. Tag detected by detector/inline_tags.lua
+3. Event queued with full file content (INCLUDING tags)
+4. Worker builds prompt telling LLM to include tags in SEARCH
+5. LLM generates SEARCH/REPLACE with tags in SEARCH block
+6. Patch created with use_conflict_mode=true
+7. Conflict markers inserted: OURS (with tags) vs THEIRS (new code)
+8. Floating menu shown for user to accept/reject
+9. User presses ct (accept theirs) → tags replaced with new code
+```
+
+**Key implementation details:**
+- `worker.lua` sends actual file content WITH tags to LLM
+- Prompt instructs LLM: "SEARCH text MUST include /@...@/ markers"
+- `patch.lua` does NOT remove tags before SEARCH/REPLACE
+- Conflict mode preserves tags in "OURS" section for accurate diff
+
+### 7. Event-Driven Scheduler
 
 ```
 User types /@...@/ → Event queued → Scheduler dispatches → Worker processes → Patch created → Conflict shown
@@ -210,7 +283,7 @@ User types /@...@/ → Event queued → Scheduler dispatches → Worker processe
 - **Staleness Detection**: Discard if buffer changed
 - **Completion Safety**: Defer while autocomplete visible
 
-### 7. Tree-sitter Scope Resolution
+### 8. Tree-sitter Scope Resolution
 
 Prompts automatically resolve to enclosing scope:
 
@@ -222,7 +295,7 @@ end
 
 **Scope types:** `function`, `method`, `class`, `block`, `file`
 
-### 8. Intent Detection
+### 9. Intent Detection
 
 | Intent | Keywords | Action |
 |--------|----------|--------|
@@ -235,14 +308,14 @@ end
 | optimize | optimize, performance | replace |
 | explain | explain, what, how | none |
 
-### 9. Cost Tracking
+### 10. Cost Tracking
 
 Track LLM API costs:
 - Session costs tracked in real-time
 - All-time costs in `.coder/cost_history.json`
 - Pricing for 50+ models
 
-### 10. Credentials Management
+### 11. Credentials Management
 
 ```vim
 :CoderAddApiKey
@@ -264,6 +337,9 @@ Stored in `~/.local/share/nvim/codetyper/configuration.json`
 | `:Coder status` | - | Show status |
 | `:Coder focus` | - | Switch focus |
 | `:Coder reset` | - | Reset processed prompts |
+| `:Coder tree` | `:CoderTree` | Refresh tree.log |
+| `:Coder tree-view` | `:CoderTreeView` | View tree.log |
+| `:Coder gitignore` | - | Force update gitignore |
 
 ### Ask Panel
 | Command | Alias | Description |
@@ -337,6 +413,29 @@ Stored in `~/.local/share/nvim/codetyper/configuration.json`
 | `:CoderRemoveApiKey` | Remove credentials |
 | `:CoderCredentials` | Show credentials |
 | `:CoderSwitchProvider` | Switch provider |
+| `:CoderModel [name]` | Quick switch Copilot model |
+
+### LLM Stats
+| Command | Description |
+|---------|-------------|
+| `:Coder llm-stats` | Show LLM accuracy statistics |
+| `:Coder llm-feedback-good` | Report positive feedback |
+| `:Coder llm-feedback-bad` | Report negative feedback |
+| `:Coder llm-reset-stats` | Reset accuracy statistics |
+
+### Agentic Mode
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `:Coder agentic-run <task>` | `:CoderAgenticRun` | Run agentic task |
+| `:Coder agentic-list` | `:CoderAgenticList` | List available agents |
+| `:Coder agentic-init` | `:CoderAgenticInit` | Initialize .coder/agents/ |
+
+### Project Indexing
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `:CoderIndex` | - | Open coder companion for file |
+| `:CoderIndexProject` | - | Index the entire project |
+| `:CoderIndexStatus` | - | Show project index status |
 
 ### UI Commands
 | Command | Description |

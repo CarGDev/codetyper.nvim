@@ -44,10 +44,10 @@ M.review = {
 		items = {
 			"│                              │",
 			"│ j/k: navigate               │",
-			"│ Enter: view diff            │",
 			"│ a: approve  r: reject       │",
 			"│ A: approve all              │",
-			"│ q: close                    │",
+			"│ y/<CR>: apply & close       │",
+			"│ q: close without applying   │",
 		},
 		bottom = "╰──────────────────────────────╯",
 	},

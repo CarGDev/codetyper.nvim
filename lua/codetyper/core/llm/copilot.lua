@@ -7,11 +7,17 @@ local llm = require("codetyper.core.llm")
 
 --- Copilot API endpoints
 local AUTH_URL = "https://api.github.com/copilot_internal/v2/token"
+local MODELS_URL = "https://api.githubcopilot.com/models"
+
+--- Cache duration for models (5 minutes)
+local MODELS_CACHE_TTL = 300
 
 --- Cached state
 ---@class CopilotState
 ---@field oauth_token string|nil
 ---@field github_token table|nil
+---@field models table|nil Cached models from API
+---@field models_fetched_at number|nil Timestamp when models were fetched
 M.state = nil
 
 --- Track if we've already suggested Ollama fallback this session
@@ -96,11 +102,155 @@ local function get_oauth_token()
 	return nil
 end
 
+---@class CopilotModel
+---@field id string Model ID
+---@field name string Display name
+---@field tokenizer string|nil Tokenizer type
+---@field max_input_tokens number|nil Max input tokens
+---@field max_output_tokens number|nil Max output tokens
+---@field streaming boolean|nil Supports streaming
+---@field tools boolean|nil Supports tool calls
+---@field policy boolean|nil Policy enabled
+---@field version string|nil Model version
+---@field use_responses boolean|nil Uses responses API
+
+--- Check if models cache is valid
+---@return boolean
+local function is_models_cache_valid()
+	if not M.state or not M.state.models or not M.state.models_fetched_at then
+		return false
+	end
+	return (os.time() - M.state.models_fetched_at) < MODELS_CACHE_TTL
+end
+
+--- Fetch available models from Copilot API
+---@param token table GitHub token
+---@param callback fun(models: table|nil, error: string|nil)
+local function fetch_models(token, callback)
+	-- Return cached models if valid
+	if is_models_cache_valid() then
+		callback(M.state.models, nil)
+		return
+	end
+
+	local headers = {
+		"Authorization: Bearer " .. token.token,
+		"Accept: application/json",
+		"User-Agent: GitHubCopilotChat/0.26.7",
+		"Editor-Version: vscode/1.105.1",
+		"Editor-Plugin-Version: copilot-chat/0.26.7",
+	}
+
+	local cmd = { "curl", "-s", "-X", "GET", MODELS_URL }
+	for _, header in ipairs(headers) do
+		table.insert(cmd, "-H")
+		table.insert(cmd, header)
+	end
+
+	vim.fn.jobstart(cmd, {
+		stdout_buffered = true,
+		on_stdout = function(_, data)
+			if not data or #data == 0 or (data[1] == "" and #data == 1) then
+				return
+			end
+
+			local response_text = table.concat(data, "\n")
+			local ok, response = pcall(vim.json.decode, response_text)
+
+			if not ok then
+				vim.schedule(function()
+					callback(nil, "Failed to parse models response")
+				end)
+				return
+			end
+
+			if response.error then
+				vim.schedule(function()
+					callback(nil, response.error.message or "Failed to fetch models")
+				end)
+				return
+			end
+
+			-- Parse models from response
+			local models = {}
+			if response.data then
+				for _, model in ipairs(response.data) do
+					-- Filter for chat models that are picker-enabled
+					if model.capabilities and model.capabilities.type == "chat" and model.model_picker_enabled then
+						local supported_endpoints = model.supported_endpoints or {}
+						local use_responses = vim.tbl_contains(supported_endpoints, "/responses")
+
+						models[model.id] = {
+							id = model.id,
+							name = model.name or model.id,
+							tokenizer = model.capabilities.tokenizer,
+							max_input_tokens = model.capabilities.limits and model.capabilities.limits.max_prompt_tokens,
+							max_output_tokens = model.capabilities.limits and model.capabilities.limits.max_output_tokens,
+							streaming = model.capabilities.supports and model.capabilities.supports.streaming,
+							tools = model.capabilities.supports and model.capabilities.supports.tool_calls,
+							policy = not model.policy or model.policy.state == "enabled",
+							version = model.version,
+							use_responses = use_responses,
+						}
+					end
+				end
+			end
+
+			-- Cache the models
+			M.state.models = models
+			M.state.models_fetched_at = os.time()
+
+			vim.schedule(function()
+				callback(models, nil)
+			end)
+		end,
+		on_stderr = function(_, data)
+			if data and #data > 0 and data[1] ~= "" then
+				vim.schedule(function()
+					callback(nil, "Failed to fetch models: " .. table.concat(data, "\n"))
+				end)
+			end
+		end,
+		on_exit = function(_, code)
+			if code ~= 0 then
+				vim.schedule(function()
+					callback(nil, "Failed to fetch models with code: " .. code)
+				end)
+			end
+		end,
+	})
+end
+
+--- Get cached models (synchronous, returns nil if not cached)
+---@return table|nil Models dictionary
+function M.get_cached_models()
+	if is_models_cache_valid() then
+		return M.state.models
+	end
+	return nil
+end
+
+--- Get list of model names (for completion) - synchronous, uses cache
+---@return string[]
+function M.get_model_names()
+	local models = M.get_cached_models()
+	if not models then
+		return {}
+	end
+
+	local names = {}
+	for id, _ in pairs(models) do
+		table.insert(names, id)
+	end
+	table.sort(names)
+	return names
+end
+
 --- Get model from stored credentials or config
 ---@return string Model name
 local function get_model()
 	-- Priority: stored credentials > config
-	local credentials = require("codetyper.credentials")
+	local credentials = require("codetyper.config.credentials")
 	local stored_model = credentials.get_model("copilot")
 	if stored_model then
 		return stored_model
@@ -109,6 +259,17 @@ local function get_model()
 	local codetyper = require("codetyper")
 	local config = codetyper.get_config()
 	return config.llm.copilot.model
+end
+
+--- Get model configuration from cache
+---@param model_id string Model ID
+---@return CopilotModel|nil Model config
+function M.get_model_config(model_id)
+	local models = M.get_cached_models()
+	if models then
+		return models[model_id]
+	end
+	return nil
 end
 
 --- Refresh GitHub token using OAuth token
@@ -339,8 +500,48 @@ local function ensure_initialized()
 		M.state = {
 			oauth_token = get_oauth_token(),
 			github_token = nil,
+			models = nil,
+			models_fetched_at = nil,
 		}
 	end
+end
+
+--- Get models with callback (fetches from API if needed)
+---@param callback fun(models: table|nil, error: string|nil)
+function M.get_models(callback)
+	ensure_initialized()
+
+	if not M.state.oauth_token then
+		callback(nil, "Copilot not authenticated")
+		return
+	end
+
+	refresh_token(function(token, err)
+		if err then
+			callback(nil, err)
+			return
+		end
+		fetch_models(token, callback)
+	end)
+end
+
+--- Validate that a model exists in the available models
+---@param model_id string Model ID to validate
+---@param models table|nil Available models (optional, uses cache if nil)
+---@return boolean valid, string|nil warning
+local function validate_model(model_id, models)
+	models = models or M.get_cached_models()
+	if not models then
+		-- No cached models, can't validate - allow the request
+		return true, nil
+	end
+
+	if models[model_id] then
+		return true, nil
+	end
+
+	-- Model not found in available models
+	return false, string.format("Model '%s' not found in available Copilot models", model_id)
 end
 
 --- Generate code using Copilot API
@@ -361,6 +562,13 @@ function M.generate(prompt, context, callback)
 
 	local model = get_model()
 	logs.request("copilot", model)
+
+	-- Validate model if we have cached models
+	local valid, warning = validate_model(model)
+	if not valid and warning then
+		logs.debug("Model validation warning: " .. warning)
+	end
+
 	logs.thinking("Refreshing authentication token...")
 
 	refresh_token(function(token, err)
@@ -427,6 +635,13 @@ function M.generate_with_tools(messages, context, tool_definitions, callback)
 
 	local model = get_model()
 	logs.request("copilot", model)
+
+	-- Validate model if we have cached models
+	local valid, warning = validate_model(model)
+	if not valid and warning then
+		logs.debug("Model validation warning: " .. warning)
+	end
+
 	logs.thinking("Refreshing authentication token...")
 
 	refresh_token(function(token, err)

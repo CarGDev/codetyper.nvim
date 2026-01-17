@@ -259,6 +259,12 @@ function M.apply_approved()
   for _, entry in ipairs(state.entries) do
     if entry.approved and not entry.applied then
       if entry.operation == "create" or entry.operation == "edit" then
+        -- Create parent directories if needed
+        local dir = vim.fn.fnamemodify(entry.path, ":h")
+        if vim.fn.isdirectory(dir) == 0 then
+          vim.fn.mkdir(dir, "p")
+        end
+
         local ok = utils.write_file(entry.path, entry.modified)
         if ok then
           entry.applied = true
@@ -281,6 +287,13 @@ function M.apply_approved()
     utils.notify(string.format(prompts.review.messages.applied_count, applied_count))
   end
 
+  return applied_count
+end
+
+--- Apply approved changes and close the UI
+function M.apply_and_close()
+  local applied_count = M.apply_approved()
+  M.close()
   return applied_count
 end
 
@@ -332,10 +345,12 @@ function M.open()
   vim.keymap.set("n", "k", M.prev, list_opts)
   vim.keymap.set("n", "<Down>", M.next, list_opts)
   vim.keymap.set("n", "<Up>", M.prev, list_opts)
-  vim.keymap.set("n", "<CR>", function() vim.api.nvim_set_current_win(state.diff_win) end, list_opts)
+  vim.keymap.set("n", "<Tab>", function() vim.api.nvim_set_current_win(state.diff_win) end, list_opts)
   vim.keymap.set("n", "a", M.approve_current, list_opts)
   vim.keymap.set("n", "r", M.reject_current, list_opts)
   vim.keymap.set("n", "A", M.approve_all, list_opts)
+  vim.keymap.set("n", "y", M.apply_and_close, list_opts)
+  vim.keymap.set("n", "<CR>", M.apply_and_close, list_opts)
   vim.keymap.set("n", "q", M.close, list_opts)
   vim.keymap.set("n", "<Esc>", M.close, list_opts)
 
@@ -347,6 +362,8 @@ function M.open()
   vim.keymap.set("n", "a", M.approve_current, diff_opts)
   vim.keymap.set("n", "r", M.reject_current, diff_opts)
   vim.keymap.set("n", "A", M.approve_all, diff_opts)
+  vim.keymap.set("n", "y", M.apply_and_close, diff_opts)
+  vim.keymap.set("n", "<CR>", M.apply_and_close, diff_opts)
   vim.keymap.set("n", "q", M.close, diff_opts)
   vim.keymap.set("n", "<Esc>", M.close, diff_opts)
 

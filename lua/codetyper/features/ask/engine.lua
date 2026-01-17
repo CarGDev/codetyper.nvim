@@ -12,6 +12,7 @@ local utils = require("codetyper.support.utils")
 ---@field is_open boolean Whether the ask panel is open
 ---@field history table Chat history
 ---@field referenced_files table Files referenced with @
+---@field referenced_folders table Folders referenced with @/
 
 ---@type AskState
 local state = {
@@ -22,6 +23,7 @@ local state = {
 	is_open = false,
 	history = {},
 	referenced_files = {},
+	referenced_folders = {},
 	target_width = nil, -- Store the target width to maintain it
 	agent_mode = false, -- Whether agent mode is enabled (can make file changes)
 	log_listener_id = nil, -- Listener ID for LLM logs
@@ -122,6 +124,11 @@ local function setup_input_keymaps(buf)
 	-- File picker with @
 	vim.keymap.set("i", "@", function()
 		M.show_file_picker()
+	end, opts)
+
+	-- Folder picker with @/ (double tap @ then /)
+	vim.keymap.set("i", "<C-d>", function()
+		M.show_folder_picker()
 	end, opts)
 
 	-- Close with q in normal mode
@@ -352,7 +359,7 @@ local function setup_log_listener()
 	end
 
 	-- Add new listener
-	local ok, logs = pcall(require, "codetyper.agent.logs")
+	local ok, logs = pcall(require, "codetyper.adapters.nvim.ui.logs")
 	if ok then
 		state.log_listener_id = logs.add_listener(append_log_to_output)
 	end
@@ -635,6 +642,261 @@ function M.add_file_reference(filepath, filename)
 	utils.notify("Added file: " .. filename .. " (" .. (content and #content or 0) .. " bytes)")
 end
 
+--- Get files from a folder recursively (respects gitignore)
+---@param folder_path string Path to folder
+---@param max_files? number Maximum files to include (default 50)
+---@return table files List of {path, name, content}
+local function get_folder_files(folder_path, max_files)
+	max_files = max_files or 50
+	local files = {}
+	local gitignore = require("codetyper.support.gitignore")
+
+	-- Common patterns to skip
+	local skip_patterns = {
+		"%.git/",
+		"node_modules/",
+		"%.next/",
+		"dist/",
+		"build/",
+		"%.cache/",
+		"__pycache__/",
+		"%.pyc$",
+		"%.min%.js$",
+		"%.min%.css$",
+		"%.map$",
+		"%.lock$",
+		"package%-lock%.json$",
+		"yarn%.lock$",
+	}
+
+	local function should_skip(path)
+		for _, pattern in ipairs(skip_patterns) do
+			if path:match(pattern) then
+				return true
+			end
+		end
+		return false
+	end
+
+	local function scan_dir(dir, depth)
+		if depth > 5 or #files >= max_files then
+			return
+		end
+
+		local handle = vim.loop.fs_scandir(dir)
+		if not handle then
+			return
+		end
+
+		while #files < max_files do
+			local name, type = vim.loop.fs_scandir_next(handle)
+			if not name then
+				break
+			end
+
+			local full_path = dir .. "/" .. name
+
+			if not should_skip(full_path) and not gitignore.is_ignored(full_path) then
+				if type == "directory" then
+					scan_dir(full_path, depth + 1)
+				elseif type == "file" then
+					local content = utils.read_file(full_path)
+					if content and #content < 100000 then -- Skip files > 100KB
+						table.insert(files, {
+							path = full_path,
+							name = full_path:sub(#folder_path + 2), -- Relative path
+							content = content,
+						})
+					end
+				end
+			end
+		end
+	end
+
+	scan_dir(folder_path, 0)
+	return files
+end
+
+--- Recursively scan for directories
+---@param base_path string Base path
+---@param relative_path string Relative path from base
+---@param depth number Current depth
+---@param max_depth number Maximum depth
+---@param results table Results table to append to
+local function scan_directories(base_path, relative_path, depth, max_depth, results)
+	if depth > max_depth then
+		return
+	end
+
+	local full_path = base_path
+	if relative_path ~= "" then
+		full_path = base_path .. "/" .. relative_path
+	end
+
+	local handle = vim.loop.fs_scandir(full_path)
+	if not handle then
+		return
+	end
+
+	-- Skip patterns
+	local skip = {
+		["node_modules"] = true,
+		[".git"] = true,
+		[".next"] = true,
+		["dist"] = true,
+		["build"] = true,
+		[".cache"] = true,
+		["__pycache__"] = true,
+		["vendor"] = true,
+		["target"] = true,
+	}
+
+	while true do
+		local name, type = vim.loop.fs_scandir_next(handle)
+		if not name then
+			break
+		end
+
+		if type == "directory" and not name:match("^%.") and not skip[name] then
+			local dir_relative = relative_path == "" and name or (relative_path .. "/" .. name)
+			table.insert(results, {
+				display = dir_relative .. "/",
+				path = base_path .. "/" .. dir_relative,
+			})
+			-- Recurse into subdirectory
+			scan_directories(base_path, dir_relative, depth + 1, max_depth, results)
+		end
+	end
+end
+
+--- Show folder picker using telescope or fallback
+function M.show_folder_picker()
+	local has_telescope, _ = pcall(require, "telescope.builtin")
+
+	if has_telescope then
+		local pickers = require("telescope.pickers")
+		local finders = require("telescope.finders")
+		local conf = require("telescope.config").values
+		local actions = require("telescope.actions")
+		local action_state = require("telescope.actions.state")
+
+		-- Get directories in current project
+		local cwd = vim.fn.getcwd()
+		local dirs = {}
+
+		-- Add current directory
+		table.insert(dirs, { display = "./", path = cwd })
+
+		-- Recursively scan for directories (up to 4 levels deep)
+		scan_directories(cwd, "", 0, 4, dirs)
+
+		-- Sort alphabetically
+		table.sort(dirs, function(a, b)
+			return a.display < b.display
+		end)
+
+		pickers
+			.new({}, {
+				prompt_title = "Select folder to attach (Ctrl+d)",
+				finder = finders.new_table({
+					results = dirs,
+					entry_maker = function(entry)
+						return {
+							value = entry,
+							display = "📁 " .. entry.display,
+							ordinal = entry.display,
+						}
+					end,
+				}),
+				sorter = conf.generic_sorter({}),
+				attach_mappings = function(prompt_bufnr)
+					actions.select_default:replace(function()
+						actions.close(prompt_bufnr)
+						local selection = action_state.get_selected_entry()
+						if selection then
+							M.add_folder_reference(selection.value.path, selection.value.display)
+						end
+					end)
+					return true
+				end,
+			})
+			:find()
+	else
+		-- Fallback: simple input
+		vim.ui.input({ prompt = "Enter folder path: " }, function(input)
+			if input and input ~= "" then
+				local folder_path = vim.fn.fnamemodify(input, ":p")
+				local folder_name = vim.fn.fnamemodify(folder_path, ":t") .. "/"
+				M.add_folder_reference(folder_path, folder_name)
+			end
+		end)
+	end
+end
+
+--- Add a folder reference to the input
+---@param folder_path string Full path to the folder
+---@param folder_name string Display name
+function M.add_folder_reference(folder_path, folder_name)
+	-- Normalize folder path
+	folder_path = vim.fn.fnamemodify(folder_path, ":p"):gsub("/$", "")
+
+	-- Verify it's a directory
+	local stat = vim.loop.fs_stat(folder_path)
+	if not stat or stat.type ~= "directory" then
+		utils.notify("Not a valid directory: " .. folder_name, vim.log.levels.ERROR)
+		return
+	end
+
+	-- Get files from folder
+	local files = get_folder_files(folder_path)
+	if #files == 0 then
+		utils.notify("No readable files in folder: " .. folder_name, vim.log.levels.WARN)
+		return
+	end
+
+	-- Store the reference
+	state.referenced_folders[folder_name] = {
+		path = folder_path,
+		files = files,
+	}
+
+	-- Add to input buffer
+	if state.input_buf and vim.api.nvim_buf_is_valid(state.input_buf) then
+		local lines = vim.api.nvim_buf_get_lines(state.input_buf, 0, -1, false)
+		local text = table.concat(lines, "\n")
+
+		-- Clear placeholder if present
+		if text:match("Type your question here") then
+			text = ""
+		end
+
+		-- Add folder reference
+		local reference = "[📁 " .. folder_name .. " (" .. #files .. " files)] "
+		text = text .. reference
+
+		vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, vim.split(text, "\n"))
+
+		-- Move cursor to end
+		if state.input_win and vim.api.nvim_win_is_valid(state.input_win) then
+			vim.api.nvim_set_current_win(state.input_win)
+			local line_count = vim.api.nvim_buf_line_count(state.input_buf)
+			local last_line = vim.api.nvim_buf_get_lines(state.input_buf, line_count - 1, line_count, false)[1] or ""
+			vim.api.nvim_win_set_cursor(state.input_win, { line_count, #last_line })
+			vim.cmd("startinsert!")
+		end
+	end
+
+	-- Calculate total size
+	local total_size = 0
+	for _, f in ipairs(files) do
+		total_size = total_size + #f.content
+	end
+
+	utils.notify(
+		string.format("Added folder: %s (%d files, %.1f KB)", folder_name, #files, total_size / 1024)
+	)
+end
+
 --- Close the ask panel
 function M.close()
 	-- Remove the log listener
@@ -735,6 +997,7 @@ function M.clear_input()
 		vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "" })
 	end
 	state.referenced_files = {}
+	state.referenced_folders = {}
 end
 
 --- Append text to output buffer
@@ -779,13 +1042,23 @@ local function append_to_output(text, is_user)
 	end
 end
 
---- Build context from referenced files
+--- Build context from referenced files and folders (with auto-expanded imports)
 ---@return string Context string, number File count
 local function build_file_context()
 	local context = ""
 	local file_count = 0
+	local included_paths = {} -- Track included files to avoid duplicates
 
+	-- Try to load imports module for auto-expanding dependencies
+	local imports_ok, imports = pcall(require, "codetyper.support.imports")
+
+	-- Add individual files with their imports
 	for filename, filepath in pairs(state.referenced_files) do
+		-- Skip if already included
+		if included_paths[filepath] then
+			goto continue_file
+		end
+
 		local content = utils.read_file(filepath)
 		if content and content ~= "" then
 			-- Detect language from extension
@@ -796,6 +1069,51 @@ local function build_file_context()
 			context = context .. "Path: " .. filepath .. "\n"
 			context = context .. "```" .. lang .. "\n" .. content .. "\n```\n"
 			file_count = file_count + 1
+			included_paths[filepath] = true
+
+			-- Auto-expand imports for this file
+			if imports_ok then
+				local file_imports = imports.find_imports_recursive(filepath, 2, 15)
+				if next(file_imports) then
+					context = context .. "\n--- DEPENDENCIES OF " .. filename .. " ---\n"
+					for imp_path, imp_data in pairs(file_imports) do
+						if not included_paths[imp_path] then
+							included_paths[imp_path] = true
+							file_count = file_count + 1
+
+							local imp_ext = vim.fn.fnamemodify(imp_path, ":e")
+							context = context .. "\n--- " .. imp_data.filename .. " (imported as '" .. imp_data.import_path .. "') ---\n"
+							context = context .. "Path: " .. imp_path .. "\n"
+							context = context .. "```" .. (imp_ext or "text") .. "\n" .. imp_data.content .. "\n```\n"
+						end
+					end
+				end
+			end
+		end
+
+		::continue_file::
+	end
+
+	-- Add folder contents
+	for folder_name, folder_data in pairs(state.referenced_folders) do
+		context = context .. "\n\n=== FOLDER: " .. folder_name .. " (" .. #folder_data.files .. " files) ===\n"
+		context = context .. "Path: " .. folder_data.path .. "\n"
+
+		for _, file in ipairs(folder_data.files) do
+			-- Skip if already included via imports
+			if included_paths[file.path] then
+				goto continue_folder_file
+			end
+
+			local ext = vim.fn.fnamemodify(file.path, ":e")
+			local lang = ext or "text"
+
+			context = context .. "\n--- " .. file.name .. " ---\n"
+			context = context .. "```" .. lang .. "\n" .. file.content .. "\n```\n"
+			file_count = file_count + 1
+			included_paths[file.path] = true
+
+			::continue_folder_file::
 		end
 	end
 
@@ -968,7 +1286,7 @@ local function continue_submit(question, intent, context, file_context, file_cou
 	append_to_output("⏳ Generating response...", false)
 
 	-- Get LLM client and generate response
-	local ok, llm = pcall(require, "codetyper.llm")
+	local ok, llm = pcall(require, "codetyper.core.llm")
 	if not ok then
 		append_to_output("❌ Error: LLM module not loaded", false)
 		return
@@ -1231,7 +1549,7 @@ end
 
 --- Show chat mode switcher modal
 function M.show_chat_switcher()
-	local switcher = require("codetyper.chat_switcher")
+	local switcher = require("codetyper.adapters.nvim.ui.switcher")
 	switcher.show()
 end
 --- Check if ask panel is open (validates window state)
