@@ -6,32 +6,32 @@ A robust, multi-phase agent system for codetyper.nvim with human-like memory org
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    Agent Workflow                        │
+│                    Agent Workflow                       │
 ├─────────────────────────────────────────────────────────┤
-│                                                           │
-│  ┌──────────────┐    ┌──────────────┐    ┌────────────┐│
-│  │  DISCOVERY   │ →  │   PLANNING   │ →  │ EXECUTION  ││
-│  │   PHASE      │    │    PHASE     │    │   PHASE    ││
-│  └──────────────┘    └──────────────┘    └────────────┘│
-│         │                   │                   │        │
-│         ↓                   ↓                   ↓        │
-│  ┌──────────────────────────────────────────────────┐  │
-│  │         Memory System (Dual Memory)               │  │
-│  ├──────────────────────────────────────────────────┤  │
-│  │  Long-term Memory (Brain)  │  Short-term Memory  │  │
-│  │  • Project knowledge       │  • Current task     │  │
-│  │  • Persistent to disk      │  • Ephemeral        │  │
-│  │  • Accumulates over time   │  • Cleared on done  │  │
-│  └──────────────────────────────────────────────────┘  │
-│                                                           │
-│  ┌──────────────────────────────────────────────────┐  │
-│  │             Middleware Layer                       │  │
-│  ├──────────────────────────────────────────────────┤  │
-│  │  • Session Management                             │  │
-│  │  • Permission System (auto-approve safe tools)    │  │
-│  │  • Hook System (pre/post tool execution)          │  │
-│  │  • Retry Logic (exponential backoff)              │  │
-│  └──────────────────────────────────────────────────┘  │
+│                                                         │
+│  ┌──────────────┐    ┌──────────────┐    ┌────────────┐ │
+│  │  DISCOVERY   │ →  │   PLANNING   │ →  │ EXECUTION  │ │
+│  │   PHASE      │    │    PHASE     │    │   PHASE    │ │
+│  └──────────────┘    └──────────────┘    └────────────┘ │
+│         │                   │                   │       │
+│         ↓                   ↓                   ↓       │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │         Memory System (Dual Memory)              │   │
+│  ├──────────────────────────────────────────────────┤   │
+│  │  Long-term Memory (Brain)  │  Short-term Memory  │   │
+│  │  • Project knowledge       │  • Current task     │   │
+│  │  • Persistent to disk      │  • Ephemeral        │   │
+│  │  • Accumulates over time   │  • Cleared on done  │   │
+│  └──────────────────────────────────────────────────┘   │
+│                                                         │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │             Middleware Layer                     │   │
+│  ├──────────────────────────────────────────────────┤   │
+│  │  • Session Management                            │   │
+│  │  • Permission System (auto-approve safe tools)   │   │
+│  │  • Hook System (pre/post tool execution)         │   │
+│  │  • Retry Logic (exponential backoff)             │   │
+│  └──────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────┘
 ```
 
