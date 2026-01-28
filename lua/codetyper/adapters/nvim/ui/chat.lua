@@ -740,7 +740,11 @@ local function submit_input()
 
     -- Build system prompt for Q&A
     local prompts = require("codetyper.prompts")
-    local system_prompt = prompts.system.ask or "You are a helpful coding assistant."
+    local raw_prompt = prompts.system.ask
+    -- Check if prompt is placeholder or nil, use default in those cases
+    local system_prompt = (raw_prompt and not raw_prompt:match("^%[PROMPTS_MOVED"))
+      and raw_prompt
+      or "You are a helpful coding assistant. Answer questions clearly and concisely. When discussing code, provide examples when appropriate."
 
     if current_file ~= "" then
       system_prompt = system_prompt .. "\n\nCurrent file: " .. current_file
@@ -808,86 +812,16 @@ local function submit_input()
   end
 
   -- ═══════════════════════════════════════════════════════════════════
-  -- AGENT MODE: Intent classification + plan building with tools
+  -- AGENT MODE: Agentic loop with tool calling (like Claude Code)
   -- ═══════════════════════════════════════════════════════════════════
-  logs.info("AGENT mode - with tools")
+  logs.info("AGENT mode - agentic loop with tools")
 
-  -- Extract file names for intent classification (it expects list of paths, not content)
-  local file_list = vim.tbl_keys(params.files or {})
-  agent_client.classify_intent(params.context, params.prompt, file_list, function(intent, err)
-    if err then
-      add_message("system", "Agent error: " .. err, "DiagnosticError")
-      logs.error("Agent classify_intent error: " .. err)
-      return
-    end
+  -- Clear previous diff review for new agent run
+  local diff_review = require("codetyper.adapters.nvim.ui.diff_review")
+  diff_review.clear()
 
-    -- Display intent summary from agent
-    local intent_text = string.format("Intent: %s (confidence: %.2f)", intent.intent or "unknown", intent.confidence or 0)
-    add_message("system", intent_text)
-
-    -- Handle intent classification result
-    if intent.needs_clarification then
-      -- Show clarification questions if any
-      add_message("assistant", intent.reasoning or "I need some clarification.")
-      if intent.clarification_questions and #intent.clarification_questions > 0 then
-        for _, q in ipairs(intent.clarification_questions) do
-          add_message("assistant", "? " .. q)
-        end
-      end
-      add_message("system", "Please clarify, or type /proceed to continue anyway.")
-      return
-    end
-
-    -- For "ask" intent, just respond with reasoning
-    if intent.intent == "ask" then
-      local response = intent.reasoning or "This appears to be a question."
-      table.insert(state.history, { role = "assistant", content = response })
-      add_message("assistant", response)
-      return
-    end
-
-    -- For action intents (code, refactor, fix, etc.), build a plan
-    agent_client.build_plan(intent.intent, params.context, params.files, function(plan, perr)
-      if perr then
-        add_message("system", "Agent plan error: " .. perr, "DiagnosticError")
-        logs.error("Agent build_plan error: " .. perr)
-        return
-      end
-
-      -- Parse and store the plan
-      local parsed_plan = require("codetyper.transport.protocol").parse_plan_response(plan)
-      state.last_plan = parsed_plan
-      state.last_context = params.context
-      state.last_files = params.files
-
-      -- Present plan summary to user
-      local steps = parsed_plan.steps or {}
-      if #steps == 0 then
-        add_message("assistant", "No plan steps generated.")
-        return
-      end
-
-      add_message("assistant", string.format("Plan (%d steps):", #steps))
-      for i, step in ipairs(steps) do
-        local step_desc = string.format("  %d. [%s] %s", i, step.action or "?", step.target or "?")
-        if step.params and step.params.content then
-          step_desc = step_desc .. string.format(" (%d chars)", #step.params.content)
-        end
-        add_message("system", step_desc)
-      end
-
-      -- If plan needs clarification, show questions
-      if parsed_plan.needs_clarification then
-        for _, q in ipairs(parsed_plan.clarification_questions or {}) do
-          add_message("assistant", "Clarify: " .. q)
-        end
-        add_message("system", "Please clarify, or type /proceed to continue anyway.")
-      else
-        -- Ask user whether to execute (chat MUST NOT decide) — present prompt to user
-        add_message("system", "Plan ready. Type /execute to run, or /review to inspect.")
-      end
-    end)
-  end)
+  -- Run the agent with proper tool calling (uses Copilot/OpenAI with generate_with_tools)
+  agent.run(full_input, context, create_callbacks())
 end
 
 --- Show file picker for @ mentions

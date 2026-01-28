@@ -12,6 +12,7 @@ local diff_review = require("codetyper.adapters.nvim.ui.diff_review")
 local resume = require("codetyper.core.scheduler.resume")
 local utils = require("codetyper.support.utils")
 local logs = require("codetyper.adapters.nvim.ui.logs")
+local memory = require("codetyper.core.memory")
 
 ---@class AgentState
 ---@field conversation table[] Message history for multi-turn
@@ -28,6 +29,7 @@ local state = {
   original_prompt = "", -- Store for resume functionality
   current_context = nil, -- Store context for resume
   current_callbacks = nil, -- Store callbacks for continue
+  memory_context = nil, -- Cached memory context for current session
 }
 
 ---@class AgentCallbacks
@@ -43,8 +45,68 @@ function M.reset()
   state.pending_tool_results = {}
   state.is_running = false
   state.current_iteration = 0
+  state.memory_context = nil
   -- Clear collected diffs
   diff_review.clear()
+end
+
+--- Fetch memory context for LLM (async)
+---@param callback fun(context: string|nil)
+local function fetch_memory_context(callback)
+  if not memory.is_initialized() then
+    callback(nil)
+    return
+  end
+
+  memory.get_context_for_llm({ context_type = "all", max_tokens = 2000 }, function(context, err)
+    if err then
+      logs.debug("Memory context fetch error: " .. tostring(err))
+      callback(nil)
+      return
+    end
+    if context and context ~= "" then
+      logs.debug("Fetched memory context: " .. #context .. " chars")
+      callback(context)
+    else
+      callback(nil)
+    end
+  end)
+end
+
+--- Learn from a tool execution event
+---@param tool_name string
+---@param tool_params table
+---@param result string
+---@param approved boolean
+local function learn_from_tool(tool_name, tool_params, result, approved)
+  if not memory.is_initialized() then
+    return
+  end
+
+  local event_type = "tool_execution"
+  if not approved then
+    event_type = "rejection"
+  end
+
+  local event = {
+    type = event_type,
+    file = tool_params.path or tool_params.file_path,
+    timestamp = os.time(),
+    data = {
+      tool = tool_name,
+      params = tool_params,
+      result_preview = result:sub(1, 500), -- Truncate for storage
+      approved = approved,
+    },
+  }
+
+  memory.learn(event, function(learn_result, err)
+    if err then
+      logs.debug("Memory learn error: " .. tostring(err))
+    elseif learn_result then
+      logs.debug("Memory learned from " .. tool_name)
+    end
+  end)
 end
 
 --- Check if agent is currently running
@@ -118,14 +180,31 @@ function M.agent_loop(context, callbacks)
     return
   end
 
-  logs.thinking("Calling LLM with " .. #state.conversation .. " messages...")
+  -- Fetch memory context on first iteration only
+  local function proceed_with_llm()
+    logs.thinking("Calling LLM with " .. #state.conversation .. " messages...")
 
-  -- Generate with tools enabled
-  -- Ensure tools are loaded and get definitions
-  tools.setup()
-  local tool_defs = tools.to_openai_format()
+    -- Generate with tools enabled
+    -- Ensure tools are loaded and get definitions
+    tools.setup()
+    local tool_defs = tools.to_openai_format()
 
-  client.generate_with_tools(state.conversation, context, tool_defs, function(response, err)
+    -- Build conversation with memory context if available
+    local conversation_with_memory = state.conversation
+    if state.memory_context and state.memory_context ~= "" then
+      -- Inject memory context as a system message at the beginning
+      conversation_with_memory = {
+        {
+          role = "system",
+          content = "## Learned Context from Previous Sessions\n\n" .. state.memory_context,
+        },
+      }
+      for _, msg in ipairs(state.conversation) do
+        table.insert(conversation_with_memory, msg)
+      end
+    end
+
+    client.generate_with_tools(conversation_with_memory, context, tool_defs, function(response, err)
     if err then
       state.is_running = false
       callbacks.on_error(err)
@@ -180,7 +259,18 @@ function M.agent_loop(context, callbacks)
       state.is_running = false
       callbacks.on_complete()
     end
-  end)
+    end)
+  end -- end proceed_with_llm
+
+  -- Fetch memory context on first iteration, then proceed
+  if state.current_iteration == 1 and not state.memory_context then
+    fetch_memory_context(function(mem_context)
+      state.memory_context = mem_context
+      proceed_with_llm()
+    end)
+  else
+    proceed_with_llm()
+  end
 end
 
 --- Process tool calls one at a time
@@ -253,6 +343,10 @@ function M.process_tool_calls(tool_calls, index, context, callbacks)
               result = apply_result.result,
             })
             callbacks.on_tool_result(tool_call.name, apply_result.result)
+
+            -- Learn from approved tool execution
+            learn_from_tool(tool_call.name, tool_call.parameters, apply_result.result, true)
+
             -- Process next tool call
             M.process_tool_calls(tool_calls, index + 1, context, callbacks)
           end)
@@ -265,6 +359,10 @@ function M.process_tool_calls(tool_calls, index, context, callbacks)
             result = "User rejected this change",
           })
           callbacks.on_tool_result(tool_call.name, "Rejected by user")
+
+          -- Learn from rejection (helps avoid similar mistakes)
+          learn_from_tool(tool_call.name, tool_call.parameters, "User rejected", false)
+
           M.process_tool_calls(tool_calls, index + 1, context, callbacks)
         end
       end)

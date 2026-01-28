@@ -338,9 +338,238 @@ def _handle_ping(params: Dict[str, Any]) -> Dict[str, Any]:
     return {"status": "ok", "version": "0.1.0"}
 
 
+# ============================================================
+# Memory Methods
+# ============================================================
+
+# Global memory state (initialized per project)
+_memory_graph = None
+_memory_storage = None
+_memory_learners = None
+
+
+def _ensure_memory_initialized(project_root: str):
+    """Ensure memory system is initialized for the project."""
+    global _memory_graph, _memory_storage, _memory_learners
+
+    from .memory import MemoryGraph, MemoryStorage, PatternLearner, ConventionLearner, CorrectionLearner
+
+    if _memory_storage is None or str(_memory_storage.project_root) != project_root:
+        _memory_storage = MemoryStorage(project_root)
+        _memory_graph = _memory_storage.load()
+        _memory_learners = {
+            "pattern": PatternLearner(_memory_graph),
+            "convention": ConventionLearner(_memory_graph),
+            "correction": CorrectionLearner(_memory_graph),
+        }
+
+
+def _handle_memory_learn(params: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle memory_learn method.
+
+    Learns from an event (edit, correction, approval, etc.)
+
+    Params:
+        project_root: str - Project root directory
+        event_type: str - Type of event (edit, correction, approval, rejection)
+        data: dict - Event data
+    """
+    project_root = params.get("project_root", ".")
+    event_type = params.get("event_type", "")
+    event_data = params.get("data", {})
+
+    if not event_type:
+        raise RPCError(RPCErrorCodes.INVALID_PARAMS, "event_type is required")
+
+    _ensure_memory_initialized(project_root)
+
+    from .memory.learners import Event
+
+    event = Event(type=event_type, data=event_data)
+
+    # Let all learners observe the event
+    for learner in _memory_learners.values():
+        learner.observe(event)
+
+    # Save changes
+    saved = _memory_storage.save(_memory_graph)
+
+    return {
+        "learned": True,
+        "saved": saved,
+        "node_count": len(_memory_graph._nodes),
+    }
+
+
+def _handle_memory_query(params: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle memory_query method.
+
+    Query the memory graph for relevant knowledge.
+
+    Params:
+        project_root: str - Project root directory
+        node_type: str|None - Filter by node type
+        content_pattern: str|None - Filter by content pattern
+        limit: int - Maximum results (default 20)
+    """
+    project_root = params.get("project_root", ".")
+    node_type_str = params.get("node_type")
+    content_pattern = params.get("content_pattern")
+    limit = params.get("limit", 20)
+
+    _ensure_memory_initialized(project_root)
+
+    from .memory.graph import NodeType
+
+    node_type = None
+    if node_type_str:
+        try:
+            node_type = NodeType(node_type_str)
+        except ValueError:
+            pass  # Invalid type, ignore filter
+
+    nodes = _memory_graph.query(node_type=node_type, content_pattern=content_pattern)
+
+    # Limit results
+    nodes = nodes[:limit]
+
+    return {
+        "nodes": [
+            {
+                "id": n.id,
+                "type": n.type.value,
+                "content": n.content,
+                "metadata": n.metadata,
+            }
+            for n in nodes
+        ],
+        "total": len(nodes),
+    }
+
+
+def _handle_memory_get_context(params: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle memory_get_context method.
+
+    Get formatted memory context for LLM prompts.
+
+    Params:
+        project_root: str - Project root directory
+        context_type: str - Type of context (patterns, conventions, corrections, all)
+        max_tokens: int - Maximum tokens budget (default 2000)
+    """
+    project_root = params.get("project_root", ".")
+    context_type = params.get("context_type", "all")
+    max_tokens = params.get("max_tokens", 2000)
+
+    _ensure_memory_initialized(project_root)
+
+    from .memory.graph import NodeType
+
+    lines = []
+    char_budget = max_tokens * 4  # Rough estimate: 4 chars per token
+
+    # Gather relevant nodes based on context type
+    if context_type in ("patterns", "all"):
+        patterns = _memory_graph.query(node_type=NodeType.PATTERN)
+        if patterns:
+            lines.append("## Learned Patterns")
+            for p in patterns[:10]:
+                lines.append(f"- {p.content}")
+
+    if context_type in ("conventions", "all"):
+        conventions = _memory_graph.query(node_type=NodeType.CONVENTION)
+        if conventions:
+            lines.append("\n## Project Conventions")
+            for c in conventions[:10]:
+                lines.append(f"- {c.content}")
+
+    if context_type in ("corrections", "all"):
+        corrections = _memory_graph.query(node_type=NodeType.CORRECTION)
+        if corrections:
+            lines.append("\n## Past Corrections (avoid these mistakes)")
+            for c in corrections[:5]:
+                lines.append(f"- {c.content}")
+
+    context_text = "\n".join(lines)
+
+    # Truncate if needed
+    if len(context_text) > char_budget:
+        context_text = context_text[:char_budget] + "\n... (truncated)"
+
+    return {
+        "context": context_text,
+        "char_count": len(context_text),
+        "estimated_tokens": len(context_text) // 4,
+    }
+
+
+def _handle_memory_stats(params: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle memory_stats method.
+
+    Get statistics about the memory system.
+
+    Params:
+        project_root: str - Project root directory
+    """
+    project_root = params.get("project_root", ".")
+
+    _ensure_memory_initialized(project_root)
+
+    from .memory.graph import NodeType
+
+    # Count nodes by type
+    type_counts = {}
+    for node_type in NodeType:
+        count = len(_memory_graph.query(node_type=node_type))
+        if count > 0:
+            type_counts[node_type.value] = count
+
+    storage_info = _memory_storage.get_storage_info()
+
+    return {
+        "node_count": len(_memory_graph._nodes),
+        "edge_count": len(_memory_graph._edges),
+        "type_counts": type_counts,
+        "storage": storage_info,
+    }
+
+
+def _handle_memory_clear(params: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle memory_clear method.
+
+    Clear all memory for the project.
+
+    Params:
+        project_root: str - Project root directory
+    """
+    project_root = params.get("project_root", ".")
+
+    _ensure_memory_initialized(project_root)
+
+    _memory_graph.clear()
+    deleted = _memory_storage.delete()
+
+    return {
+        "cleared": True,
+        "file_deleted": deleted,
+    }
+
+
 # Register built-in methods
 register_method("classify_intent", _handle_classify_intent)
 register_method("build_plan", _handle_build_plan)
 register_method("validate_plan", _handle_validate_plan)
 register_method("format_output", _handle_format_output)
 register_method("ping", _handle_ping)
+
+# Register memory methods
+register_method("memory_learn", _handle_memory_learn)
+register_method("memory_query", _handle_memory_query)
+register_method("memory_get_context", _handle_memory_get_context)
+register_method("memory_stats", _handle_memory_stats)
+register_method("memory_clear", _handle_memory_clear)

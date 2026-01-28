@@ -50,6 +50,12 @@ M.Methods = {
   VALIDATE_PLAN = "validate_plan",
   FORMAT_OUTPUT = "format_output",
   PING = "ping",
+  -- Memory methods
+  MEMORY_LEARN = "memory_learn",
+  MEMORY_QUERY = "memory_query",
+  MEMORY_GET_CONTEXT = "memory_get_context",
+  MEMORY_STATS = "memory_stats",
+  MEMORY_CLEAR = "memory_clear",
 }
 
 -- Intent types (must match Python IntentType enum)

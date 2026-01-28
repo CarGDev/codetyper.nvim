@@ -560,4 +560,107 @@ function M.restart(callback)
   end, 500)
 end
 
+-- ============================================================
+-- Memory Methods
+-- ============================================================
+
+---Get project root for memory operations
+---@return string
+local function get_project_root()
+  -- Try to find git root, fallback to cwd
+  local git_root = vim.fn.systemlist("git rev-parse --show-toplevel 2>/dev/null")[1]
+  if git_root and git_root ~= "" and not git_root:match("^fatal:") then
+    return git_root
+  end
+  return vim.fn.getcwd()
+end
+
+---Learn from an event (edit, correction, approval, etc.)
+---@param event_type string Type of event
+---@param data table Event data
+---@param callback fun(result: table|nil, error: string|nil)
+function M.memory_learn(event_type, data, callback)
+  local params = {
+    project_root = get_project_root(),
+    event_type = event_type,
+    data = data,
+  }
+  M.send_request(protocol.Methods.MEMORY_LEARN, params, function(result, err)
+    if err then
+      callback(nil, err)
+      return
+    end
+    callback(result, nil)
+  end)
+end
+
+---Query the memory graph
+---@param opts table Query options (node_type, content_pattern, limit)
+---@param callback fun(result: table|nil, error: string|nil)
+function M.memory_query(opts, callback)
+  opts = opts or {}
+  local params = {
+    project_root = get_project_root(),
+    node_type = opts.node_type,
+    content_pattern = opts.content_pattern,
+    limit = opts.limit or 20,
+  }
+  M.send_request(protocol.Methods.MEMORY_QUERY, params, function(result, err)
+    if err then
+      callback(nil, err)
+      return
+    end
+    callback(result, nil)
+  end)
+end
+
+---Get formatted memory context for LLM prompts
+---@param context_type string Type of context (patterns, conventions, corrections, all)
+---@param max_tokens? number Maximum tokens budget
+---@param callback fun(result: table|nil, error: string|nil)
+function M.memory_get_context(context_type, max_tokens, callback)
+  local params = {
+    project_root = get_project_root(),
+    context_type = context_type or "all",
+    max_tokens = max_tokens or 2000,
+  }
+  M.send_request(protocol.Methods.MEMORY_GET_CONTEXT, params, function(result, err)
+    if err then
+      callback(nil, err)
+      return
+    end
+    callback(result, nil)
+  end)
+end
+
+---Get memory statistics
+---@param callback fun(result: table|nil, error: string|nil)
+function M.memory_stats(callback)
+  local params = {
+    project_root = get_project_root(),
+  }
+  M.send_request(protocol.Methods.MEMORY_STATS, params, function(result, err)
+    if err then
+      callback(nil, err)
+      return
+    end
+    callback(result, nil)
+  end)
+end
+
+---Clear all memory
+---@param callback fun(result: table|nil, error: string|nil)
+function M.memory_clear(callback)
+  local params = {
+    project_root = get_project_root(),
+  }
+  M.send_request(protocol.Methods.MEMORY_CLEAR, params, function(result, err)
+    if err then
+      callback(nil, err)
+      return
+    end
+    callback(result, nil)
+  end)
+end
+
 return M
