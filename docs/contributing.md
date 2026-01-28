@@ -1,6 +1,6 @@
 # Contributing to Codetyper.nvim
 
-First off, thank you for considering contributing to Codetyper.nvim! 🎉
+First off, thank you for considering contributing to Codetyper.nvim!
 
 ## Table of Contents
 
@@ -84,10 +84,12 @@ codetyper.nvim/
 │   └── codetyper.lua         # Plugin loader
 ├── doc/
 │   └── codetyper.txt         # Vim help documentation
+├── docs/
+│   ├── contributing.md
+│   ├── changelog.md
+│   └── agent-system.md
 ├── README.md
 ├── LICENSE
-├── CHANGELOG.md
-├── CONTRIBUTING.md
 └── llms.txt
 ```
 
@@ -132,7 +134,7 @@ docs(readme): update installation instructions
 
 1. **Ensure your code follows the style guide**
 2. **Update documentation** if needed
-3. **Update CHANGELOG.md** for notable changes
+3. **Update docs/changelog.md** for notable changes
 4. **Test your changes** thoroughly
 5. **Create a pull request** with:
    - Clear title describing the change
@@ -157,7 +159,7 @@ docs(readme): update installation instructions
 ## Checklist
 - [ ] Code follows style guide
 - [ ] Documentation updated
-- [ ] CHANGELOG.md updated
+- [ ] docs/changelog.md updated
 - [ ] All tests pass
 ```
 
@@ -224,4 +226,4 @@ Feel free to:
 
 ---
 
-Thank you for contributing! 🙏
+Thank you for contributing!

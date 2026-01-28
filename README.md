@@ -735,7 +735,7 @@ To gather debug information:
 
 ## Contributing
 
-Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md).
+Contributions welcome! See [Contributing Guide](docs/contributing.md).
 
 ---
 
