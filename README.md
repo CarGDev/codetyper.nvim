@@ -1,76 +1,110 @@
-# Codetyper.nvim
+# codetyper.nvim
 
-**AI-powered coding partner for Neovim** - Write code faster with LLM assistance while staying in control of your logic.
+**AI-powered coding assistant for Neovim** - Write code faster with LLM assistance while staying in complete control.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Neovim](https://img.shields.io/badge/Neovim-0.8%2B-green.svg)](https://neovim.io/)
 
-## Features
+---
 
-- **Split View**: Work with your code and prompts side by side
-- **Ask Panel**: Chat interface for questions and explanations
-- **Agent Mode**: Autonomous coding agent with tool use (read, edit, write, bash)
-- **Tag-based Prompts**: Use `/@` and `@/` tags to write natural language prompts
-- **Transform Commands**: Transform prompts inline without leaving your file
-- **Multiple LLM Providers**: Claude, OpenAI, Gemini, Copilot, and Ollama (local)
-- **SEARCH/REPLACE Blocks**: Reliable code editing with fuzzy matching
-- **Conflict Resolution**: Git-style diff visualization with interactive resolution
-- **Linter Validation**: Auto-check and fix lint errors after code injection
-- **Event-Driven Scheduler**: Queue-based processing with optimistic execution
-- **Tree-sitter Scope Resolution**: Smart context extraction for functions/methods
-- **Intent Detection**: Understands complete, refactor, fix, add, document intents
-- **Confidence Scoring**: Automatic escalation from local to remote LLMs
-- **Completion-Aware**: Safe injection that doesn't fight with autocomplete
-- **Auto-Index**: Automatically create coder companion files on file open
-- **Logs Panel**: Real-time visibility into LLM requests and token usage
-- **Cost Tracking**: Persistent LLM cost estimation with session and all-time stats
-- **Git Integration**: Automatically adds `.coder.*` files to `.gitignore`
-- **Project Tree Logging**: Maintains a `tree.log` tracking your project structure
-- **Brain System**: Knowledge graph that learns from your coding patterns
+## Overview
+
+codetyper.nvim brings the power of large language models directly into your Neovim workflow. Unlike other AI coding tools, codetyper is designed around **you staying in control** - every change is presented as a reviewable diff, and you decide what gets applied.
+
+### Key Principles
+
+- **Non-intrusive**: AI suggestions appear as reviewable conflicts, never auto-applied
+- **Context-aware**: Uses tree-sitter to understand code scope and structure
+- **Provider-agnostic**: Works with Claude, OpenAI, Gemini, GitHub Copilot, or local Ollama
+- **Transparent**: Real-time logs show exactly what's happening with token usage and costs
 
 ---
 
 ## Table of Contents
 
+- [Features](#features)
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Configuration](#configuration)
-- [LLM Providers](#llm-providers)
+- [Usage Modes](#usage-modes)
+  - [Tag-Based Prompts](#tag-based-prompts)
+  - [Ask Panel](#ask-panel)
+  - [Agent Mode](#agent-mode)
+  - [Agentic Mode (Multi-Phase)](#agentic-mode-multi-phase)
+- [Conflict Resolution](#conflict-resolution)
 - [Commands Reference](#commands-reference)
 - [Keymaps Reference](#keymaps-reference)
-- [Usage Guide](#usage-guide)
-- [Conflict Resolution](#conflict-resolution)
-- [Linter Validation](#linter-validation)
-- [Logs Panel](#logs-panel)
-- [Cost Tracking](#cost-tracking)
-- [Agent Mode](#agent-mode)
-- [Health Check](#health-check)
-- [Reporting Issues](#reporting-issues)
+- [LLM Providers](#llm-providers)
+- [Advanced Features](#advanced-features)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
+
+---
+
+## Features
+
+### Core Features
+
+| Feature | Description |
+|---------|-------------|
+| **Split View** | Work with code and prompts side by side in companion files |
+| **Ask Panel** | Chat interface for questions and explanations |
+| **Agent Mode** | Autonomous coding agent with tool use (read, edit, write, bash) |
+| **Agentic Mode** | Multi-phase workflow: Discovery → Planning → Execution |
+| **Tag Prompts** | Write natural language prompts using `/@` and `@/` tags |
+| **Transform** | Transform prompts inline without leaving your file |
+| **Conflict Resolution** | Git-style diff visualization with interactive review |
+
+### Intelligence Features
+
+| Feature | Description |
+|---------|-------------|
+| **Intent Detection** | Understands: complete, refactor, fix, add, document, explain, test |
+| **Scope Resolution** | Tree-sitter powered context extraction for functions/methods |
+| **Confidence Scoring** | Automatic escalation from local to remote LLMs based on task complexity |
+| **SEARCH/REPLACE** | Reliable code editing with fuzzy matching for robustness |
+| **Linter Validation** | Auto-check and offer to fix lint errors after code injection |
+
+### Operational Features
+
+| Feature | Description |
+|---------|-------------|
+| **Multi-Provider** | Claude, OpenAI, Gemini, GitHub Copilot, Ollama (local) |
+| **Logs Panel** | Real-time visibility into LLM requests, responses, and token usage |
+| **Cost Tracking** | Persistent cost estimation with session and all-time statistics |
+| **Brain System** | Knowledge graph that learns from your codebase and coding patterns |
+| **Event Scheduler** | Queue-based processing with optimistic execution |
 
 ---
 
 ## Requirements
 
-- Neovim >= 0.8.0
-- curl (for API calls)
-- One of: Claude API key, OpenAI API key, Gemini API key, GitHub Copilot, or Ollama running locally
+### Required
+
+- **Neovim** >= 0.8.0
+- **curl** - for API calls
+- **One LLM provider**: Claude API key, OpenAI API key, Gemini API key, GitHub Copilot, or Ollama
 
 ### Required Plugins
 
-- [plenary.nvim](https://github.com/nvim-lua/plenary.nvim) - Async utilities
-- [nvim-treesitter](https://github.com/nvim-treesitter/nvim-treesitter) - Scope detection for functions/methods
+```lua
+"nvim-lua/plenary.nvim"          -- Async utilities
+"nvim-treesitter/nvim-treesitter" -- Scope detection
+```
 
 ### Optional Plugins
 
-- [nvim-treesitter-textobjects](https://github.com/nvim-treesitter/nvim-treesitter-textobjects) - Better text object support
-- [nui.nvim](https://github.com/MunifTanjim/nui.nvim) - UI components
+```lua
+"nvim-treesitter/nvim-treesitter-textobjects" -- Better text objects
+"MunifTanjim/nui.nvim"                        -- UI components
+```
 
 ---
 
 ## Installation
 
-### Using [lazy.nvim](https://github.com/folke/lazy.nvim)
+### Using lazy.nvim
 
 ```lua
 {
@@ -86,6 +120,7 @@
     { "<leader>co", "<cmd>Coder open<cr>", desc = "Coder: Open" },
     { "<leader>ct", "<cmd>Coder toggle<cr>", desc = "Coder: Toggle" },
     { "<leader>ca", "<cmd>CoderAgentToggle<cr>", desc = "Coder: Agent" },
+    { "<leader>cq", "<cmd>CoderAsk<cr>", desc = "Coder: Ask" },
   },
   config = function()
     require("codetyper").setup({
@@ -97,11 +132,15 @@
 }
 ```
 
-### Using [packer.nvim](https://github.com/wbthomason/packer.nvim)
+### Using packer.nvim
 
 ```lua
 use {
   "cargdev/codetyper.nvim",
+  requires = {
+    "nvim-lua/plenary.nvim",
+    "nvim-treesitter/nvim-treesitter",
+  },
   config = function()
     require("codetyper").setup()
   end,
@@ -112,35 +151,66 @@ use {
 
 ## Quick Start
 
-**1. Open a file and start Coder:**
+### 1. Set up your API key
+
+```bash
+# Option A: Environment variable
+export ANTHROPIC_API_KEY="your-key-here"
+
+# Option B: Use the built-in credential manager
+:CoderAddApiKey
+```
+
+### 2. Open a file and start the coder companion
+
 ```vim
 :e src/utils.ts
 :Coder open
 ```
 
-**2. Write a prompt in the coder file (left panel):**
+This opens a split view with your code on the right and a `.coder.ts` companion file on the left.
+
+### 3. Write a prompt using tags
+
+In the companion file, write:
+
 ```typescript
 /@ Create a function to validate email addresses
-using regex, return boolean @/
+using regex, return true if valid @/
 ```
 
-**3. The LLM generates code and shows a diff for you to review**
+### 4. Review the generated code
 
-**4. Use conflict resolution keymaps to accept/reject changes:**
-- `ct` - Accept AI suggestion (theirs)
-- `co` - Keep original code (ours)
-- `cb` - Accept both versions
-- `cn` - Delete both (none)
+The LLM generates code and presents it as a conflict:
+
+```
+<<<<<<< CURRENT
+=======
+function validateEmail(email: string): boolean {
+  const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return regex.test(email);
+}
+>>>>>>> INCOMING
+```
+
+### 5. Resolve the conflict
+
+- Press `ct` to accept the AI suggestion (theirs)
+- Press `co` to keep your original code (ours)
+- Press `cb` to keep both versions
+- Press `cn` to delete both (none)
 
 ---
 
 ## Configuration
 
+### Full Configuration
+
 ```lua
 require("codetyper").setup({
   -- LLM Provider Configuration
   llm = {
-    provider = "claude", -- "claude", "openai", "gemini", "copilot", or "ollama"
+    provider = "claude", -- "claude" | "openai" | "gemini" | "copilot" | "ollama"
 
     claude = {
       api_key = nil, -- Uses ANTHROPIC_API_KEY env var if nil
@@ -150,7 +220,7 @@ require("codetyper").setup({
     openai = {
       api_key = nil, -- Uses OPENAI_API_KEY env var if nil
       model = "gpt-4o",
-      endpoint = nil, -- Custom endpoint (Azure, OpenRouter, etc.)
+      endpoint = nil, -- Custom endpoint for Azure, OpenRouter, etc.
     },
 
     gemini = {
@@ -171,7 +241,7 @@ require("codetyper").setup({
   -- Window Configuration
   window = {
     width = 25, -- Percentage of screen width
-    position = "left",
+    position = "left", -- "left" | "right"
     border = "rounded",
   },
 
@@ -183,33 +253,33 @@ require("codetyper").setup({
   },
 
   -- Auto Features
-  auto_gitignore = true,
-  auto_open_ask = true,
-  auto_index = false,
+  auto_gitignore = true,  -- Add .coder.* to .gitignore
+  auto_open_ask = true,   -- Auto-open ask panel on first use
+  auto_index = false,     -- Auto-create companion files on file open
 
   -- Event-Driven Scheduler
   scheduler = {
     enabled = true,
-    ollama_scout = true,
-    escalation_threshold = 0.7,
-    max_concurrent = 2,
-    completion_delay_ms = 100,
-    apply_delay_ms = 5000,
+    ollama_scout = true,          -- Use Ollama for initial classification
+    escalation_threshold = 0.7,   -- Confidence threshold for escalation
+    max_concurrent = 2,           -- Max concurrent LLM requests
+    completion_delay_ms = 100,    -- Delay before processing
+    apply_delay_ms = 5000,        -- Delay before applying changes
   },
 })
 ```
 
 ### Environment Variables
 
-| Variable | Description |
-|----------|-------------|
-| `ANTHROPIC_API_KEY` | Claude API key |
-| `OPENAI_API_KEY` | OpenAI API key |
-| `GEMINI_API_KEY` | Google Gemini API key |
+| Variable | Provider | Description |
+|----------|----------|-------------|
+| `ANTHROPIC_API_KEY` | Claude | Anthropic API key |
+| `OPENAI_API_KEY` | OpenAI | OpenAI API key |
+| `GEMINI_API_KEY` | Gemini | Google Gemini API key |
 
-### Credentials Management
+### Secure Credential Storage
 
-Store API keys securely outside of config files:
+Store API keys securely with the built-in credential manager:
 
 ```vim
 :CoderAddApiKey
@@ -224,52 +294,209 @@ Credentials are stored in `~/.local/share/nvim/codetyper/configuration.json`.
 
 ---
 
-## LLM Providers
+## Usage Modes
 
-### Claude
-```lua
-llm = {
-  provider = "claude",
-  claude = { model = "claude-sonnet-4-20250514" },
+### Tag-Based Prompts
+
+Write prompts directly in your coder companion file using tags:
+
+```typescript
+/@ Create a React component for a user profile card
+with props: name, email, avatar
+Use Tailwind CSS for styling @/
+```
+
+#### Intent Keywords
+
+The plugin detects your intent from keywords in the prompt:
+
+| Intent | Keywords | Behavior |
+|--------|----------|----------|
+| **Complete** | complete, finish, implement | Fills in function body |
+| **Refactor** | refactor, rewrite, simplify, clean | Restructures code |
+| **Fix** | fix, debug, bug, error, broken | Fixes issues |
+| **Add** | add, create, generate, new | Inserts new code |
+| **Document** | document, comment, jsdoc, docstring | Adds documentation |
+| **Explain** | explain, what, how, why | Shows explanation |
+| **Test** | test, spec, unit test | Writes tests |
+
+#### Scope-Aware Completion
+
+Write prompts inside functions for automatic scope detection:
+
+```typescript
+function calculateTax(amount: number, rate: number): number {
+  /@ calculate the tax and return the result @/
 }
 ```
 
-### OpenAI
-```lua
-llm = {
-  provider = "openai",
-  openai = {
-    model = "gpt-4o",
-    endpoint = "https://api.openai.com/v1/chat/completions",
-  },
-}
+The plugin detects the function scope and generates appropriate code.
+
+### Ask Panel
+
+Open an interactive chat for questions and explanations:
+
+```vim
+:CoderAsk
 ```
 
-### Google Gemini
-```lua
-llm = {
-  provider = "gemini",
-  gemini = { model = "gemini-2.0-flash" },
-}
+**Features:**
+- Multi-turn conversation with context
+- File attachment with `@` key
+- Add current file as context with `Ctrl+f`
+- Copy responses with `Y`
+
+**Keymaps in Ask Panel:**
+
+| Key | Action |
+|-----|--------|
+| `@` | Attach/reference a file |
+| `Ctrl+Enter` | Submit question |
+| `Ctrl+n` | Start new chat |
+| `Ctrl+f` | Add current file as context |
+| `Y` | Copy last response |
+| `q` | Close panel |
+
+### Agent Mode
+
+Autonomous coding agent with tool access:
+
+```vim
+:CoderAgent
 ```
 
-### GitHub Copilot
-```lua
-llm = {
-  provider = "copilot",
-  copilot = { model = "gpt-4o" },
-}
+**Available Tools:**
+
+| Tool | Description |
+|------|-------------|
+| `view` / `read_file` | Read file contents |
+| `edit` / `edit_file` | Edit files with SEARCH/REPLACE |
+| `write` / `write_file` | Create or overwrite files |
+| `bash` | Execute shell commands |
+| `grep` | Search for patterns in files |
+| `glob` | Find files by pattern |
+
+**Example workflow:**
+1. Open Agent panel: `:CoderAgent`
+2. Describe task: "Add input validation to the login form"
+3. Agent explores codebase, identifies files, makes changes
+4. Review changes in conflict mode
+
+**Keymaps in Agent Panel:**
+
+| Key | Action |
+|-----|--------|
+| `<CR>` | Submit message |
+| `Ctrl+c` | Stop agent execution |
+| `q` | Close panel |
+
+### Agentic Mode (Multi-Phase)
+
+For complex tasks, use the multi-phase agentic workflow:
+
+```vim
+:CoderAgenticRun Add user authentication with JWT tokens
 ```
 
-### Ollama (Local)
-```lua
-llm = {
-  provider = "ollama",
-  ollama = {
-    host = "http://localhost:11434",
-    model = "deepseek-coder:6.7b",
-  },
-}
+**Three Phases:**
+
+#### 1. Discovery Phase (Read-only)
+- Explores project structure
+- Finds relevant files and patterns
+- Understands dependencies and conventions
+- Updates long-term project knowledge
+
+#### 2. Planning Phase (Read-only)
+- Creates step-by-step implementation plan
+- Identifies all files to modify
+- Specifies order of operations
+- Includes testing steps
+
+#### 3. Execution Phase (Full access)
+- Executes approved plan step by step
+- Verifies each change
+- Handles errors and retries
+- Reports progress
+
+**Built-in Agent Personas:**
+
+| Persona | Description | Tools |
+|---------|-------------|-------|
+| `coder` | Full-featured coding agent | view, edit, write, grep, glob, bash |
+| `planner` | Read-only planning and analysis | view, grep, glob |
+| `explorer` | Quick codebase exploration | view, grep, glob |
+
+**Custom Agents:**
+
+Create custom agents in `.coder/agents/`:
+
+```markdown
+---
+description: Python specialist with testing focus
+tools: view,grep,glob,edit,write,bash
+---
+
+# Python Agent
+
+You are a Python specialist. Follow PEP 8 conventions.
+Always write pytest tests for new functionality.
+```
+
+**Commands:**
+
+| Command | Description |
+|---------|-------------|
+| `:CoderAgenticRun <task>` | Run agentic task |
+| `:CoderAgenticList` | List available agents |
+| `:CoderAgenticInit` | Initialize `.coder/agents/` directory |
+
+---
+
+## Conflict Resolution
+
+When the LLM generates code, it's presented as a git-style conflict:
+
+```
+<<<<<<< CURRENT
+// Your original code (if any)
+=======
+// AI-generated code
+>>>>>>> INCOMING
+```
+
+### Visual Indicators
+
+- **Green background**: Original (CURRENT) code
+- **Blue background**: AI-generated (INCOMING) code
+- **Virtual text**: Shows available keymaps on each section
+
+### Resolution Keymaps
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `co` | Accept Current | Keep your original code |
+| `ct` | Accept Incoming | Use the AI suggestion |
+| `cb` | Accept Both | Keep both versions |
+| `cn` | Accept None | Delete the entire conflict |
+| `cm` | Show Menu | Open resolution menu |
+| `]x` | Next Conflict | Jump to next conflict |
+| `[x` | Previous Conflict | Jump to previous conflict |
+
+### Auto-Menu
+
+When code is injected, a floating menu automatically appears. After resolving one conflict, it shows again for the next.
+
+Toggle auto-menu: `:CoderConflictAutoMenu`
+
+### Bulk Resolution
+
+Resolve all conflicts at once:
+
+```vim
+:CoderConflictResolveAll ours    " Keep all original
+:CoderConflictResolveAll theirs  " Accept all AI suggestions
+:CoderConflictResolveAll both    " Keep all versions
+:CoderConflictResolveAll none    " Delete all conflicts
 ```
 
 ---
@@ -288,18 +515,13 @@ llm = {
 | `:Coder focus` | - | Switch focus between windows |
 | `:Coder reset` | - | Reset processed prompts |
 
-### Ask Panel
+### Ask & Agent
 
 | Command | Alias | Description |
 |---------|-------|-------------|
 | `:Coder ask` | `:CoderAsk` | Open the Ask panel |
 | `:Coder ask-toggle` | `:CoderAskToggle` | Toggle the Ask panel |
 | `:Coder ask-clear` | `:CoderAskClear` | Clear chat history |
-
-### Agent Mode
-
-| Command | Alias | Description |
-|---------|-------|-------------|
 | `:Coder agent` | `:CoderAgent` | Open the Agent panel |
 | `:Coder agent-toggle` | `:CoderAgentToggle` | Toggle the Agent panel |
 | `:Coder agent-stop` | `:CoderAgentStop` | Stop running agent |
@@ -310,9 +532,9 @@ llm = {
 |---------|-------|-------------|
 | `:Coder agentic-run <task>` | `:CoderAgenticRun` | Run agentic task |
 | `:Coder agentic-list` | `:CoderAgenticList` | List available agents |
-| `:Coder agentic-init` | `:CoderAgenticInit` | Initialize .coder/agents/ |
+| `:Coder agentic-init` | `:CoderAgenticInit` | Initialize agents directory |
 
-### Transform Commands
+### Transform
 
 | Command | Alias | Description |
 |---------|-------|-------------|
@@ -329,14 +551,13 @@ llm = {
 | `:CoderConflictNext` | Go to next conflict |
 | `:CoderConflictPrev` | Go to previous conflict |
 | `:CoderConflictStatus` | Show conflict status |
-| `:CoderConflictResolveAll [keep]` | Resolve all (ours/theirs/both/none) |
+| `:CoderConflictResolveAll [keep]` | Resolve all conflicts |
 | `:CoderConflictAcceptCurrent` | Accept original code |
 | `:CoderConflictAcceptIncoming` | Accept AI suggestion |
 | `:CoderConflictAcceptBoth` | Accept both versions |
 | `:CoderConflictAcceptNone` | Delete both |
-| `:CoderConflictAutoMenu` | Toggle auto-show menu |
 
-### Linter Validation
+### Linter
 
 | Command | Description |
 |---------|-------------|
@@ -345,17 +566,12 @@ llm = {
 | `:CoderLintQuickfix` | Show errors in quickfix |
 | `:CoderLintToggleAuto` | Toggle auto lint checking |
 
-### Queue & Scheduler
+### Scheduler & Queue
 
 | Command | Alias | Description |
 |---------|-------|-------------|
 | `:Coder queue-status` | `:CoderQueueStatus` | Show scheduler status |
 | `:Coder queue-process` | `:CoderQueueProcess` | Trigger queue processing |
-
-### Processing Mode
-
-| Command | Alias | Description |
-|---------|-------|-------------|
 | `:Coder auto-toggle` | `:CoderAutoToggle` | Toggle auto/manual mode |
 | `:Coder auto-set <mode>` | `:CoderAutoSet` | Set mode (auto/manual) |
 
@@ -378,7 +594,7 @@ llm = {
 | `:CoderCredentials` | Show credentials status |
 | `:CoderSwitchProvider` | Switch LLM provider |
 
-### UI Commands
+### UI
 
 | Command | Description |
 |---------|-------------|
@@ -389,7 +605,7 @@ llm = {
 
 ## Keymaps Reference
 
-### Default Keymaps (auto-configured)
+### Default Keymaps
 
 | Key | Mode | Description |
 |-----|------|-------------|
@@ -399,179 +615,142 @@ llm = {
 | `<leader>ca` | Normal | Toggle Agent panel |
 | `<leader>ci` | Normal | Open coder companion |
 
-### Conflict Resolution Keymaps (buffer-local when conflicts exist)
+### Conflict Resolution (Buffer-local)
 
 | Key | Description |
 |-----|-------------|
-| `co` | Accept CURRENT (original) code |
+| `co` | Accept CURRENT (original) |
 | `ct` | Accept INCOMING (AI suggestion) |
 | `cb` | Accept BOTH versions |
-| `cn` | Delete conflict (accept NONE) |
-| `cm` | Show conflict resolution menu |
-| `]x` | Go to next conflict |
-| `[x` | Go to previous conflict |
-| `<CR>` | Show menu when on conflict |
-
-### Conflict Menu Keymaps (in floating menu)
-
-| Key | Description |
-|-----|-------------|
-| `1` | Accept current (original) |
-| `2` | Accept incoming (AI) |
-| `3` | Accept both |
-| `4` | Accept none |
-| `co` | Accept current |
-| `ct` | Accept incoming |
-| `cb` | Accept both |
-| `cn` | Accept none |
-| `]x` | Go to next conflict |
-| `[x` | Go to previous conflict |
-| `q` / `<Esc>` | Close menu |
-
-### Ask Panel Keymaps
-
-| Key | Description |
-|-----|-------------|
-| `@` | Attach/reference a file |
-| `Ctrl+Enter` | Submit question |
-| `Ctrl+n` | Start new chat |
-| `Ctrl+f` | Add current file as context |
-| `q` | Close panel |
-| `Y` | Copy last response |
-
-### Agent Panel Keymaps
-
-| Key | Description |
-|-----|-------------|
-| `<CR>` | Submit message |
-| `Ctrl+c` | Stop agent execution |
-| `q` | Close agent panel |
-
-### Logs Panel Keymaps
-
-| Key | Description |
-|-----|-------------|
-| `q` / `<Esc>` | Close logs panel |
-
-### Cost Window Keymaps
-
-| Key | Description |
-|-----|-------------|
-| `q` / `<Esc>` | Close window |
-| `r` | Refresh display |
-| `c` | Clear session costs |
-| `C` | Clear all history |
+| `cn` | Accept NONE (delete) |
+| `cm` | Show conflict menu |
+| `]x` | Next conflict |
+| `[x` | Previous conflict |
+| `<CR>` | Show menu on conflict |
 
 ### Suggested Additional Keymaps
 
 ```lua
 local map = vim.keymap.set
 
+-- Core
 map("n", "<leader>co", "<cmd>Coder open<cr>", { desc = "Coder: Open" })
 map("n", "<leader>cc", "<cmd>Coder close<cr>", { desc = "Coder: Close" })
 map("n", "<leader>ct", "<cmd>Coder toggle<cr>", { desc = "Coder: Toggle" })
 map("n", "<leader>cp", "<cmd>Coder process<cr>", { desc = "Coder: Process" })
+
+-- Ask & Agent
+map("n", "<leader>cq", "<cmd>CoderAsk<cr>", { desc = "Coder: Ask" })
+map("n", "<leader>ca", "<cmd>CoderAgentToggle<cr>", { desc = "Coder: Agent" })
+
+-- Utilities
 map("n", "<leader>cs", "<cmd>Coder status<cr>", { desc = "Coder: Status" })
 map("n", "<leader>cl", "<cmd>CoderLogs<cr>", { desc = "Coder: Logs" })
-map("n", "<leader>cm", "<cmd>CoderConflictMenu<cr>", { desc = "Coder: Conflict Menu" })
+map("n", "<leader>c$", "<cmd>CoderCost<cr>", { desc = "Coder: Cost" })
 ```
 
 ---
 
-## Usage Guide
+## LLM Providers
 
-### Tag-Based Prompts
+### Claude (Anthropic)
 
-Write prompts using `/@` and `@/` tags:
-
-```typescript
-/@ Create a Button component with:
-- variant: 'primary' | 'secondary' | 'danger'
-- size: 'sm' | 'md' | 'lg'
-Use Tailwind CSS for styling @/
-```
-
-### Prompt Types
-
-| Keywords | Type | Behavior |
-|----------|------|----------|
-| `complete`, `finish`, `implement` | Complete | Replaces scope |
-| `refactor`, `rewrite`, `simplify` | Refactor | Replaces code |
-| `fix`, `debug`, `bug`, `error` | Fix | Fixes bugs |
-| `add`, `create`, `generate` | Add | Inserts new code |
-| `document`, `comment`, `jsdoc` | Document | Adds docs |
-| `explain`, `what`, `how` | Explain | Shows explanation |
-
-### Function Completion
-
-When you write a prompt inside a function, the plugin detects the enclosing scope:
-
-```typescript
-function getUserById(id: number): User | null {
-  /@ return the user from the database by id @/
+```lua
+llm = {
+  provider = "claude",
+  claude = {
+    model = "claude-sonnet-4-20250514",
+    -- api_key = "sk-..." -- or use ANTHROPIC_API_KEY env var
+  },
 }
 ```
 
----
-
-## Conflict Resolution
-
-When code is generated, it's shown as a git-style conflict for you to review:
-
-```
-<<<<<<< CURRENT
-// Original code here
-=======
-// AI-generated code here
->>>>>>> INCOMING
-```
-
-### Visual Indicators
-
-- **Green background**: Original (CURRENT) code
-- **Blue background**: AI-generated (INCOMING) code
-- **Virtual text hints**: Shows available keymaps
-
-### Resolution Options
-
-1. **Accept Current (`co`)**: Keep your original code
-2. **Accept Incoming (`ct`)**: Use the AI suggestion
-3. **Accept Both (`cb`)**: Keep both versions
-4. **Accept None (`cn`)**: Delete the entire conflict
-
-### Auto-Show Menu
-
-When code is injected, a floating menu automatically appears. After resolving a conflict, the menu shows again for the next conflict.
-
-Toggle auto-show: `:CoderConflictAutoMenu`
-
----
-
-## Linter Validation
-
-After accepting AI suggestions (`ct` or `cb`), the plugin:
-
-1. **Saves the file** automatically
-2. **Checks LSP diagnostics** for errors/warnings
-3. **Offers to fix** lint errors with AI
-
-### Configuration
+### OpenAI
 
 ```lua
--- In conflict.lua config
+llm = {
+  provider = "openai",
+  openai = {
+    model = "gpt-4o",
+    -- api_key = "sk-..." -- or use OPENAI_API_KEY env var
+    -- endpoint = "https://api.openai.com/v1/chat/completions",
+  },
+}
+```
+
+**Custom Endpoints (Azure, OpenRouter, etc.):**
+
+```lua
+openai = {
+  model = "gpt-4o",
+  endpoint = "https://your-resource.openai.azure.com/openai/deployments/gpt-4/chat/completions?api-version=2024-02-15-preview",
+},
+```
+
+### Google Gemini
+
+```lua
+llm = {
+  provider = "gemini",
+  gemini = {
+    model = "gemini-2.0-flash",
+    -- api_key = "..." -- or use GEMINI_API_KEY env var
+  },
+}
+```
+
+### GitHub Copilot
+
+```lua
+llm = {
+  provider = "copilot",
+  copilot = {
+    model = "gpt-4o",
+  },
+}
+```
+
+Requires GitHub Copilot to be configured in your editor.
+
+### Ollama (Local)
+
+```lua
+llm = {
+  provider = "ollama",
+  ollama = {
+    host = "http://localhost:11434",
+    model = "deepseek-coder:6.7b",
+  },
+}
+```
+
+**Popular Ollama models for coding:**
+- `deepseek-coder:6.7b` - Fast, good for completions
+- `codellama:13b` - Meta's code-focused model
+- `mistral:7b` - General purpose, good quality
+- `qwen2.5-coder:7b` - Strong coding performance
+
+---
+
+## Advanced Features
+
+### Linter Validation
+
+After accepting AI suggestions, the plugin automatically:
+
+1. Saves the file
+2. Checks LSP diagnostics for errors
+3. Offers to fix lint errors with AI
+
+**Configuration:**
+
+```lua
+-- In conflict settings
 lint_after_accept = true,      -- Check linter after accepting
 auto_fix_lint_errors = true,   -- Auto-queue fix without prompting
 ```
 
-### Manual Commands
-
-- `:CoderLintCheck` - Check current buffer
-- `:CoderLintFix` - Queue AI fix for errors
-- `:CoderLintQuickfix` - Show in quickfix list
-
----
-
-## Logs Panel
+### Logs Panel
 
 Real-time visibility into LLM operations:
 
@@ -581,15 +760,13 @@ Real-time visibility into LLM operations:
 
 Shows:
 - Generation requests and responses
-- Token usage
-- Queue status
+- Token usage (input/output)
+- Queue status and timing
 - Errors and warnings
 
----
+### Cost Tracking
 
-## Cost Tracking
-
-Track LLM API costs across sessions:
+Track API costs across sessions:
 
 ```vim
 :CoderCost
@@ -601,33 +778,48 @@ Features:
 - Pricing for 50+ models
 - Persistent history in `.coder/cost_history.json`
 
----
+**Keymaps in Cost Window:**
 
-## Agent Mode
+| Key | Action |
+|-----|--------|
+| `q` / `<Esc>` | Close window |
+| `r` | Refresh display |
+| `c` | Clear session costs |
+| `C` | Clear all history |
 
-Autonomous coding assistant with tool access:
+### Brain System
 
-### Available Tools
-
-- **read_file**: Read file contents
-- **edit_file**: Edit files with find/replace
-- **write_file**: Create or overwrite files
-- **bash**: Execute shell commands
-
-### Using Agent Mode
-
-1. Open: `:CoderAgent` or `<leader>ca`
-2. Describe your task
-3. Agent uses tools autonomously
-4. Review changes in conflict mode
-
----
-
-## Health Check
+The brain system learns from your codebase:
 
 ```vim
-:checkhealth codetyper
+:CoderBrain stats    " Show brain statistics
+:CoderBrain commit   " Commit learned knowledge
+:CoderBrain flush    " Clear working memory
+:CoderBrain prune    " Remove stale knowledge
 ```
+
+**Knowledge Types:**
+- Project structure and organization
+- Code patterns and conventions
+- File purposes and relationships
+- Testing approaches
+- Dependencies
+
+### Project Rules
+
+Create project-specific rules in `.coder/rules/`:
+
+```markdown
+<!-- .coder/rules/style.md -->
+# Code Style Rules
+
+- Use TypeScript strict mode
+- Prefer functional components in React
+- Use Tailwind CSS for styling
+- Write tests for all new features
+```
+
+These rules are automatically injected into agent prompts.
 
 ---
 
@@ -636,106 +828,76 @@ Autonomous coding assistant with tool access:
 ```
 your-project/
 ├── .coder/
-│   ├── tree.log
-│   ├── cost_history.json
-│   ├── brain/
-│   ├── agents/
-│   └── rules/
+│   ├── agents/           # Custom agent definitions
+│   │   └── my-agent.md
+│   ├── rules/            # Project-specific rules
+│   │   └── style.md
+│   ├── brain/            # Learned knowledge
+│   ├── tree.log          # Project structure tracking
+│   └── cost_history.json # Cost tracking data
 ├── src/
-│   ├── index.ts
-│   └── index.coder.ts
-└── .gitignore
+│   ├── index.ts          # Your source file
+│   └── index.coder.ts    # Companion file (auto-created)
+└── .gitignore            # .coder.* auto-added
 ```
 
 ---
 
-## Reporting Issues
+## Troubleshooting
 
-Found a bug or have a feature request? Please create an issue on GitHub.
+### Health Check
 
-### Before Creating an Issue
-
-1. **Search existing issues** to avoid duplicates
-2. **Update to the latest version** and check if the issue persists
-3. **Run health check**: `:checkhealth codetyper`
-
-### Bug Reports
-
-When reporting a bug, please include:
-
-```markdown
-**Description**
-A clear description of what the bug is.
-
-**Steps to Reproduce**
-1. Open file '...'
-2. Run command '...'
-3. See error
-
-**Expected Behavior**
-What you expected to happen.
-
-**Actual Behavior**
-What actually happened.
-
-**Environment**
-- Neovim version: (output of `nvim --version`)
-- Plugin version: (commit hash or tag)
-- OS: (e.g., macOS 14.0, Ubuntu 22.04)
-- LLM Provider: (e.g., Claude, OpenAI, Ollama)
-
-**Error Messages**
-Paste any error messages from `:messages`
-
-**Minimal Config**
-If possible, provide a minimal config to reproduce:
-```lua
--- minimal.lua
-require("codetyper").setup({
-  llm = { provider = "..." },
-})
+```vim
+:checkhealth codetyper
 ```
-```
-
-### Feature Requests
-
-For feature requests, please describe:
-
-- **Use case**: What problem does this solve?
-- **Proposed solution**: How should it work?
-- **Alternatives**: Other solutions you've considered
 
 ### Debug Information
 
-To gather debug information:
-
 ```vim
-" Check plugin status
-:Coder status
-
-" View logs
-:CoderLogs
-
-" Check health
-:checkhealth codetyper
-
-" View recent messages
-:messages
+:Coder status      " Plugin status
+:CoderLogs         " View logs
+:messages          " Vim messages
 ```
 
-### Issue Labels
+### Common Issues
 
-- `bug` - Something isn't working
-- `enhancement` - New feature request
-- `documentation` - Documentation improvements
-- `question` - General questions
-- `help wanted` - Issues that need community help
+**1. No response from LLM**
+- Check API key: `:CoderCredentials`
+- Check logs: `:CoderLogs`
+- Verify network connectivity
+
+**2. Conflict markers not appearing**
+- Ensure file type is supported
+- Check for existing conflicts: `:CoderConflictStatus`
+
+**3. Agent not finding files**
+- Verify working directory: `:pwd`
+- Check project structure: `:!ls -la`
+
+**4. High latency**
+- Consider using Ollama for local inference
+- Use smaller models for simple tasks
+- Check `scheduler.escalation_threshold`
 
 ---
 
 ## Contributing
 
-Contributions welcome! See [Contributing Guide](docs/contributing.md).
+Contributions are welcome! Please see [docs/contributing.md](docs/contributing.md) for guidelines.
+
+### Development Setup
+
+```bash
+git clone https://github.com/cargdev/codetyper.nvim
+cd codetyper.nvim
+nvim --cmd "set rtp+=."
+```
+
+### Running Tests
+
+```bash
+nvim --headless -c "PlenaryBustedDirectory tests/ {minimal_init = 'tests/minimal_init.lua'}"
+```
 
 ---
 

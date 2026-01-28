@@ -103,7 +103,7 @@ end
 ---@return string
 function M.build_discovery_prompt(task, brain_knowledge)
   local prompt_parts = {
-    "You are in DISCOVERY phase. Your goal is to explore and understand the codebase before creating a plan.",
+    "You are in DISCOVERY phase. Your goal is to THOROUGHLY explore and understand the codebase before creating a plan.",
     "",
     string.format("TASK: %s", task),
     "",
@@ -118,23 +118,41 @@ function M.build_discovery_prompt(task, brain_knowledge)
 
   table.insert(
     prompt_parts,
-    [[YOUR OBJECTIVES:
-1. Explore the project structure and understand the codebase organization
-2. Find relevant files, patterns, and conventions
-3. Identify dependencies and existing implementations
-4. Understand the testing approach
-5. Note any constraints or requirements from .coder/rules/
-6. Update long-term knowledge about the project
+    [[## Discovery Strategy
 
-AVAILABLE TOOLS (read-only):
+### Step 1: Understand Project Structure
+- List root directory to see project layout
+- Check for dependency files (package.json, Cargo.toml, pyproject.toml, etc.)
+- Look for configuration files (.coder/rules/, .eslintrc, tsconfig.json, etc.)
+- Identify the testing approach (test directories, test frameworks)
+
+### Step 2: Find Relevant Code
+- Search for files related to the task using multiple search terms
+- If initial searches fail, try alternative terms (auth/login/session, button/btn, etc.)
+- Look at imports to understand dependencies between modules
+- Check for existing similar implementations to understand patterns
+
+### Step 3: Deep Dive
+- Read key files thoroughly - understand not just WHAT but HOW
+- Look at existing tests to understand expected behavior
+- Check for conventions in similar code (error handling, logging, naming)
+- Note any constraints from project rules or configuration
+
+## Available Tools (read-only)
 - view: Read file contents
 - grep: Search for patterns in files
 - glob: Find files by pattern
 - list_directory: List directory contents
 - search_files: Search for files by name or content
 
-LEARNING NEW KNOWLEDGE:
-When you discover important project information, use these markers to update long-term memory:
+## Search Best Practices
+- Run multiple searches with different terms in parallel when possible
+- If searching for "auth" fails, try "login", "user", "session", etc.
+- Search for content that would BE IN the file, not just file names
+- Look at 2-3 surrounding files to understand context
+
+## Learning Markers
+When you discover important project information, use these markers:
 - [LEARN:structure:directory/path] Purpose description
 - [LEARN:pattern:pattern_name] Pattern description
 - [LEARN:file:path/to/file] File purpose
@@ -142,14 +160,18 @@ When you discover important project information, use these markers to update lon
 - [LEARN:testing:] Testing approach
 - [LEARN:dependency:package_name] Dependency note
 
-IMPORTANT:
-- You CANNOT make changes yet - this is discovery only
-- Take thorough notes about what you find
-- Use [LEARN:] markers to update project knowledge
-- Focus on understanding before planning
-- When ready, respond with "DISCOVERY_COMPLETE:" followed by a summary
+## Completion Criteria
+Before moving to planning, verify you know:
+1. All files that will need modification
+2. The patterns/conventions used in similar code
+3. What dependencies are available
+4. How testing is done (if applicable)
+5. Any project-specific rules or constraints
 
-Start by exploring the codebase to understand how to accomplish this task.]]
+When confident you have sufficient context, respond with:
+"DISCOVERY_COMPLETE:" followed by a summary of what you learned.
+
+DO NOT rush through discovery. Thorough understanding now prevents mistakes later.]]
   )
 
   return table.concat(prompt_parts, "\n")
@@ -161,38 +183,90 @@ end
 ---@return string
 function M.build_planning_prompt(task, discovery_summary)
   return string.format(
-    [[You are in PLANNING phase. Create a detailed implementation plan based on your discovery.
+    [[You are in PLANNING phase. Create a detailed, actionable implementation plan.
 
 TASK: %s
 
 DISCOVERY SUMMARY:
 %s
 
-YOUR OBJECTIVES:
-1. Create a step-by-step implementation plan
-2. Break down the task into small, manageable steps
-3. Identify which files need to be created/modified
-4. Specify the order of operations
-5. Include testing steps
+## Planning Guidelines
 
-PLAN FORMAT:
-Respond with "PLAN:" followed by a JSON array of steps:
+### Step Granularity
+- Each step should be ONE logical change
+- Steps should be small enough to verify independently
+- If a step requires multiple file changes, split it into multiple steps
+- Order steps so each one builds on the previous
+
+### Dependencies
+- Create files before editing them
+- Add imports before using them
+- Run tests after making changes
+
+### Common Patterns
+1. **Adding a feature:**
+   - Create new files (if needed)
+   - Add imports to existing files
+   - Implement the feature
+   - Add/update tests
+   - Run tests to verify
+
+2. **Fixing a bug:**
+   - Identify the root cause
+   - Make the minimal fix
+   - Add a test that would have caught it
+   - Run tests to verify
+
+3. **Refactoring:**
+   - Make changes in small steps
+   - Run tests after each step
+   - Don't change behavior and structure simultaneously
+
+## Plan Format
+
+Respond with "PLAN:" followed by a JSON array:
+
+```json
 [
   {
     "id": "step-1",
-    "description": "Clear description of what this step does",
-    "tool": "edit" | "write" | "bash",
-    "params": { /* tool-specific parameters */ }
+    "description": "Clear description including the file and what changes",
+    "tool": "write",
+    "params": {
+      "path": "path/to/new/file.ts",
+      "content": "// Content will be generated during execution"
+    }
   },
-  ...
+  {
+    "id": "step-2",
+    "description": "Add import for new module to main.ts",
+    "tool": "edit",
+    "params": {
+      "path": "path/to/main.ts"
+    }
+  },
+  {
+    "id": "step-3",
+    "description": "Run tests to verify changes work",
+    "tool": "bash",
+    "params": {
+      "command": "npm test"
+    }
+  }
 ]
+```
 
-REQUIREMENTS:
-- Each step should be atomic and independent
-- Include clear descriptions
-- Specify exact file paths
-- Include tests if required
-- Order steps logically
+## Available Tools
+- **write**: Create new file (params: path, content)
+- **edit**: Modify existing file (params: path)
+- **bash**: Run shell command (params: command)
+- **delete**: Remove file (params: path)
+
+## Requirements
+✓ Include exact file paths discovered earlier
+✓ Order steps logically (create before edit, edit before test)
+✓ Include verification steps (tests, builds) where appropriate
+✓ Make descriptions specific enough to execute without ambiguity
 
 Create the plan now.]],
     task,
@@ -221,19 +295,44 @@ TASK: %s
 APPROVED PLAN:
 %s
 
-YOUR OBJECTIVES:
-1. Execute each pending step in order
-2. Verify each step completes successfully
-3. Handle errors and retry if needed
-4. Report progress after each step
+## Execution Guidelines
 
-EXECUTION RULES:
-- Execute steps in the specified order
-- Do not skip steps
-- If a step fails, stop and report the error
-- Verify changes work before proceeding
+### Before Each Step
+1. Read the file you're about to modify (unless creating new)
+2. Understand the current state before making changes
+3. Plan the exact change you'll make
 
-Begin executing the plan. Report after each step.]],
+### Making Edits
+- Use EXACT string matching - copy text character-for-character from the file
+- Include enough context to uniquely identify the location
+- If edit fails, RE-READ the file and try again
+- Preserve existing formatting and indentation
+
+### After Each Step
+- Verify the change was applied correctly
+- If there's a test step coming, ensure current changes are ready for testing
+- Report what was done and any issues encountered
+
+### Error Handling
+- If a step fails, STOP and analyze why
+- Don't blindly retry - understand the error first
+- If it's a matching error, re-read the file
+- If it's a logic error, may need to adjust approach
+- Report errors clearly with context
+
+## Execution Rules
+1. Execute steps in order - do NOT skip ahead
+2. Complete each step before starting the next
+3. If a step fails after 2-3 attempts, stop and report
+4. Verify changes work before marking step complete
+
+## Response Format
+After each step, report:
+- What was done
+- Whether it succeeded or failed
+- Any issues or observations
+
+Begin executing. Focus on getting each step right before moving on.]],
     task,
     table.concat(steps_text, "\n")
   )

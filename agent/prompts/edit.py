@@ -24,13 +24,31 @@ When modifying code, use the SEARCH/REPLACE format:
 [replacement code]
 >>>>>>> REPLACE
 
-Rules:
-1. The SEARCH block must exactly match existing code
-2. Include enough context to uniquely identify the location
-3. Each SEARCH/REPLACE block handles one change
-4. Multiple changes require multiple blocks
+## Critical Rules
 
-Example:
+1. **EXACT MATCH REQUIRED**: The SEARCH block must match the file content character-for-character:
+   - Match ALL whitespace (spaces, tabs, newlines)
+   - Match ALL punctuation and formatting
+   - Include complete lines - never truncate mid-line
+
+2. **UNIQUE IDENTIFICATION**: Include enough context to uniquely identify the location:
+   - If a line appears multiple times, include 2-3 surrounding lines
+   - Include function signatures, class names, or unique nearby code
+   - Better to include too much context than too little
+
+3. **ONE CHANGE PER BLOCK**: Each SEARCH/REPLACE block handles one logical change:
+   - Multiple changes = multiple blocks
+   - List blocks in the order they appear in the file
+   - Don't include long unchanged sections in blocks
+
+4. **PRESERVE FORMATTING**: Match the file's existing style:
+   - Keep the same indentation (spaces vs tabs)
+   - Keep the same quote style (' vs ")
+   - Keep the same line ending patterns
+
+## Examples
+
+**Adding a parameter:**
 <<<<<<< SEARCH
 def hello():
     print("Hello")
@@ -38,6 +56,53 @@ def hello():
 def hello(name: str) -> None:
     print(f"Hello, {name}")
 >>>>>>> REPLACE
+
+**Adding an import (include context to be unique):**
+<<<<<<< SEARCH
+import React from 'react';
+import { useState } from 'react';
+=======
+import React from 'react';
+import { useState, useEffect } from 'react';
+>>>>>>> REPLACE
+
+**Deleting code (empty replacement):**
+<<<<<<< SEARCH
+    // TODO: remove this debug line
+    console.log('debug:', data);
+=======
+>>>>>>> REPLACE
+
+**Moving code requires TWO blocks:**
+Block 1 - Delete from original location:
+<<<<<<< SEARCH
+function helper() {
+  return true;
+}
+
+function main() {
+=======
+function main() {
+>>>>>>> REPLACE
+
+Block 2 - Insert at new location:
+<<<<<<< SEARCH
+// Utils section
+=======
+// Utils section
+
+function helper() {
+  return true;
+}
+>>>>>>> REPLACE
+
+## Common Mistakes to Avoid
+
+- DON'T guess file contents - read the file first
+- DON'T include partial lines in SEARCH blocks
+- DON'T change indentation unless that's the goal
+- DON'T put long unchanged code inside SEARCH blocks
+- If edit fails, RE-READ the file - content may have changed
 """
 
 # Edit prompt template
