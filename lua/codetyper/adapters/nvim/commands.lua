@@ -235,47 +235,94 @@ local function cmd_gitignore()
 end
 
 --- Open ask panel (with optional visual selection)
+--- Opens unified chat in ASK mode
 ---@param selection table|nil Visual selection info
 local function cmd_ask(selection)
-  local ask = require("codetyper.features.ask.engine")
-  ask.open(selection)
+  local chat = require("codetyper.adapters.nvim.ui.chat")
+  chat.open({ mode = "ask", selection = selection })
 end
 
 --- Close ask panel
 local function cmd_ask_close()
-  local ask = require("codetyper.features.ask.engine")
-  ask.close()
+  local chat = require("codetyper.adapters.nvim.ui.chat")
+  chat.close()
 end
 
 --- Toggle ask panel
 local function cmd_ask_toggle()
-  local ask = require("codetyper.features.ask.engine")
-  ask.toggle()
+  local chat = require("codetyper.adapters.nvim.ui.chat")
+  if chat.is_open() then
+    if chat.get_mode() == "ask" then
+      chat.close()
+    else
+      chat.set_mode("ask")
+    end
+  else
+    chat.open({ mode = "ask" })
+  end
 end
 
 --- Clear ask history
 local function cmd_ask_clear()
-  local ask = require("codetyper.features.ask.engine")
-  ask.clear_history()
+  local chat = require("codetyper.adapters.nvim.ui.chat")
+  -- Uses /clear command internally
+  if chat.is_open() then
+    chat.set_mode("ask")
+  end
 end
 
 --- Open agent panel (with optional visual selection)
+--- Opens unified chat in AGENT mode
 ---@param selection table|nil Visual selection info
 local function cmd_agent(selection)
-  local agent_ui = require("codetyper.adapters.nvim.ui.chat")
-  agent_ui.open(selection)
+  local chat = require("codetyper.adapters.nvim.ui.chat")
+  chat.open({ mode = "agent", selection = selection })
 end
 
 --- Close agent panel
 local function cmd_agent_close()
-  local agent_ui = require("codetyper.adapters.nvim.ui.chat")
-  agent_ui.close()
+  local chat = require("codetyper.adapters.nvim.ui.chat")
+  chat.close()
 end
 
 --- Toggle agent panel
 local function cmd_agent_toggle()
-  local agent_ui = require("codetyper.adapters.nvim.ui.chat")
-  agent_ui.toggle()
+  local chat = require("codetyper.adapters.nvim.ui.chat")
+  if chat.is_open() then
+    if chat.get_mode() == "agent" then
+      chat.close()
+    else
+      chat.set_mode("agent")
+    end
+  else
+    chat.open({ mode = "agent" })
+  end
+end
+
+--- Toggle chat mode (ask <-> agent)
+local function cmd_mode_toggle()
+  local chat = require("codetyper.adapters.nvim.ui.chat")
+  if chat.is_open() then
+    chat.toggle_mode()
+  else
+    -- Open in default mode if not open
+    chat.open({ mode = "agent" })
+  end
+end
+
+--- Set chat mode explicitly
+---@param mode string "ask" or "agent"
+local function cmd_mode_set(mode)
+  local chat = require("codetyper.adapters.nvim.ui.chat")
+  if mode == "ask" or mode == "agent" then
+    if chat.is_open() then
+      chat.set_mode(mode)
+    else
+      chat.open({ mode = mode })
+    end
+  else
+    utils.notify("Invalid mode. Use 'ask' or 'agent'", vim.log.levels.WARN)
+  end
 end
 
 --- Stop running agent
@@ -513,12 +560,10 @@ local function cmd_transform()
 
   utils.notify("Found " .. #prompts .. " prompt(s) to transform...", vim.log.levels.INFO)
 
-  -- Reset processed prompts tracking so we can re-process them (silent mode)
-  autocmds.reset_processed(bufnr, true)
-
-  -- Use the same processing logic as automatic mode
-  -- This ensures intent detection, scope resolution, and all other logic is identical
-  autocmds.check_all_prompts()
+  -- Process each prompt directly (skip_processed_check = true for manual transform)
+  for _, prompt in ipairs(prompts) do
+    autocmds.process_single_prompt(bufnr, prompt, filepath, true)
+  end
 end
 
 --- Transform prompts within a line range (for visual selection)
@@ -828,6 +873,10 @@ local function coder_cmd(args)
     ["agent-toggle"] = cmd_agent_toggle,
     ["agent-stop"] = cmd_agent_stop,
     ["type-toggle"] = cmd_type_toggle,
+    ["mode"] = cmd_mode_toggle,
+    ["mode-toggle"] = cmd_mode_toggle,
+    ["mode-ask"] = function() cmd_mode_set("ask") end,
+    ["mode-agent"] = function() cmd_mode_set("agent") end,
     ["logs-toggle"] = cmd_logs_toggle,
     ["queue-status"] = cmd_queue_status,
     ["queue-process"] = cmd_queue_process,
@@ -949,7 +998,8 @@ function M.setup()
         "transform", "transform-cursor",
         "agent", "agent-close", "agent-toggle", "agent-stop",
         "agentic-run", "agentic-list", "agentic-init",
-        "type-toggle", "logs-toggle",
+        "type-toggle", "mode", "mode-toggle", "mode-ask", "mode-agent",
+        "logs-toggle",
         "queue-status", "queue-process",
         "index-project", "index-status", "memories", "forget",
         "auto-toggle", "auto-set",
@@ -1066,6 +1116,22 @@ function M.setup()
   vim.api.nvim_create_user_command("CoderType", function()
     cmd_type_toggle()
   end, { desc = "Show Ask/Agent mode switcher" })
+
+  -- Mode commands for unified chat
+  vim.api.nvim_create_user_command("CoderMode", function(opts)
+    local mode = opts.args
+    if mode and mode ~= "" then
+      cmd_mode_set(mode:lower())
+    else
+      cmd_mode_toggle()
+    end
+  end, {
+    nargs = "?",
+    complete = function()
+      return { "ask", "agent" }
+    end,
+    desc = "Toggle or set chat mode (ask/agent)"
+  })
 
   -- Logs panel command
   vim.api.nvim_create_user_command("CoderLogs", function()

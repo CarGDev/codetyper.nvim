@@ -12,6 +12,8 @@ local agent_client = require("codetyper.transport.agent_client")
 local logs = require("codetyper.adapters.nvim.ui.logs")
 local utils = require("codetyper.support.utils")
 
+---@alias ChatMode "ask" | "agent"
+
 ---@class AgentUIState
 ---@field chat_buf number|nil Chat buffer
 ---@field chat_win number|nil Chat window
@@ -23,6 +25,8 @@ local utils = require("codetyper.support.utils")
 ---@field log_listener_id number|nil Listener ID for logs
 ---@field referenced_files table Files referenced with @
 ---@field referenced_folders table Folders referenced with @/
+---@field mode ChatMode Current chat mode ("ask" or "agent")
+---@field history table Chat history for continuity between modes
 
 local state = {
   chat_buf = nil,
@@ -36,6 +40,11 @@ local state = {
   referenced_files = {},
   referenced_folders = {},
   selection_context = nil, -- Visual selection passed when opening
+  last_plan = nil,         -- Last built plan for /execute
+  last_context = nil,      -- Context from last prompt
+  last_files = nil,        -- Files from last prompt
+  mode = "agent",          -- Current mode: "ask" or "agent"
+  history = {},            -- Chat history preserved across mode switches
 }
 
 --- Namespace for highlights
@@ -45,6 +54,158 @@ local ns_logs = vim.api.nvim_create_namespace("codetyper_agent_logs")
 --- Fixed heights
 local INPUT_HEIGHT = 5
 local LOGS_WIDTH = 50
+
+--- Mode display configurations
+local MODE_CONFIG = {
+  ask = {
+    title = "ASK",
+    icon = "?",
+    description = "Q&A mode - answers questions",
+    tools_enabled = false,
+    color = "DiagnosticInfo",
+  },
+  agent = {
+    title = "AGENT",
+    icon = ">",
+    description = "Agent mode - can read/write files",
+    tools_enabled = true,
+    color = "DiagnosticOk",
+  },
+}
+
+--- Generate header lines based on current mode
+---@return string[]
+local function get_header_lines()
+  local cfg = MODE_CONFIG[state.mode]
+  local width = 45
+  local border_char = "─"
+  local corner_tl, corner_tr = "╭", "╮"
+  local corner_bl, corner_br = "╰", "╯"
+  local side = "│"
+
+  -- Build header
+  local mode_line = string.format(" [%s] %s ", cfg.icon, cfg.title)
+  local desc_line = " " .. cfg.description .. " "
+  local keybind_line = " C-m: switch | @: attach | C-f: file "
+  local help_line = " <leader>d: review | /clear | /stop "
+
+  -- Pad lines to width
+  local function pad(str, w)
+    local len = vim.fn.strwidth(str)
+    if len < w then
+      return str .. string.rep(" ", w - len)
+    end
+    return str:sub(1, w)
+  end
+
+  return {
+    corner_tl .. string.rep(border_char, width) .. corner_tr,
+    side .. pad(mode_line, width) .. side,
+    side .. string.rep(border_char, width) .. side,
+    side .. pad(desc_line, width) .. side,
+    side .. pad(keybind_line, width) .. side,
+    side .. pad(help_line, width) .. side,
+    corner_bl .. string.rep(border_char, width) .. corner_br,
+    "",
+  }
+end
+
+--- Update the chat header to reflect current mode
+local function update_header()
+  if not state.chat_buf or not vim.api.nvim_buf_is_valid(state.chat_buf) then
+    return
+  end
+
+  vim.bo[state.chat_buf].modifiable = true
+
+  local lines = vim.api.nvim_buf_get_lines(state.chat_buf, 0, -1, false)
+  local header = get_header_lines()
+  local header_end = #header
+
+  -- Find where old header ends (look for the closing border)
+  local old_header_end = 0
+  for i, line in ipairs(lines) do
+    if line:match("^╰") or line:match("^╚") then
+      old_header_end = i + 1 -- +1 for empty line after header
+      break
+    end
+    if i > 10 then break end -- Safety limit
+  end
+
+  -- Replace header section
+  if old_header_end > 0 then
+    -- Keep content after header
+    local content = {}
+    for i = old_header_end + 1, #lines do
+      table.insert(content, lines[i])
+    end
+
+    -- Build new buffer content
+    local new_lines = vim.list_extend({}, header)
+    vim.list_extend(new_lines, content)
+    vim.api.nvim_buf_set_lines(state.chat_buf, 0, -1, false, new_lines)
+  else
+    -- No header found, just prepend
+    vim.api.nvim_buf_set_lines(state.chat_buf, 0, 0, false, header)
+  end
+
+  -- Apply header highlighting
+  local cfg = MODE_CONFIG[state.mode]
+  for i = 0, #header - 2 do
+    vim.api.nvim_buf_add_highlight(state.chat_buf, ns_chat, cfg.color, i, 0, -1)
+  end
+
+  vim.bo[state.chat_buf].modifiable = false
+end
+
+--- Set the chat mode
+---@param mode ChatMode "ask" or "agent"
+function M.set_mode(mode)
+  if mode ~= "ask" and mode ~= "agent" then
+    return
+  end
+
+  local old_mode = state.mode
+  state.mode = mode
+
+  -- Update header
+  update_header()
+
+  -- Log mode change
+  if old_mode ~= mode then
+    logs.info(string.format("Switched to %s mode", mode:upper()))
+    local cfg = MODE_CONFIG[mode]
+    if state.chat_buf and vim.api.nvim_buf_is_valid(state.chat_buf) then
+      vim.bo[state.chat_buf].modifiable = true
+      vim.api.nvim_buf_set_lines(state.chat_buf, -1, -1, false, {
+        "",
+        string.format("── Mode: %s ──", cfg.title),
+        cfg.description,
+        "",
+      })
+      vim.bo[state.chat_buf].modifiable = false
+    end
+  end
+end
+
+--- Toggle between ask and agent modes
+function M.toggle_mode()
+  local new_mode = state.mode == "ask" and "agent" or "ask"
+  M.set_mode(new_mode)
+  M.focus_input()
+end
+
+--- Get the current mode
+---@return ChatMode
+function M.get_mode()
+  return state.mode
+end
+
+--- Check if tools are enabled in current mode
+---@return boolean
+function M.tools_enabled()
+  return MODE_CONFIG[state.mode].tools_enabled
+end
 
 --- Calculate dynamic width (1/4 of screen, minimum 30)
 ---@return number
@@ -366,16 +527,19 @@ local function submit_input()
     logs.clear()
     state.referenced_files = {}
     state.referenced_folders = {}
+    state.last_plan = nil
+    state.last_context = nil
+    state.last_files = nil
+    state.history = {} -- Clear conversation history
     if state.chat_buf and vim.api.nvim_buf_is_valid(state.chat_buf) then
       vim.bo[state.chat_buf].modifiable = true
-      vim.api.nvim_buf_set_lines(state.chat_buf, 0, -1, false, {
-        "╔═══════════════════════════════════════════════════════════════╗",
-        "║  [AGENT MODE] Can read/write files                           ║",
-        "╠═══════════════════════════════════════════════════════════════╣",
-        "║  @ attach | C-f current file | <leader>d review changes      ║",
-        "╚═══════════════════════════════════════════════════════════════╝",
-        "",
-      })
+      local header = get_header_lines()
+      vim.api.nvim_buf_set_lines(state.chat_buf, 0, -1, false, header)
+      -- Apply header highlighting
+      local cfg = MODE_CONFIG[state.mode]
+      for i = 0, #header - 2 do
+        vim.api.nvim_buf_add_highlight(state.chat_buf, ns_chat, cfg.color, i, 0, -1)
+      end
       vim.bo[state.chat_buf].modifiable = false
     end
     -- Also clear collected diffs
@@ -410,6 +574,89 @@ local function submit_input()
     if not success then
       add_message("system", "Failed to resume session.")
     end
+    return
+  end
+
+  if input == "/execute" or input == "/proceed" then
+    if not state.last_plan then
+      add_message("system", "No plan to execute. Send a prompt first.")
+      return
+    end
+
+    if agent.is_running() then
+      add_message("system", "Agent is already running. Use /stop first.")
+      return
+    end
+
+    add_message("system", "Executing plan...")
+    logs.info("Executing plan with " .. #(state.last_plan.steps or {}) .. " steps")
+
+    -- Execute the plan through the agent
+    local diff_review = require("codetyper.adapters.nvim.ui.diff_review")
+    diff_review.clear()
+
+    for _, step in ipairs(state.last_plan.steps or {}) do
+      local action = step.action
+      local target = step.target
+      local params = step.params or {}
+
+      logs.tool(action, "start", target)
+
+      if action == "write" or action == "edit" then
+        local content = params.content or ""
+        local ok = utils.write_file(target, content)
+        if ok then
+          diff_review.add({
+            path = target,
+            operation = action == "write" and "create" or "edit",
+            original = action == "edit" and utils.read_file(target) or nil,
+            modified = content,
+            approved = false,
+            applied = false,
+          })
+          logs.tool(action, "success", target)
+        else
+          logs.tool(action, "error", "Failed to write: " .. target)
+        end
+      elseif action == "read" then
+        local content = utils.read_file(target)
+        if content then
+          logs.tool(action, "success", string.format("%s (%d bytes)", target, #content))
+        else
+          logs.tool(action, "error", "Failed to read: " .. target)
+        end
+      end
+    end
+
+    -- Show diff review if there are changes
+    if diff_review.count() > 0 then
+      add_message("system", string.format("Plan executed. %d file(s) to review. Opening diff review...", diff_review.count()))
+      vim.schedule(function()
+        diff_review.open()
+      end)
+    else
+      add_message("system", "Plan executed. No file changes.")
+    end
+
+    state.last_plan = nil
+    return
+  end
+
+  if input == "/review" then
+    if not state.last_plan then
+      add_message("system", "No plan to review. Send a prompt first.")
+      return
+    end
+
+    add_message("system", "Current Plan:")
+    for i, step in ipairs(state.last_plan.steps or {}) do
+      local step_info = string.format("  %d. [%s] %s", i, step.action or "?", step.target or "?")
+      if step.params and step.params.content then
+        step_info = step_info .. string.format(" (%d chars)", #step.params.content)
+      end
+      add_message("system", step_info)
+    end
+    add_message("system", "Type /execute to run, or send a new prompt to rebuild.")
     return
   end
 
@@ -469,11 +716,10 @@ local function submit_input()
 
   logs.thinking("Starting...")
 
-  -- Run the agent by forwarding the full input and context to the Python agent.
-  -- The Lua chat UI is a pure conversational adapter: it does not make decisions
-  -- or execute tools itself. The Python agent returns structured responses.
+  -- Store in history for conversation continuity
+  table.insert(state.history, { role = "user", content = input })
 
-  local send_ok, send_err
+  -- Build params for agent
   local params = {
     context = full_input,
     prompt = full_input,
@@ -486,7 +732,89 @@ local function submit_input()
     params.files = { [vim.fn.fnamemodify(current_file, ":t")] = content }
   end
 
-  agent_client.classify_intent(params.context, params.prompt, {}, function(intent, err)
+  -- ═══════════════════════════════════════════════════════════════════
+  -- ASK MODE: Direct LLM Q&A without tools
+  -- ═══════════════════════════════════════════════════════════════════
+  if state.mode == "ask" then
+    logs.info("ASK mode - direct Q&A")
+
+    -- Build system prompt for Q&A
+    local prompts = require("codetyper.prompts")
+    local system_prompt = prompts.system.ask or "You are a helpful coding assistant."
+
+    if current_file ~= "" then
+      system_prompt = system_prompt .. "\n\nCurrent file: " .. current_file
+      system_prompt = system_prompt .. "\nLanguage: " .. (context.language or "unknown")
+    end
+
+    -- Build conversation history context
+    local history_context = ""
+    if #state.history > 1 then
+      history_context = "\n\n=== CONVERSATION HISTORY ===\n"
+      local start_i = math.max(1, #state.history - 8)
+      for i = start_i, #state.history - 1 do
+        local m = state.history[i]
+        local role_label = m.role == "assistant" and "ASSISTANT" or "USER"
+        history_context = history_context .. role_label .. ": " .. (m.content or "") .. "\n"
+      end
+      history_context = history_context .. "=== END HISTORY ===\n\n"
+    end
+
+    -- Build full prompt
+    local ask_prompt = history_context .. "USER QUESTION: " .. input
+
+    if file_context ~= "" then
+      ask_prompt = ask_prompt .. "\n\nATTACHED FILES:" .. file_context
+    end
+
+    -- Add current file content if no explicit attachments
+    if file_count == 0 and context.file_content and context.file_content ~= "" then
+      ask_prompt = ask_prompt .. "\n\nCURRENT FILE:\n```\n" .. context.file_content .. "\n```"
+    end
+
+    local request_context = {
+      file_content = file_context ~= "" and file_context or context.file_content,
+      language = context.language,
+      prompt_type = "ask",
+      file_path = current_file,
+    }
+
+    -- Call LLM directly
+    local client = llm.get_client()
+    logs.info("ASK: " .. input:sub(1, 60) .. "...")
+
+    client.generate(ask_prompt, request_context, function(response, llm_err)
+      vim.schedule(function()
+        if llm_err then
+          add_message("system", "Error: " .. llm_err, "DiagnosticError")
+          logs.error("LLM error: " .. llm_err)
+          M.focus_input()
+          return
+        end
+
+        if response then
+          logs.info("Response: " .. response:sub(1, 80) .. "...")
+          table.insert(state.history, { role = "assistant", content = response })
+          add_message("assistant", response)
+        else
+          add_message("system", "No response received.", "DiagnosticWarn")
+        end
+
+        M.focus_input()
+      end)
+    end)
+
+    return
+  end
+
+  -- ═══════════════════════════════════════════════════════════════════
+  -- AGENT MODE: Intent classification + plan building with tools
+  -- ═══════════════════════════════════════════════════════════════════
+  logs.info("AGENT mode - with tools")
+
+  -- Extract file names for intent classification (it expects list of paths, not content)
+  local file_list = vim.tbl_keys(params.files or {})
+  agent_client.classify_intent(params.context, params.prompt, file_list, function(intent, err)
     if err then
       add_message("system", "Agent error: " .. err, "DiagnosticError")
       logs.error("Agent classify_intent error: " .. err)
@@ -494,36 +822,71 @@ local function submit_input()
     end
 
     -- Display intent summary from agent
-    local intent_text = string.format("Intent: s (confidence: .2f)", intent.intent or "unknown", intent.confidence or 0)
+    local intent_text = string.format("Intent: %s (confidence: %.2f)", intent.intent or "unknown", intent.confidence or 0)
     add_message("system", intent_text)
 
-    -- Request plan from the agent if intent indicates modification
-    if intent.intent and intent.intent ~= "ask" and not intent.needs_clarification then
-      agent_client.build_plan(intent.intent, params.context, params.files, function(plan, perr)
-        if perr then
-          add_message("system", "Agent plan error: " .. perr, "DiagnosticError")
-          logs.error("Agent build_plan error: " .. perr)
-          return
+    -- Handle intent classification result
+    if intent.needs_clarification then
+      -- Show clarification questions if any
+      add_message("assistant", intent.reasoning or "I need some clarification.")
+      if intent.clarification_questions and #intent.clarification_questions > 0 then
+        for _, q in ipairs(intent.clarification_questions) do
+          add_message("assistant", "? " .. q)
         end
-
-        -- Present plan summary to user
-        local formatted = require("codetyper.transport.protocol").parse_plan_response(plan)
-        add_message("assistant", "Plan: " .. (formatted and "(see plan)" or "(no plan)"))
-
-        -- If plan needs clarification, show questions
-        if plan.needs_clarification then
-          for _, q in ipairs(plan.clarification_questions or {}) do
-            add_message("assistant", "Clarify: " .. q)
-          end
-        else
-          -- Ask user whether to execute (chat MUST NOT decide) — present prompt to user
-          add_message("system", "Plan ready. Type /execute to run the plan, or /review to inspect.")
-        end
-      end)
-    else
-      -- For non-action intents, present agent's response text (if any)
-      add_message("assistant", intent.reasoning or "Agent classified the intent.")
+      end
+      add_message("system", "Please clarify, or type /proceed to continue anyway.")
+      return
     end
+
+    -- For "ask" intent, just respond with reasoning
+    if intent.intent == "ask" then
+      local response = intent.reasoning or "This appears to be a question."
+      table.insert(state.history, { role = "assistant", content = response })
+      add_message("assistant", response)
+      return
+    end
+
+    -- For action intents (code, refactor, fix, etc.), build a plan
+    agent_client.build_plan(intent.intent, params.context, params.files, function(plan, perr)
+      if perr then
+        add_message("system", "Agent plan error: " .. perr, "DiagnosticError")
+        logs.error("Agent build_plan error: " .. perr)
+        return
+      end
+
+      -- Parse and store the plan
+      local parsed_plan = require("codetyper.transport.protocol").parse_plan_response(plan)
+      state.last_plan = parsed_plan
+      state.last_context = params.context
+      state.last_files = params.files
+
+      -- Present plan summary to user
+      local steps = parsed_plan.steps or {}
+      if #steps == 0 then
+        add_message("assistant", "No plan steps generated.")
+        return
+      end
+
+      add_message("assistant", string.format("Plan (%d steps):", #steps))
+      for i, step in ipairs(steps) do
+        local step_desc = string.format("  %d. [%s] %s", i, step.action or "?", step.target or "?")
+        if step.params and step.params.content then
+          step_desc = step_desc .. string.format(" (%d chars)", #step.params.content)
+        end
+        add_message("system", step_desc)
+      end
+
+      -- If plan needs clarification, show questions
+      if parsed_plan.needs_clarification then
+        for _, q in ipairs(parsed_plan.clarification_questions or {}) do
+          add_message("assistant", "Clarify: " .. q)
+        end
+        add_message("system", "Please clarify, or type /proceed to continue anyway.")
+      else
+        -- Ask user whether to execute (chat MUST NOT decide) — present prompt to user
+        add_message("system", "Plan ready. Type /execute to run, or /review to inspect.")
+      end
+    end)
   end)
 end
 
@@ -821,16 +1184,40 @@ local function update_logs_title()
   end
 end
 
---- Open the agent UI
----@param selection table|nil Visual selection context {text, start_line, end_line, filepath, filename, language}
-function M.open(selection)
+--- Open the unified chat UI
+---@param opts? table|{mode?: ChatMode, selection?: table} Options or visual selection for backwards compat
+function M.open(opts)
+  -- Handle backwards compatibility: if opts is a selection table, convert it
+  local selection = nil
+  local mode = nil
+
+  if opts then
+    if opts.text ~= nil then
+      -- Old API: M.open(selection)
+      selection = opts
+    else
+      -- New API: M.open({ mode = "ask", selection = ... })
+      mode = opts.mode
+      selection = opts.selection
+    end
+  end
+
   if state.is_open then
-    -- If already open and new selection provided, add it as context
+    -- If mode specified, switch to it
+    if mode then
+      M.set_mode(mode)
+    end
+    -- If selection provided, add it as context
     if selection and selection.text and selection.text ~= "" then
       M.add_selection_context(selection)
     end
     M.focus_input()
     return
+  end
+
+  -- Set mode before opening
+  if mode then
+    state.mode = mode
   end
 
   -- Store selection context
@@ -905,16 +1292,16 @@ function M.open(selection)
   vim.wo[state.logs_win].winfixwidth = true
   vim.wo[state.logs_win].cursorline = false
 
-  -- Set initial content for chat
+  -- Set initial content for chat using dynamic header
   vim.bo[state.chat_buf].modifiable = true
-  vim.api.nvim_buf_set_lines(state.chat_buf, 0, -1, false, {
-    "╔═══════════════════════════════════════════════════════════════╗",
-    "║  [AGENT MODE] Can read/write files                           ║",
-    "╠═══════════════════════════════════════════════════════════════╣",
-    "║  @ attach | C-f current file | <leader>d review changes      ║",
-    "╚═══════════════════════════════════════════════════════════════╝",
-    "",
-  })
+  local header = get_header_lines()
+  vim.api.nvim_buf_set_lines(state.chat_buf, 0, -1, false, header)
+
+  -- Apply header highlighting
+  local cfg = MODE_CONFIG[state.mode]
+  for i = 0, #header - 2 do
+    vim.api.nvim_buf_add_highlight(state.chat_buf, ns_chat, cfg.color, i, 0, -1)
+  end
   vim.bo[state.chat_buf].modifiable = false
 
   -- Set initial content for logs
@@ -942,6 +1329,7 @@ function M.open(selection)
   vim.keymap.set("i", "@", M.show_file_picker, input_opts)
   vim.keymap.set("i", "<C-d>", M.show_folder_picker, input_opts)
   vim.keymap.set({ "n", "i" }, "<C-f>", M.include_current_file, input_opts)
+  vim.keymap.set({ "n", "i" }, "<C-m>", M.toggle_mode, input_opts) -- Mode toggle
   vim.keymap.set("n", "<Tab>", M.focus_chat, input_opts)
   vim.keymap.set("n", "q", M.close, input_opts)
   vim.keymap.set("n", "<Esc>", M.close, input_opts)
@@ -955,6 +1343,7 @@ function M.open(selection)
   vim.keymap.set("n", "@", M.show_file_picker, chat_opts)
   vim.keymap.set("n", "<C-d>", M.show_folder_picker, chat_opts)
   vim.keymap.set("n", "<C-f>", M.include_current_file, chat_opts)
+  vim.keymap.set("n", "<C-m>", M.toggle_mode, chat_opts) -- Mode toggle
   vim.keymap.set("n", "<Tab>", M.focus_logs, chat_opts)
   vim.keymap.set("n", "q", M.close, chat_opts)
   vim.keymap.set("n", "<leader>d", M.show_diff_review, chat_opts)

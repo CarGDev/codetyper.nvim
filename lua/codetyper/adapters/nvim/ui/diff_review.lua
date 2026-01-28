@@ -291,7 +291,22 @@ function M.apply_approved()
 end
 
 --- Apply approved changes and close the UI
+--- If nothing is approved yet, auto-approve all first (better UX)
 function M.apply_and_close()
+  -- Check if anything is approved
+  local has_approved = false
+  for _, entry in ipairs(state.entries) do
+    if entry.approved then
+      has_approved = true
+      break
+    end
+  end
+
+  -- If nothing approved, auto-approve all (user pressed Enter expecting to accept)
+  if not has_approved and #state.entries > 0 then
+    M.approve_all()
+  end
+
   local applied_count = M.apply_approved()
   M.close()
   return applied_count
@@ -339,8 +354,8 @@ function M.open()
     vim.wo[win].cursorline = true
   end
 
-  -- Set up keymaps for list buffer
-  local list_opts = { buffer = state.list_buf, noremap = true, silent = true }
+  -- Set up keymaps for list buffer (nowait = true to prevent conflicts with other mappings)
+  local list_opts = { buffer = state.list_buf, noremap = true, silent = true, nowait = true }
   vim.keymap.set("n", "j", M.next, list_opts)
   vim.keymap.set("n", "k", M.prev, list_opts)
   vim.keymap.set("n", "<Down>", M.next, list_opts)
@@ -354,8 +369,8 @@ function M.open()
   vim.keymap.set("n", "q", M.close, list_opts)
   vim.keymap.set("n", "<Esc>", M.close, list_opts)
 
-  -- Set up keymaps for diff buffer
-  local diff_opts = { buffer = state.diff_buf, noremap = true, silent = true }
+  -- Set up keymaps for diff buffer (nowait = true to prevent conflicts with other mappings)
+  local diff_opts = { buffer = state.diff_buf, noremap = true, silent = true, nowait = true }
   vim.keymap.set("n", "j", M.next, diff_opts)
   vim.keymap.set("n", "k", M.prev, diff_opts)
   vim.keymap.set("n", "<Tab>", function() vim.api.nvim_set_current_win(state.list_win) end, diff_opts)
@@ -374,8 +389,19 @@ function M.open()
   update_file_list()
   update_diff_view()
 
-  -- Focus list window
+  -- Focus list window and ensure normal mode
   vim.api.nvim_set_current_win(state.list_win)
+  vim.cmd("stopinsert")
+
+  -- Show help in command line
+  vim.api.nvim_echo({
+    { "Diff Review: ", "Title" },
+    { "a", "Keyword" }, { "=approve ", "Normal" },
+    { "A", "Keyword" }, { "=all ", "Normal" },
+    { "j/k", "Keyword" }, { "=nav ", "Normal" },
+    { "<CR>", "Keyword" }, { "=apply ", "Normal" },
+    { "q", "Keyword" }, { "=close", "Normal" },
+  }, false, {})
 end
 
 --- Close the diff review UI

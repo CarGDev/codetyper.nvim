@@ -561,6 +561,40 @@ end
 ---@param current_file string Current file path
 ---@param skip_processed_check? boolean Skip the processed check (for manual mode)
 function M.process_single_prompt(bufnr, prompt, current_file, skip_processed_check)
+	if not prompt.content or prompt.content == "" then
+		return
+	end
+
+	-- Generate unique key for this prompt
+	local prompt_key = get_prompt_key(bufnr, prompt)
+
+	-- Skip if already processed (unless overridden for manual mode)
+	if not skip_processed_check and processed_prompts[prompt_key] then
+		return
+	end
+
+	-- Mark as processed
+	processed_prompts[prompt_key] = true
+
+	-- SIMPLIFIED FLOW: Direct LLM call → diff modal → accept/reject
+	vim.schedule(function()
+		local simple_inline = require("codetyper.features.inline.simple")
+
+		simple_inline.process({
+			bufnr = bufnr,
+			prompt_content = prompt.content,
+			prompt_range = {
+				start_line = prompt.start_line,
+				end_line = prompt.end_line,
+			},
+			file_path = current_file,
+		})
+	end)
+end
+
+--- Legacy process_single_prompt with full agent/patch routing
+--- Keep for reference or complex multi-file operations
+function M.process_single_prompt_legacy(bufnr, prompt, current_file, skip_processed_check)
 	local parser = require("codetyper.parser")
 
 	if not prompt.content or prompt.content == "" then
@@ -773,15 +807,8 @@ function M.check_all_prompts()
 		return
 	end
 
-	-- Check if scheduler is enabled
-	local codetyper = require("codetyper")
-	local ct_config = codetyper.get_config()
-	local scheduler_enabled = ct_config and ct_config.scheduler and ct_config.scheduler.enabled
-
-	if not scheduler_enabled then
-		return
-	end
-
+	-- Process each prompt - process_single_prompt handles routing to
+	-- inline agent mode or patch mode (scheduler) based on prompt content
 	for _, prompt in ipairs(prompts) do
 		M.process_single_prompt(bufnr, prompt, current_file)
 	end

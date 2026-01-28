@@ -313,6 +313,9 @@ function M.create_from_event(event, generated_code, confidence, strategy)
 		elseif event.intent.action == "append" then
 			injection_strategy = "append"
 			-- Will append to end of file
+		elseif event.intent.action == "prepend" then
+			injection_strategy = "prepend"
+			-- Will prepend to start of file
 		else
 			injection_strategy = "append"
 		end
@@ -735,6 +738,11 @@ function M.apply(patch)
 			else
 				inject_opts.range = { start_line = patch.injection_range.start_line }
 			end
+		elseif patch.injection_strategy == "append" or patch.injection_strategy == "prepend" then
+			-- For append/prepend strategies, we need to:
+			-- 1. Inject the content at end/start of file
+			-- 2. Remove the prompt tags separately (they won't be replaced by inject)
+			-- The tag removal will happen after inject.inject() is called
 		end
 
 		-- Log inline prompt handling
@@ -752,6 +760,22 @@ function M.apply(patch)
 
 		-- Use smart injection - handles imports automatically
 		inject_result = inject.inject(target_bufnr, patch.generated_code, inject_opts)
+
+		-- For append/prepend strategies on inline prompts, remove the tags separately
+		-- (they weren't replaced during injection since content went to end/start of file)
+		if is_inline_prompt and (patch.injection_strategy == "append" or patch.injection_strategy == "prepend") then
+			local removed = remove_prompt_tags(target_bufnr)
+			if removed > 0 then
+				pcall(function()
+					local logs = require("codetyper.adapters.nvim.ui.logs")
+					logs.add({
+						type = "info",
+						message = string.format("Removed %d prompt tag(s) after %s",
+							removed, patch.injection_strategy),
+					})
+				end)
+			end
+		end
 
 		-- Log injection details
 		pcall(function()
@@ -1016,10 +1040,11 @@ function M.apply_with_conflict(patch)
 		end
 
 		if applied_count > 0 then
-			-- NOTE: For inline prompts in conflict mode, we do NOT remove tags.
-			-- The tags are now part of the "OURS" section in the conflict markers.
-			-- When the user accepts the AI suggestion, tags go away naturally.
-			-- When they keep "OURS", they keep the tags to edit manually.
+			-- For inline prompts, remove the /@ @/ tags since they're not part of the conflict
+			-- (SEARCH/REPLACE matches don't include the tags)
+			if is_inline_prompt then
+				remove_prompt_tags(target_bufnr)
+			end
 
 			-- Process conflicts (highlight, keymaps) and show menu
 			conflict.process_and_show_menu(target_bufnr)
@@ -1047,8 +1072,12 @@ function M.apply_with_conflict(patch)
 		local end_line = patch.injection_range.end_line
 		local new_lines = vim.split(patch.generated_code, "\n", { plain = true })
 
-		-- NOTE: For inline prompts in conflict mode, we do NOT remove tags.
-		-- Tags become part of the "OURS" section in conflict markers.
+		-- For inline prompts, use the tag range to include tags in the conflict
+		-- so they get replaced when accepting
+		if is_inline_prompt and patch.prompt_tag_range then
+			start_line = patch.prompt_tag_range.start_line
+			end_line = patch.prompt_tag_range.end_line
+		end
 
 		-- Insert conflict markers
 		conflict.insert_conflict(target_bufnr, start_line, end_line, new_lines, "AI SUGGESTION")

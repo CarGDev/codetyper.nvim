@@ -1,10 +1,10 @@
 --- Tests for smart code injection with import handling
 
-describe("codetyper.agent.inject", function()
+describe("codetyper.inject", function()
 	local inject
 
 	before_each(function()
-		inject = require("codetyper.agent.inject")
+		inject = require("codetyper.inject")
 	end)
 
 	describe("parse_code", function()

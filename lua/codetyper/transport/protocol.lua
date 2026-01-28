@@ -89,10 +89,15 @@ end
 ---@param params table Parameters
 ---@return RPCRequest
 function M.make_request(method, params)
+  -- Ensure params is an object (dict), not array, for JSON encoding
+  local p = params
+  if not p or vim.tbl_isempty(p) then
+    p = vim.empty_dict()
+  end
   return {
     jsonrpc = "2.0",
     method = method,
-    params = params or {},
+    params = p,
     id = next_id(),
   }
 end
@@ -170,10 +175,15 @@ end
 ---@param files table<string, string> File path -> content map
 ---@return table
 function M.build_plan_request(intent, context, files)
+  -- Use vim.empty_dict() for empty files to ensure JSON encodes as {} not []
+  local files_param = files
+  if not files or vim.tbl_isempty(files) then
+    files_param = vim.empty_dict()
+  end
   return {
     intent = intent,
     context = context,
-    files = files,
+    files = files_param,
   }
 end
 
@@ -182,9 +192,14 @@ end
 ---@param original_files table<string, string> Original file contents
 ---@return table
 function M.build_validation_request(plan, original_files)
+  -- Use vim.empty_dict() for empty files to ensure JSON encodes as {} not []
+  local files_param = original_files
+  if not original_files or vim.tbl_isempty(original_files) then
+    files_param = vim.empty_dict()
+  end
   return {
     plan = plan,
-    original_files = original_files,
+    original_files = files_param,
   }
 end
 

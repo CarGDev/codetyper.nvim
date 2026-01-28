@@ -21,10 +21,12 @@ Methods:
     - ping: Health check
 """
 
+from __future__ import annotations
+
 import sys
 import signal
 import logging
-from typing import NoReturn
+from typing import NoReturn, Optional
 
 from .protocol import (
     parse_request,
@@ -56,7 +58,7 @@ def signal_handler(signum: int, frame) -> None:
     _running = False
 
 
-def read_request() -> str | None:
+def read_request() -> Optional[str]:
     """
     Read a single request from stdin.
 

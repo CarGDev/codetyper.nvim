@@ -4,6 +4,9 @@
 ---@brief ]]
 
 local Base = require("codetyper.core.tools.base")
+local job_utils = require("codetyper.support.job")
+local common = require("codetyper.core.tools.common")
+
 local description = require("codetyper.prompts.agents.bash").description
 local params = require("codetyper.params.agents.bash").params
 local returns = require("codetyper.params.agents.bash").returns
@@ -46,8 +49,9 @@ end
 ---@return string|nil result
 ---@return string|nil error
 function M.func(input, opts)
-	if not input.command then
-		return nil, "command is required"
+	local valid, err = common.validate_required(input, { "command" })
+	if not valid then
+		return nil, err
 	end
 
 	-- Safety check
@@ -58,82 +62,31 @@ function M.func(input, opts)
 
 	-- Confirmation required
 	if M.requires_confirmation and opts.confirm then
-		local confirmed = false
 		local confirm_error = nil
 
 		opts.confirm("Execute command: " .. input.command, function(ok)
 			if not ok then
 				confirm_error = "User declined command execution"
 			end
-			confirmed = ok
 		end)
 
-		-- Wait for confirmation (in async context, this would be handled differently)
 		if confirm_error then
 			return nil, confirm_error
 		end
 	end
 
-	-- Log the operation
-	if opts.on_log then
-		opts.on_log("Executing: " .. input.command)
+	common.log(opts, "Executing: " .. input.command)
+
+	local output, bash_err = job_utils.bash(input.command, {
+		cwd = input.cwd,
+		timeout = input.timeout,
+	})
+
+	if bash_err then
+		return common.return_result(opts, nil, bash_err)
 	end
 
-	-- Prepare command
-	local cwd = input.cwd or vim.fn.getcwd()
-	local timeout = input.timeout or 120000
-
-	-- Execute command
-	local output = ""
-	local exit_code = 0
-
-	local job_opts = {
-		command = "bash",
-		args = { "-c", input.command },
-		cwd = cwd,
-		on_stdout = function(_, data)
-			if data then
-				output = output .. table.concat(data, "\n")
-			end
-		end,
-		on_stderr = function(_, data)
-			if data then
-				output = output .. table.concat(data, "\n")
-			end
-		end,
-		on_exit = function(_, code)
-			exit_code = code
-		end,
-	}
-
-	-- Run synchronously with timeout
-	local Job = require("plenary.job")
-	local job = Job:new(job_opts)
-
-	job:sync(timeout)
-	exit_code = job.code or 0
-	output = table.concat(job:result() or {}, "\n")
-
-	-- Also get stderr
-	local stderr = table.concat(job:stderr_result() or {}, "\n")
-	if stderr and stderr ~= "" then
-		output = output .. "\n" .. stderr
-	end
-
-	-- Check result
-	if exit_code ~= 0 then
-		local error_msg = string.format("Command failed with exit code %d: %s", exit_code, output)
-		if opts.on_complete then
-			opts.on_complete(nil, error_msg)
-		end
-		return nil, error_msg
-	end
-
-	if opts.on_complete then
-		opts.on_complete(output, nil)
-	end
-
-	return output, nil
+	return common.return_result(opts, output, nil)
 end
 
 return M

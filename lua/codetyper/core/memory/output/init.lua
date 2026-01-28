@@ -107,34 +107,6 @@ Use this context to inform your responses, following established patterns and co
 ]]
 end
 
---- Get relevant context for code completion
----@param prefix string Code before cursor
----@param suffix string Code after cursor
----@param filepath string Current file
----@return string Context
-function M.for_completion(prefix, suffix, filepath)
-  -- Extract relevant terms from code
-  local terms = {}
-
-  -- Get function/class names
-  for word in prefix:gmatch("[A-Z][a-zA-Z0-9]+") do
-    table.insert(terms, word)
-  end
-  for word in prefix:gmatch("function%s+([a-zA-Z_][a-zA-Z0-9_]*)") do
-    table.insert(terms, word)
-  end
-
-  local query = table.concat(terms, " ")
-
-  return M.generate({
-    query = query,
-    file = filepath,
-    limit = 15,
-    max_tokens = 2000,
-    format = "compact",
-  })
-end
-
 --- Check if context is available
 ---@return boolean
 function M.has_context()

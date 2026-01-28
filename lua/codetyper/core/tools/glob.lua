@@ -4,6 +4,9 @@
 ---@brief ]]
 
 local Base = require("codetyper.core.tools.base")
+local path_utils = require("codetyper.support.path")
+local job_utils = require("codetyper.support.job")
+local common = require("codetyper.core.tools.common")
 
 ---@class CoderTool
 local M = setmetatable({}, Base)
@@ -58,49 +61,28 @@ M.requires_confirmation = false
 ---@return string|nil result
 ---@return string|nil error
 function M.func(input, opts)
-	if not input.pattern then
-		return nil, "pattern is required"
+	local valid, err = common.validate_required(input, { "pattern" })
+	if not valid then
+		return nil, err
 	end
 
-	-- Log the operation
-	if opts.on_log then
-		opts.on_log("Finding files: " .. input.pattern)
-	end
+	common.log(opts, "Finding files: " .. input.pattern)
 
-	-- Resolve base path
-	local base_path = input.path or vim.fn.getcwd()
-	if not vim.startswith(base_path, "/") then
-		base_path = vim.fn.getcwd() .. "/" .. base_path
-	end
-
+	local base_path = path_utils.resolve(input.path or vim.fn.getcwd())
 	local max_results = input.max_results or 100
 
-	-- Use vim.fn.glob or fd if available
 	local matches = {}
 
 	if vim.fn.executable("fd") == 1 then
 		-- Use fd for better performance
-		local Job = require("plenary.job")
-
-		-- Convert glob to fd pattern
-		local fd_pattern = input.pattern:gsub("%*%*/", ""):gsub("%*", ".*")
-
-		local job = Job:new({
-			command = "fd",
-			args = {
-				"--type",
-				"f",
-				"--max-results",
-				tostring(max_results),
-				"--glob",
-				input.pattern,
-				base_path,
-			},
-			cwd = base_path,
+		local files, fd_err = job_utils.fd(input.pattern, base_path, {
+			max_results = max_results,
 		})
 
-		job:sync(30000)
-		matches = job:result() or {}
+		if fd_err then
+			return nil, fd_err
+		end
+		matches = files
 	else
 		-- Fallback to vim.fn.globpath
 		local pattern = base_path .. "/" .. input.pattern
@@ -110,37 +92,22 @@ function M.func(input, opts)
 			if i > max_results then
 				break
 			end
-			-- Make paths relative to base_path
-			local relative = file:gsub("^" .. vim.pesc(base_path) .. "/", "")
+			local relative = path_utils.make_relative(file, base_path)
 			table.insert(matches, relative)
 		end
 	end
 
-	-- Clean up matches
+	-- Clean up matches - make relative if absolute
 	local cleaned = {}
 	for _, match in ipairs(matches) do
 		if match and match ~= "" then
-			-- Make relative if absolute
-			local relative = match
-			if vim.startswith(match, base_path) then
-				relative = match:sub(#base_path + 2)
-			end
+			local relative = path_utils.make_relative(match, base_path)
 			table.insert(cleaned, relative)
 		end
 	end
 
-	-- Return as JSON
-	local result = vim.json.encode({
-		matches = cleaned,
-		total = #cleaned,
-		truncated = #cleaned >= max_results,
-	})
-
-	if opts.on_complete then
-		opts.on_complete(result, nil)
-	end
-
-	return result, nil
+	local result = common.json_result(common.list_result(cleaned, max_results))
+	return common.return_result(opts, result, nil)
 end
 
 return M

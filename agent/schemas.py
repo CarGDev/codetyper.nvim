@@ -20,7 +20,7 @@ These schemas ensure type safety and provide automatic
 validation of all data crossing the Lua/Python boundary.
 """
 
-from typing import List, Dict, Optional, Any, Type, TypeVar, get_type_hints, get_origin, get_args
+from typing import List, Dict, Optional, Any, Type, TypeVar, Union, get_type_hints, get_origin, get_args
 from enum import Enum
 from dataclasses import dataclass, field, fields, is_dataclass
 
@@ -208,9 +208,15 @@ def _deserialize_field(field_type: Any, value: Any) -> Any:
 
     origin = get_origin(field_type)
 
-    # Handle Optional[X] (Union[X, None])
-    if origin is type(None) or (hasattr(origin, "__origin__") and origin.__origin__ is type(None)):
-        return None
+    # Handle Optional[X] (Union[X, None]) - unwrap to inner type
+    if origin is Union:
+        args = get_args(field_type)
+        # Filter out NoneType to get the actual type
+        non_none_args = [a for a in args if a is not type(None)]
+        if non_none_args:
+            # Recursively deserialize with the unwrapped type
+            return _deserialize_field(non_none_args[0], value)
+        return value
 
     # Handle List[X]
     if origin is list:

@@ -41,7 +41,6 @@ local defaults = {
     ollama_scout = true, -- Use Ollama as fast local scout for first attempt
     escalation_threshold = 0.7, -- Below this confidence, escalate to remote LLM
     max_concurrent = 2, -- Maximum concurrent workers
-    completion_delay_ms = 100, -- Wait after completion popup closes
     apply_delay_ms = 5000, -- Wait before removing tags and applying code (ms)
   },
   indexer = {
@@ -72,18 +71,6 @@ local defaults = {
     output = {
       max_tokens = 4000, -- Token budget for LLM context
       format = "compact", -- "compact"|"json"|"natural"
-    },
-  },
-  suggestion = {
-    enabled = true, -- Enable ghost text suggestions (Copilot-style)
-    auto_trigger = true, -- Auto-trigger on typing
-    debounce = 150, -- Debounce in milliseconds
-    use_copilot = true, -- Use copilot.lua suggestions when available, fallback to codetyper
-    keymap = {
-      accept = "<Tab>", -- Accept suggestion
-      next = "<M-]>", -- Next suggestion (Alt+])
-      prev = "<M-[>", -- Previous suggestion (Alt+[)
-      dismiss = "<C-]>", -- Dismiss suggestion (Ctrl+])
     },
   },
 }

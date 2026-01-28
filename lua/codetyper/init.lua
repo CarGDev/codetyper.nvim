@@ -3,8 +3,7 @@
 --- Codetyper.nvim is a Neovim plugin that acts as your coding partner.
 --- It uses LLM APIs (OpenAI, Gemini, Copilot, Ollama) to help you
 --- write code faster using special `.coder.*` files and inline prompt tags.
---- Features an event-driven scheduler with confidence scoring and
---- completion-aware injection timing.
+--- Features an event-driven scheduler with confidence scoring.
 ---@brief ]]
 
 local M = {}
@@ -30,7 +29,6 @@ function M.setup(opts)
   local gitignore = require("codetyper.support.gitignore")
   local autocmds = require("codetyper.adapters.nvim.autocmds")
   local tree = require("codetyper.support.tree")
-  local completion = require("codetyper.features.completion.inline")
   local logs_panel = require("codetyper.adapters.nvim.ui.logs_panel")
 
   -- Register commands
@@ -38,9 +36,6 @@ function M.setup(opts)
 
   -- Setup autocommands
   autocmds.setup()
-
-  -- Setup file reference completion
-  completion.setup()
 
   -- Setup logs panel (handles VimLeavePre cleanup)
   logs_panel.setup()
@@ -61,12 +56,6 @@ function M.setup(opts)
   if M.config.brain and M.config.brain.enabled then
     local brain = require("codetyper.core.memory")
     brain.setup(M.config.brain)
-  end
-
-  -- Setup inline ghost text suggestions (Copilot-style)
-  if M.config.suggestion and M.config.suggestion.enabled then
-    local suggestion = require("codetyper.features.completion.suggestion")
-    suggestion.setup(M.config.suggestion)
   end
 
   -- Start the event-driven scheduler if enabled

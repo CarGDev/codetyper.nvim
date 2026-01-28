@@ -7,8 +7,8 @@ M.config = {
 	lint_after_accept = true,
 	-- Auto-fix lint errors without prompting
 	auto_fix_lint_errors = true,
-	-- Auto-show menu after injecting conflict
-	auto_show_menu = true,
+	-- Auto-show menu after injecting conflict (disabled by default)
+	auto_show_menu = false,
 	-- Auto-show menu for next conflict after resolving one
 	auto_show_next_menu = true,
 }

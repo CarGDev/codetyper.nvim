@@ -16,6 +16,7 @@ local M = {}
 local params = require("codetyper.params.agents.intent")
 local intent_patterns = params.intent_patterns
 local scope_patterns = params.scope_patterns
+local location_patterns = params.location_patterns or {}
 local prompts = require("codetyper.prompts.agents.intent")
 
 --- Detect intent from prompt content
@@ -63,11 +64,33 @@ function M.detect(prompt)
 	local confidence = 0.5 + (#matched_keywords * 0.15)
 	confidence = math.min(confidence, 1.0)
 
+	-- Determine final action - location patterns can override the default action
+	local action = config.action
+
+	-- Check for location-based action overrides (e.g., "at the end" -> append)
+	if location_patterns.append then
+		for _, pattern in ipairs(location_patterns.append) do
+			if lower:find(pattern, 1, true) then
+				action = "append"
+				break
+			end
+		end
+	end
+
+	if location_patterns.prepend then
+		for _, pattern in ipairs(location_patterns.prepend) do
+			if lower:find(pattern, 1, true) then
+				action = "prepend"
+				break
+			end
+		end
+	end
+
 	return {
 		type = best_match,
 		scope_hint = scope_hint,
 		confidence = confidence,
-		action = config.action,
+		action = action,
 		keywords = matched_keywords,
 	}
 end

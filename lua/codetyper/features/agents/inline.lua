@@ -9,6 +9,8 @@
 local M = {}
 
 local utils = require("codetyper.support.utils")
+local path_utils = require("codetyper.support.path")
+local string_match = require("codetyper.support.string_match")
 local diff_review = require("codetyper.adapters.nvim.ui.diff_review")
 
 --- Pending changes collected during agent run (before diff review)
@@ -28,16 +30,6 @@ local function read_file_content(path)
 	return nil
 end
 
---- Resolve path to absolute
----@param path string
----@return string
-local function resolve_path(path)
-	if not vim.startswith(path, "/") then
-		return vim.fn.getcwd() .. "/" .. path
-	end
-	return path
-end
-
 --- Preview-mode write handler: collects change instead of writing
 ---@param input {path: string, content: string}
 ---@param opts table
@@ -51,7 +43,7 @@ local function preview_write(input, opts)
 		return nil, "content is required"
 	end
 
-	local path = resolve_path(input.path)
+	local path = path_utils.resolve(input.path)
 	local original = read_file_content(path)
 	local operation = original and "edit" or "create"
 
@@ -69,81 +61,6 @@ local function preview_write(input, opts)
 	return true, nil
 end
 
---- Normalize line endings to LF
----@param str string
----@return string
-local function normalize_line_endings(str)
-	return str:gsub("\r\n", "\n"):gsub("\r", "\n")
-end
-
---- Find match using multiple strategies (simplified version)
----@param content string
----@param old_str string
----@return number|nil start_pos
----@return number|nil end_pos
-local function find_match(content, old_str)
-	-- Strategy 1: Exact match
-	local pos = content:find(old_str, 1, true)
-	if pos then
-		return pos, pos + #old_str - 1
-	end
-
-	-- Strategy 2: Whitespace-normalized match
-	local function normalize_ws(s)
-		return s:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
-	end
-
-	local norm_old = normalize_ws(old_str)
-	local lines = vim.split(content, "\n")
-
-	for i = 1, #lines do
-		local block = {}
-		for j = i, #lines do
-			table.insert(block, lines[j])
-			local block_text = table.concat(block, "\n")
-			local norm_block = normalize_ws(block_text)
-
-			if norm_block == norm_old then
-				local before = table.concat(vim.list_slice(lines, 1, i - 1), "\n")
-				local start_pos = #before + (i > 1 and 2 or 1)
-				local end_pos = start_pos + #block_text - 1
-				return start_pos, end_pos
-			end
-
-			if #norm_block > #norm_old then
-				break
-			end
-		end
-	end
-
-	-- Strategy 3: Indentation-flexible match
-	local function strip_indent(s)
-		local l = vim.split(s, "\n")
-		local result = {}
-		for _, line in ipairs(l) do
-			table.insert(result, line:gsub("^%s+", ""))
-		end
-		return table.concat(result, "\n")
-	end
-
-	local stripped_old = strip_indent(old_str)
-	local old_lines = vim.split(old_str, "\n")
-	local num_old_lines = #old_lines
-
-	for i = 1, #lines - num_old_lines + 1 do
-		local block = vim.list_slice(lines, i, i + num_old_lines - 1)
-		local block_text = table.concat(block, "\n")
-
-		if strip_indent(block_text) == stripped_old then
-			local before = table.concat(vim.list_slice(lines, 1, i - 1), "\n")
-			local start_pos = #before + (i > 1 and 2 or 1)
-			local end_pos = start_pos + #block_text - 1
-			return start_pos, end_pos
-		end
-	end
-
-	return nil, nil
-end
 
 --- Preview-mode edit handler: collects change instead of writing
 ---@param input {path: string, old_string: string, new_string: string}
@@ -161,9 +78,9 @@ local function preview_edit(input, opts)
 		return nil, "new_string is required"
 	end
 
-	local path = resolve_path(input.path)
-	local old_str = normalize_line_endings(input.old_string)
-	local new_str = normalize_line_endings(input.new_string)
+	local path = path_utils.resolve(input.path)
+	local old_str = string_match.normalize_line_endings(input.old_string)
+	local new_str = string_match.normalize_line_endings(input.new_string)
 
 	-- Handle new file creation (empty old_string)
 	if old_str == "" then
@@ -192,16 +109,16 @@ local function preview_edit(input, opts)
 		return nil, "File not found: " .. input.path
 	end
 
-	content = normalize_line_endings(content)
+	content = string_match.normalize_line_endings(content)
 
-	-- Find match
-	local start_pos, end_pos = find_match(content, old_str)
-	if not start_pos then
+	-- Find match using shared multi-strategy matching
+	local match = string_match.find_match(content, old_str)
+	if not match then
 		return nil, "old_string not found in file"
 	end
 
 	-- Compute new content
-	local new_content = content:sub(1, start_pos - 1) .. new_str .. content:sub(end_pos + 1)
+	local new_content = content:sub(1, match.start_pos - 1) .. new_str .. content:sub(match.end_pos + 1)
 
 	-- Store in pending changes
 	local original = pending_changes[path] and pending_changes[path].original or read_file_content(path)
@@ -335,33 +252,88 @@ Project Root: %s
 Now execute the user's request.]], file_context, relative_path, project_root, opts.prompt_content)
 end
 
---- Remove the /@ @/ tags from the buffer after agent completes
+--- Remove ALL /@ @/ tags from the buffer after agent completes
+--- This version scans the entire buffer to handle cases where line numbers may have changed
 ---@param bufnr number
----@param start_line number
----@param end_line number
-local function remove_prompt_tags(bufnr, start_line, end_line)
+---@return number Number of tag regions removed
+local function remove_prompt_tags(bufnr)
 	if not vim.api.nvim_buf_is_valid(bufnr) then
-		return
+		return 0
 	end
 
+	local removed = 0
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	local new_lines = {}
 
-	for i, line in ipairs(lines) do
-		if i < start_line or i > end_line then
-			-- Outside tag region - keep as is
-			table.insert(new_lines, line)
-		else
-			-- Inside tag region - remove only the markers
-			local cleaned = line:gsub("/%@", ""):gsub("%@/", "")
-			-- Only include if there's content after removing markers
-			if cleaned:match("%S") then
-				table.insert(new_lines, cleaned)
+	-- Find and remove all /@ ... @/ regions (can be multiline)
+	local i = 1
+	while i <= #lines do
+		local line = lines[i]
+		local open_start = line:find("/@")
+
+		if open_start then
+			-- Found an opening tag, look for closing tag
+			local close_end = nil
+			local close_line = i
+
+			-- Check if closing tag is on same line
+			local after_open = line:sub(open_start + 2)
+			local same_line_close = after_open:find("@/")
+			if same_line_close then
+				-- Single line tag - remove just this portion
+				local before = line:sub(1, open_start - 1)
+				local after = line:sub(open_start + 2 + same_line_close + 1)
+				lines[i] = before .. after
+				-- If line is now empty or just whitespace, remove it
+				if lines[i]:match("^%s*$") then
+					table.remove(lines, i)
+				else
+					i = i + 1
+				end
+				removed = removed + 1
+			else
+				-- Multi-line tag - find the closing line
+				for j = i, #lines do
+					if lines[j]:find("@/") then
+						close_line = j
+						close_end = lines[j]:find("@/")
+						break
+					end
+				end
+
+				if close_end then
+					-- Remove lines from i to close_line
+					-- Keep content before /@ on first line and after @/ on last line
+					local before = lines[i]:sub(1, open_start - 1)
+					local after = lines[close_line]:sub(close_end + 2)
+
+					-- Remove the lines containing the tag
+					for _ = i, close_line do
+						table.remove(lines, i)
+					end
+
+					-- If there's content to keep, insert it back
+					local remaining = (before .. after):match("^%s*(.-)%s*$")
+					if remaining and remaining ~= "" then
+						table.insert(lines, i, remaining)
+						i = i + 1
+					end
+
+					removed = removed + 1
+				else
+					-- No closing tag found, skip this line
+					i = i + 1
+				end
 			end
+		else
+			i = i + 1
 		end
 	end
 
-	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, new_lines)
+	if removed > 0 then
+		vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+	end
+
+	return removed
 end
 
 --- Run the inline agent
@@ -567,7 +539,14 @@ function M.run(opts)
 						})
 					end)
 
-					remove_prompt_tags(agent_opts.bufnr, agent_opts.prompt_range.start_line, agent_opts.prompt_range.end_line)
+					remove_prompt_tags(agent_opts.bufnr)
+
+					-- Save the buffer to persist tag removal
+					if vim.api.nvim_buf_is_valid(agent_opts.bufnr) then
+						vim.api.nvim_buf_call(agent_opts.bufnr, function()
+							vim.cmd("silent write")
+						end)
+					end
 
 					if agent_opts.on_complete then
 						agent_opts.on_complete(true, nil)
@@ -612,18 +591,35 @@ function M.run(opts)
 						-- If any changes were applied, clean up the prompt tags
 						if applied_count > 0 then
 							vim.schedule(function()
-								remove_prompt_tags(agent_opts.bufnr, agent_opts.prompt_range.start_line, agent_opts.prompt_range.end_line)
+								-- Get source buffer's path
+								local source_path = vim.api.nvim_buf_get_name(agent_opts.bufnr)
+								local source_was_modified = false
 
-								-- Reload buffers that were modified
+								-- Reload all modified buffers
 								for _, entry in ipairs(entries) do
 									if entry.applied then
-										local bufnr = vim.fn.bufnr(entry.path)
-										if bufnr ~= -1 and vim.api.nvim_buf_is_valid(bufnr) then
-											vim.api.nvim_buf_call(bufnr, function()
+										local entry_bufnr = vim.fn.bufnr(entry.path)
+										if entry_bufnr ~= -1 and vim.api.nvim_buf_is_valid(entry_bufnr) then
+											vim.api.nvim_buf_call(entry_bufnr, function()
 												vim.cmd("edit!")
 											end)
 										end
+										-- Check if source buffer was modified
+										if entry.path == source_path then
+											source_was_modified = true
+										end
 									end
+								end
+
+								-- Now remove prompt tags from source buffer
+								-- (they may still exist if agent preserved them, or if source wasn't modified)
+								local tags_removed = remove_prompt_tags(agent_opts.bufnr)
+
+								-- Save the source buffer to persist tag removal (only if we removed tags)
+								if tags_removed > 0 and vim.api.nvim_buf_is_valid(agent_opts.bufnr) then
+									vim.api.nvim_buf_call(agent_opts.bufnr, function()
+										vim.cmd("silent write")
+									end)
 								end
 
 								utils.notify(string.format("Applied %d change(s)", applied_count), vim.log.levels.INFO)

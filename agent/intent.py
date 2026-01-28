@@ -65,10 +65,17 @@ INTENT_PATTERNS: Dict[IntentType, List[str]] = {
 STRONG_INDICATORS: Dict[str, IntentType] = {
     "write a function": IntentType.CODE,
     "create a class": IntentType.CODE,
+    "create a new": IntentType.CODE,
+    "create a": IntentType.CODE,
+    "build a": IntentType.CODE,
+    "make a": IntentType.CODE,
+    "generate a": IntentType.CODE,
     "implement": IntentType.CODE,
+    "write a": IntentType.CODE,
     "refactor": IntentType.REFACTOR,
     "fix the bug": IntentType.FIX,
     "fix this": IntentType.FIX,
+    "fix the": IntentType.FIX,
     "add tests": IntentType.TEST,
     "write tests": IntentType.TEST,
     "add documentation": IntentType.DOCUMENT,
@@ -96,7 +103,8 @@ class IntentClassifier:
     """
 
     # Minimum confidence to return a classification without clarification
-    CONFIDENCE_THRESHOLD = 0.7
+    # Lower threshold since complex prompts often have diluted scores
+    CONFIDENCE_THRESHOLD = 0.4
 
     # Weights for different signal sources
     WEIGHTS = {

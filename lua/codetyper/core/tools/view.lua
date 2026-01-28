@@ -4,6 +4,8 @@
 ---@brief ]]
 
 local Base = require("codetyper.core.tools.base")
+local path_utils = require("codetyper.support.path")
+local common = require("codetyper.core.tools.common")
 
 ---@class CoderTool
 local M = setmetatable({}, Base)
@@ -27,25 +29,18 @@ local MAX_CONTENT_SIZE = 200 * 1024 -- 200KB
 ---@return string|nil result
 ---@return string|nil error
 function M.func(input, opts)
-	if not input.path then
-		return nil, "path is required"
+	local valid, err = common.validate_required(input, { "path" })
+	if not valid then
+		return nil, err
 	end
 
-	-- Log the operation
-	if opts.on_log then
-		opts.on_log("Reading file: " .. input.path)
-	end
+	common.log(opts, "Reading file: " .. input.path)
 
 	-- Resolve path
-	local path = input.path
-	if not vim.startswith(path, "/") then
-		-- Relative path - resolve from project root
-		local root = vim.fn.getcwd()
-		path = root .. "/" .. path
-	end
+	local path = path_utils.resolve(input.path)
 
 	-- Check if file exists
-	local stat = vim.uv.fs_stat(path)
+	local stat = path_utils.stat(input.path)
 	if not stat then
 		return nil, "File not found: " .. input.path
 	end
@@ -96,7 +91,7 @@ function M.func(input, opts)
 	end
 
 	-- Return as JSON
-	local result = vim.json.encode({
+	local result = common.json_result({
 		content = content,
 		total_line_count = total_lines,
 		is_truncated = is_truncated,
@@ -104,11 +99,7 @@ function M.func(input, opts)
 		end_line = end_line,
 	})
 
-	if opts.on_complete then
-		opts.on_complete(result, nil)
-	end
-
-	return result, nil
+	return common.return_result(opts, result, nil)
 end
 
 return M

@@ -6,17 +6,17 @@
 
 local M = {}
 
+local path_utils = require("codetyper.support.path")
+local job_utils = require("codetyper.support.job")
+
 --- Read file content
 ---@param path string File path
 ---@return string|nil content
 ---@return string|nil error
 function M.read_file(path)
-	local full_path = vim.fn.expand(path)
-	if not vim.startswith(full_path, "/") then
-		full_path = vim.fn.getcwd() .. "/" .. full_path
-	end
+	local full_path = path_utils.resolve(path)
 
-	local stat = vim.uv.fs_stat(full_path)
+	local stat = path_utils.stat(full_path)
 	if not stat then
 		return nil, "File not found: " .. path
 	end
@@ -39,16 +39,10 @@ end
 ---@return boolean success
 ---@return string|nil error
 function M.write_file(path, content)
-	local full_path = vim.fn.expand(path)
-	if not vim.startswith(full_path, "/") then
-		full_path = vim.fn.getcwd() .. "/" .. full_path
-	end
+	local full_path = path_utils.resolve(path)
 
 	-- Ensure parent directory exists
-	local dir = vim.fn.fnamemodify(full_path, ":h")
-	if vim.fn.isdirectory(dir) == 0 then
-		vim.fn.mkdir(dir, "p")
-	end
+	path_utils.ensure_parent_dir(full_path)
 
 	-- Write file
 	local lines = vim.split(content, "\n", { plain = true })
@@ -137,10 +131,7 @@ end
 ---@return boolean success
 ---@return string|nil error
 function M.delete_file(path)
-	local full_path = vim.fn.expand(path)
-	if not vim.startswith(full_path, "/") then
-		full_path = vim.fn.getcwd() .. "/" .. full_path
-	end
+	local full_path = path_utils.resolve(path)
 
 	-- Close buffer if open
 	M.close_buffer(full_path)
@@ -158,12 +149,9 @@ end
 ---@return boolean success
 ---@return string|nil error
 function M.ensure_dir(path)
-	local full_path = vim.fn.expand(path)
-	if not vim.startswith(full_path, "/") then
-		full_path = vim.fn.getcwd() .. "/" .. full_path
-	end
+	local full_path = path_utils.resolve(path)
 
-	if vim.fn.isdirectory(full_path) == 1 then
+	if path_utils.is_directory(full_path) then
 		return true, nil
 	end
 
@@ -181,29 +169,7 @@ end
 ---@return string|nil output
 ---@return string|nil error
 function M.execute_command(command, timeout)
-	timeout = timeout or 30000
-
-	local Job = require("plenary.job")
-	local job = Job:new({
-		command = "bash",
-		args = { "-c", command },
-		cwd = vim.fn.getcwd(),
-	})
-
-	job:sync(timeout)
-	local exit_code = job.code or 0
-	local output = table.concat(job:result() or {}, "\n")
-	local stderr = table.concat(job:stderr_result() or {}, "\n")
-
-	if stderr and stderr ~= "" then
-		output = output .. "\n" .. stderr
-	end
-
-	if exit_code ~= 0 then
-		return nil, string.format("Command failed (exit %d): %s", exit_code, output)
-	end
-
-	return output, nil
+	return job_utils.bash(command, { timeout = timeout or 30000 })
 end
 
 --- Reload a buffer if it's open

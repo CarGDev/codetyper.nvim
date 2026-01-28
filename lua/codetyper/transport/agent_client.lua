@@ -52,8 +52,13 @@ local client = nil
 ---@return string
 local function get_agent_dir()
   -- Get the plugin directory
+  -- Path: lua/codetyper/transport/agent_client.lua
+  -- :h removes filename -> lua/codetyper/transport
+  -- :h:h removes transport -> lua/codetyper
+  -- :h:h:h removes codetyper -> lua
+  -- :h:h:h:h removes lua -> plugin root
   local source = debug.getinfo(1, "S").source:sub(2)
-  local plugin_dir = vim.fn.fnamemodify(source, ":h:h:h:h:h")
+  local plugin_dir = vim.fn.fnamemodify(source, ":h:h:h:h")
   return plugin_dir
 end
 
@@ -111,6 +116,13 @@ end
 ---@return boolean success
 function M.start(cli)
   cli = cli or client
+
+  -- Lazy initialization: create client if not initialized
+  if not cli then
+    M.setup()
+    cli = client
+  end
+
   if not cli then
     log("error", "Client not initialized")
     return false
@@ -134,14 +146,20 @@ function M.start(cli)
 
   -- Build spawn options
   local agent_dir = get_agent_dir()
+
+  -- Build environment: inherit current env and add our variables
+  local env = {}
+  for k, v in pairs(vim.fn.environ()) do
+    table.insert(env, k .. "=" .. v)
+  end
+  table.insert(env, "PYTHONPATH=" .. agent_dir)
+  table.insert(env, "PYTHONUNBUFFERED=1")
+
   local spawn_opts = {
     args = { "-m", cli.config.agent_module },
     stdio = { cli.stdin, cli.stdout, cli.stderr },
     cwd = agent_dir,
-    env = {
-      "PYTHONPATH=" .. agent_dir,
-      "PYTHONUNBUFFERED=1",
-    },
+    env = env,
   }
 
   -- Spawn process
@@ -204,9 +222,13 @@ function M.stop(cli)
 
   cli.running = false
 
-  -- Cancel pending requests
-  for id, callback in pairs(cli.pending) do
-    callback(nil, "Agent stopped")
+  -- Cancel pending requests and their timers
+  for id, pending in pairs(cli.pending) do
+    if pending.timer then
+      pending.timer:stop()
+      pending.timer:close()
+    end
+    pending.callback(nil, "Agent stopped")
     cli.pending[id] = nil
   end
 
@@ -245,9 +267,13 @@ function M._on_exit(cli, code, signal)
 
   log("info", string.format("Agent exited (code: %d, signal: %d)", code or 0, signal or 0))
 
-  -- Cancel pending requests
-  for id, callback in pairs(cli.pending) do
-    callback(nil, "Agent process exited")
+  -- Cancel pending requests and their timers
+  for id, pending in pairs(cli.pending) do
+    if pending.timer then
+      pending.timer:stop()
+      pending.timer:close()
+    end
+    pending.callback(nil, "Agent process exited")
     cli.pending[id] = nil
   end
 
@@ -289,9 +315,14 @@ end
 ---@param cli AgentClient
 ---@param data string
 function M._on_stderr(cli, data)
-  -- Forward to log callback
+  -- Forward to log callback - use info level so it's visible
   for line in data:gmatch("[^\n]+") do
-    log("debug", line)
+    -- Check if it's an error message
+    if line:match("Error") or line:match("error") or line:match("Traceback") or line:match("Exception") then
+      log("error", "[agent] " .. line)
+    else
+      log("info", "[agent] " .. line)
+    end
   end
 end
 
@@ -307,20 +338,25 @@ function M._on_response(cli, line)
 
   -- Find pending request
   local id = response.id
-  local callback = cli.pending[id]
+  local pending = cli.pending[id]
 
-  if not callback then
+  if not pending then
     log("warn", "Received response for unknown request: " .. tostring(id))
     return
   end
 
+  -- Cancel timeout timer and remove from pending
+  if pending.timer then
+    pending.timer:stop()
+    pending.timer:close()
+  end
   cli.pending[id] = nil
 
   -- Call callback
   if protocol.is_error(response) then
-    callback(nil, protocol.get_error_message(response))
+    pending.callback(nil, protocol.get_error_message(response))
   else
-    callback(response.result, nil)
+    pending.callback(response.result, nil)
   end
 
   -- Process queue
@@ -352,24 +388,28 @@ function M._send_request(cli, request, callback)
     return
   end
 
-  -- Store callback
-  cli.pending[request.id] = callback
-
-  -- Send request
-  local json = protocol.serialize_request(request)
-  cli.stdin:write(json .. "\n")
-
-  -- Set timeout
+  -- Set timeout timer
   local timeout_timer = vim.loop.new_timer()
   timeout_timer:start(cli.config.timeout, 0, function()
     timeout_timer:close()
     vim.schedule(function()
-      if cli.pending[request.id] then
+      local pending = cli.pending[request.id]
+      if pending then
         cli.pending[request.id] = nil
-        callback(nil, "Request timed out")
+        pending.callback(nil, "Request timed out")
       end
     end)
   end)
+
+  -- Store callback and timer together so we can cancel timer on response
+  cli.pending[request.id] = {
+    callback = callback,
+    timer = timeout_timer,
+  }
+
+  -- Send request
+  local json = protocol.serialize_request(request)
+  cli.stdin:write(json .. "\n")
 end
 
 ---Send a request to the agent
@@ -379,6 +419,12 @@ end
 ---@param cli? AgentClient Client instance (uses singleton if nil)
 function M.send_request(method, params, callback, cli)
   cli = cli or client
+
+  -- Lazy initialization: create client if not initialized
+  if not cli then
+    M.setup()
+    cli = client
+  end
 
   if not cli then
     callback(nil, "Client not initialized")
@@ -491,7 +537,8 @@ function M.ping(callback)
       callback(false, err)
       return
     end
-    callback(result and result.status == "ok", nil)
+    local ok = result and type(result) == "table" and result.status == "ok"
+    callback(ok, nil)
   end)
 end
 

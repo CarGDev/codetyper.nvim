@@ -4,6 +4,8 @@
 ---@brief ]]
 
 local Base = require("codetyper.core.tools.base")
+local path_utils = require("codetyper.support.path")
+local common = require("codetyper.core.tools.common")
 local file_ops = require("codetyper.core.tools.file_ops")
 local description = require("codetyper.prompts.agents.write").description
 local params = require("codetyper.params.agents.write")
@@ -23,29 +25,17 @@ M.requires_confirmation = true
 ---@return boolean|nil result
 ---@return string|nil error
 function M.func(input, opts)
-	if not input.path then
-		return nil, "path is required"
-	end
-	if not input.content then
-		return nil, "content is required"
+	local valid, err = common.validate_required(input, { "path", "content" })
+	if not valid then
+		return nil, err
 	end
 
-	-- Log the operation
-	if opts.on_log then
-		opts.on_log("Writing file: " .. input.path)
-	end
+	common.log(opts, "Writing file: " .. input.path)
 
-	-- Resolve path
-	local path = input.path
-	if not vim.startswith(path, "/") then
-		path = vim.fn.getcwd() .. "/" .. path
-	end
+	local path = path_utils.resolve(input.path)
 
 	-- Create parent directories
-	local dir = vim.fn.fnamemodify(path, ":h")
-	if vim.fn.isdirectory(dir) == 0 then
-		vim.fn.mkdir(dir, "p")
-	end
+	path_utils.ensure_parent_dir(path)
 
 	-- Write the file
 	local lines = vim.split(input.content, "\n", { plain = true })
@@ -58,11 +48,7 @@ function M.func(input, opts)
 	-- Post-write processing: lint, format, save
 	file_ops.post_write_process(path, opts.on_log)
 
-	if opts.on_complete then
-		opts.on_complete(true, nil)
-	end
-
-	return true, nil
+	return common.return_result(opts, true, nil)
 end
 
 return M

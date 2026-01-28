@@ -1,7 +1,7 @@
----@mod codetyper.agent.scheduler Event scheduler with completion-awareness
+---@mod codetyper.agent.scheduler Event-driven scheduler
 ---@brief [[
 --- Central orchestrator for the event-driven system.
---- Handles dispatch, escalation, and completion-safe injection.
+--- Handles dispatch, escalation, and safe injection.
 ---@brief ]]
 
 local M = {}
@@ -457,9 +457,10 @@ end
 --- Track if we're already waiting to flush (avoid spam logs)
 local waiting_to_flush = false
 
---- Schedule patch flush after delay (completion safety)
+--- Schedule patch flush after delay (injection safety)
 --- Will keep retrying until safe to inject or no pending patches
 function M.schedule_patch_flush()
+	local INJECTION_DELAY_MS = 100 -- Small delay to check if safe to inject
 	vim.defer_fn(function()
 		-- Check if there are any pending patches
 		local pending = patch.get_pending()
@@ -497,7 +498,7 @@ function M.schedule_patch_flush()
 			-- Retry after a delay - keep waiting for user to finish typing
 			M.schedule_patch_flush()
 		end
-	end, state.config.completion_delay_ms)
+	end, INJECTION_DELAY_MS)
 end
 
 --- Main scheduler loop
@@ -534,7 +535,7 @@ local function setup_autocmds()
 				if not M.is_completion_visible() then
 					patch.flush_pending_smart()
 				end
-			end, state.config.completion_delay_ms)
+			end, 100) -- Small delay to ensure popup is closed
 		end,
 		desc = "Flush pending patches on InsertLeave",
 	})

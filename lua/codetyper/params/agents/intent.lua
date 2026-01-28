@@ -158,4 +158,33 @@ M.scope_patterns = {
 	["here"] = nil,
 }
 
+--- Location patterns that override the action
+--- These patterns indicate WHERE the code should be placed
+M.location_patterns = {
+	-- Patterns that indicate "append to end"
+	append = {
+		"at the end",
+		"at end",
+		"to the end",
+		"to end",
+		"at the bottom",
+		"at bottom",
+		"after everything",
+		"below everything",
+		"append",
+	},
+	-- Patterns that indicate "insert at beginning"
+	prepend = {
+		"at the beginning",
+		"at beginning",
+		"at the start",
+		"at start",
+		"at the top",
+		"at top",
+		"before everything",
+		"above everything",
+		"prepend",
+	},
+}
+
 return M
