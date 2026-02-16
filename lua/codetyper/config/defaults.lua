@@ -34,16 +34,7 @@ local defaults = {
     file_pattern = "*.coder.*",
   },
   auto_gitignore = true,
-  auto_open_ask = true, -- Auto-open Ask panel on startup
   auto_index = false, -- Auto-create coder companion files on file open
-  scheduler = {
-    enabled = true, -- Enable event-driven scheduler
-    ollama_scout = true, -- Use Ollama as fast local scout for first attempt
-    escalation_threshold = 0.7, -- Below this confidence, escalate to remote LLM
-    max_concurrent = 2, -- Maximum concurrent workers
-    completion_delay_ms = 100, -- Wait after completion popup closes
-    apply_delay_ms = 5000, -- Wait before removing tags and applying code (ms)
-  },
   indexer = {
     enabled = true, -- Enable project indexing
     auto_index = true, -- Index files on save

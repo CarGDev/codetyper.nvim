@@ -234,239 +234,6 @@ local function cmd_gitignore()
   gitignore.force_update()
 end
 
---- Open ask panel (with optional visual selection)
----@param selection table|nil Visual selection info
-local function cmd_ask(selection)
-  local ask = require("codetyper.features.ask.engine")
-  ask.open(selection)
-end
-
---- Close ask panel
-local function cmd_ask_close()
-  local ask = require("codetyper.features.ask.engine")
-  ask.close()
-end
-
---- Toggle ask panel
-local function cmd_ask_toggle()
-  local ask = require("codetyper.features.ask.engine")
-  ask.toggle()
-end
-
---- Clear ask history
-local function cmd_ask_clear()
-  local ask = require("codetyper.features.ask.engine")
-  ask.clear_history()
-end
-
---- Open agent panel (with optional visual selection)
----@param selection table|nil Visual selection info
-local function cmd_agent(selection)
-  local agent_ui = require("codetyper.adapters.nvim.ui.chat")
-  agent_ui.open(selection)
-end
-
---- Close agent panel
-local function cmd_agent_close()
-  local agent_ui = require("codetyper.adapters.nvim.ui.chat")
-  agent_ui.close()
-end
-
---- Toggle agent panel
-local function cmd_agent_toggle()
-  local agent_ui = require("codetyper.adapters.nvim.ui.chat")
-  agent_ui.toggle()
-end
-
---- Stop running agent
-local function cmd_agent_stop()
-  local agent = require("codetyper.features.agents")
-  if agent.is_running() then
-    agent.stop()
-    utils.notify("Agent stopped")
-  else
-    utils.notify("No agent running", vim.log.levels.INFO)
-  end
-end
-
---- Run the agentic loop with a task
----@param task string The task to accomplish
----@param agent_name? string Optional agent name
-local function cmd_agentic_run(task, agent_name)
-  local agentic = require("codetyper.features.agents.engine")
-  local logs_panel = require("codetyper.adapters.nvim.ui.logs_panel")
-  local logs = require("codetyper.adapters.nvim.ui.logs")
-
-  -- Open logs panel
-  logs_panel.open()
-
-  logs.info("Starting agentic task: " .. task:sub(1, 50) .. "...")
-  utils.notify("Running agentic task...", vim.log.levels.INFO)
-
-  -- Get current file for context
-  local current_file = vim.fn.expand("%:p")
-  local files = {}
-  if current_file ~= "" then
-    table.insert(files, current_file)
-  end
-
-  agentic.run({
-    task = task,
-    files = files,
-    agent = agent_name or "coder",
-    on_status = function(status)
-      logs.thinking(status)
-    end,
-    on_tool_start = function(name, args)
-      logs.info("Tool: " .. name)
-    end,
-    on_tool_end = function(name, result, err)
-      if err then
-        logs.error(name .. " failed: " .. err)
-      else
-        logs.debug(name .. " completed")
-      end
-    end,
-    on_file_change = function(path, action)
-      logs.info("File " .. action .. ": " .. path)
-    end,
-    on_message = function(msg)
-      if msg.role == "assistant" and type(msg.content) == "string" and msg.content ~= "" then
-        logs.thinking(msg.content:sub(1, 100) .. "...")
-      end
-    end,
-    on_complete = function(result, err)
-      if err then
-        logs.error("Task failed: " .. err)
-        utils.notify("Agentic task failed: " .. err, vim.log.levels.ERROR)
-      else
-        logs.info("Task completed successfully")
-        utils.notify("Agentic task completed!", vim.log.levels.INFO)
-        if result and result ~= "" then
-          -- Show summary in a float
-          vim.schedule(function()
-            vim.notify("Result:\n" .. result:sub(1, 500), vim.log.levels.INFO)
-          end)
-        end
-      end
-    end,
-  })
-end
-
---- List available agents
-local function cmd_agentic_list()
-  local agentic = require("codetyper.features.agents.engine")
-  local agents = agentic.list_agents()
-
-  local lines = {
-    "Available Agents",
-    "================",
-    "",
-  }
-
-  for _, agent in ipairs(agents) do
-    local badge = agent.builtin and "[builtin]" or "[custom]"
-    table.insert(lines, string.format("  %s %s", agent.name, badge))
-    table.insert(lines, string.format("    %s", agent.description))
-    table.insert(lines, "")
-  end
-
-  table.insert(lines, "Use :CoderAgenticRun <task> [agent] to run a task")
-  table.insert(lines, "Use :CoderAgenticInit to create custom agents")
-
-  utils.notify(table.concat(lines, "\n"))
-end
-
---- Initialize .coder/agents/ and .coder/rules/ directories
-local function cmd_agentic_init()
-  local agentic = require("codetyper.features.agents.engine")
-  agentic.init()
-
-  local agents_dir = vim.fn.getcwd() .. "/.coder/agents"
-  local rules_dir = vim.fn.getcwd() .. "/.coder/rules"
-
-  local lines = {
-    "Initialized Coder directories:",
-    "",
-    "  " .. agents_dir,
-    "    - example.md (template for custom agents)",
-    "",
-    "  " .. rules_dir,
-    "    - code-style.md (template for project rules)",
-    "",
-    "Edit these files to customize agent behavior.",
-    "Create new .md files to add more agents/rules.",
-  }
-
-  utils.notify(table.concat(lines, "\n"))
-end
-
---- Show chat type switcher modal (Ask/Agent)
-local function cmd_type_toggle()
-  local switcher = require("codetyper.chat_switcher")
-  switcher.show()
-end
-
---- Toggle logs panel
-local function cmd_logs_toggle()
-  local logs_panel = require("codetyper.adapters.nvim.ui.logs_panel")
-  logs_panel.toggle()
-end
-
---- Show scheduler status and queue info
-local function cmd_queue_status()
-  local scheduler = require("codetyper.core.scheduler.scheduler")
-  local queue = require("codetyper.core.events.queue")
-  local parser = require("codetyper.parser")
-
-  local status = scheduler.status()
-  local bufnr = vim.api.nvim_get_current_buf()
-  local filepath = vim.fn.expand("%:p")
-
-  local lines = {
-    "Scheduler Status",
-    "================",
-    "",
-    "Running: " .. (status.running and "yes" or "NO"),
-    "Paused: " .. (status.paused and "yes" or "no"),
-    "Active Workers: " .. status.active_workers,
-    "",
-    "Queue Stats:",
-    "  Pending: " .. status.queue_stats.pending,
-    "  Processing: " .. status.queue_stats.processing,
-    "  Completed: " .. status.queue_stats.completed,
-    "  Cancelled: " .. status.queue_stats.cancelled,
-    "",
-  }
-
-  -- Check current buffer for prompts
-  if filepath ~= "" then
-    local prompts = parser.find_prompts_in_buffer(bufnr)
-    table.insert(lines, "Current Buffer: " .. vim.fn.fnamemodify(filepath, ":t"))
-    table.insert(lines, "  Prompts found: " .. #prompts)
-    for i, p in ipairs(prompts) do
-      local preview = p.content:sub(1, 30):gsub("\n", " ")
-      table.insert(lines, string.format("    %d. Line %d: %s...", i, p.start_line, preview))
-    end
-  end
-
-  utils.notify(table.concat(lines, "\n"))
-end
-
---- Manually trigger queue processing for current buffer
-local function cmd_queue_process()
-  local autocmds = require("codetyper.adapters.nvim.autocmds")
-  local logs_panel = require("codetyper.adapters.nvim.ui.logs_panel")
-
-  -- Open logs panel to show progress
-  logs_panel.open()
-
-  -- Check all prompts in current buffer
-  autocmds.check_all_prompts()
-
-  utils.notify("Triggered queue processing for current buffer")
-end
-
 --- Switch focus between coder and target windows
 local function cmd_focus()
   if not window.is_open() then
@@ -484,12 +251,9 @@ end
 
 --- Transform inline /@ @/ tags in current file
 --- Works on ANY file, not just .coder.* files
---- Uses the same processing logic as automatic mode for consistent results
 local function cmd_transform()
   local parser = require("codetyper.parser")
   local autocmds = require("codetyper.adapters.nvim.autocmds")
-  local logs_panel = require("codetyper.adapters.nvim.ui.logs_panel")
-  local logs = require("codetyper.adapters.nvim.ui.logs")
 
   local bufnr = vim.api.nvim_get_current_buf()
   local filepath = vim.fn.expand("%:p")
@@ -507,9 +271,7 @@ local function cmd_transform()
     return
   end
 
-  -- Open the logs panel to show generation progress
-  logs_panel.open()
-  logs.info("Transform started: " .. #prompts .. " prompt(s) in " .. vim.fn.fnamemodify(filepath, ":t"))
+  utils.notify("Transforming " .. #prompts .. " prompt(s)...", vim.log.levels.INFO)
 
   utils.notify("Found " .. #prompts .. " prompt(s) to transform...", vim.log.levels.INFO)
 
@@ -528,8 +290,6 @@ end
 local function cmd_transform_range(start_line, end_line)
   local parser = require("codetyper.parser")
   local autocmds = require("codetyper.adapters.nvim.autocmds")
-  local logs_panel = require("codetyper.adapters.nvim.ui.logs_panel")
-  local logs = require("codetyper.adapters.nvim.ui.logs")
 
   local bufnr = vim.api.nvim_get_current_buf()
   local filepath = vim.fn.expand("%:p")
@@ -555,16 +315,10 @@ local function cmd_transform_range(start_line, end_line)
     return
   end
 
-  -- Open the logs panel to show generation progress
-  logs_panel.open()
-  logs.info("Transform selection: " .. #prompts .. " prompt(s)")
-
-  utils.notify("Found " .. #prompts .. " prompt(s) in selection to transform...", vim.log.levels.INFO)
+  utils.notify("Transforming " .. #prompts .. " prompt(s)...", vim.log.levels.INFO)
 
   -- Process each prompt using the same logic as automatic mode (skip processed check for manual mode)
   for _, prompt in ipairs(prompts) do
-    local clean_prompt = parser.clean_prompt(prompt.content)
-    logs.info("Processing: " .. clean_prompt:sub(1, 40) .. "...")
     autocmds.process_single_prompt(bufnr, prompt, filepath, true)
   end
 end
@@ -703,12 +457,9 @@ local function cmd_forget(pattern)
 end
 
 --- Transform a single prompt at cursor position
---- Uses the same processing logic as automatic mode for consistent results
 local function cmd_transform_at_cursor()
   local parser = require("codetyper.parser")
   local autocmds = require("codetyper.adapters.nvim.autocmds")
-  local logs_panel = require("codetyper.adapters.nvim.ui.logs_panel")
-  local logs = require("codetyper.adapters.nvim.ui.logs")
 
   local bufnr = vim.api.nvim_get_current_buf()
   local filepath = vim.fn.expand("%:p")
@@ -726,11 +477,7 @@ local function cmd_transform_at_cursor()
     return
   end
 
-  -- Open the logs panel to show generation progress
-  logs_panel.open()
-
   local clean_prompt = parser.clean_prompt(prompt.content)
-  logs.info("Transform cursor: " .. clean_prompt:sub(1, 40) .. "...")
   utils.notify("Transforming: " .. clean_prompt:sub(1, 40) .. "...", vim.log.levels.INFO)
 
   -- Use the same processing logic as automatic mode (skip processed check for manual mode)
@@ -770,21 +517,8 @@ end
 ---@param was_good boolean Whether the response was good
 local function cmd_llm_feedback(was_good)
   local llm = require("codetyper.core.llm")
-  -- Get the last used provider from logs or default
-  local provider = "ollama" -- Default assumption
-
-  -- Try to get actual last provider from logs
-  pcall(function()
-    local logs = require("codetyper.adapters.nvim.ui.logs")
-    local entries = logs.get(10)
-    for i = #entries, 1, -1 do
-      local entry = entries[i]
-      if entry.message and entry.message:match("^LLM:") then
-        provider = entry.message:match("LLM: (%w+)") or provider
-        break
-      end
-    end
-  end)
+  -- Default to ollama for feedback
+  local provider = "ollama"
 
   llm.report_feedback(provider, was_good)
   local feedback_type = was_good and "positive" or "negative"
@@ -811,32 +545,10 @@ local function coder_cmd(args)
     tree = cmd_tree,
     ["tree-view"] = cmd_tree_view,
     reset = cmd_reset,
-    ask = cmd_ask,
-    ["ask-close"] = cmd_ask_close,
-    ["ask-toggle"] = cmd_ask_toggle,
-    ["ask-clear"] = cmd_ask_clear,
     gitignore = cmd_gitignore,
     transform = cmd_transform,
     ["transform-cursor"] = cmd_transform_at_cursor,
-    agent = cmd_agent,
-    ["agent-close"] = cmd_agent_close,
-    ["agent-toggle"] = cmd_agent_toggle,
-    ["agent-stop"] = cmd_agent_stop,
-    ["type-toggle"] = cmd_type_toggle,
-    ["logs-toggle"] = cmd_logs_toggle,
-    ["queue-status"] = cmd_queue_status,
-    ["queue-process"] = cmd_queue_process,
-    -- Agentic commands
-    ["agentic-run"] = function(args)
-      local task = table.concat(vim.list_slice(args.fargs, 2), " ")
-      if task == "" then
-        utils.notify("Usage: Coder agentic-run <task> [agent]", vim.log.levels.WARN)
-        return
-      end
-      cmd_agentic_run(task)
-    end,
-    ["agentic-list"] = cmd_agentic_list,
-    ["agentic-init"] = cmd_agentic_init,
+
     ["index-project"] = cmd_index_project,
     ["index-status"] = cmd_index_status,
     memories = cmd_memories,
@@ -940,12 +652,7 @@ function M.setup()
       return {
         "open", "close", "toggle", "process", "status", "focus",
         "tree", "tree-view", "reset", "gitignore",
-        "ask", "ask-close", "ask-toggle", "ask-clear",
         "transform", "transform-cursor",
-        "agent", "agent-close", "agent-toggle", "agent-stop",
-        "agentic-run", "agentic-list", "agentic-init",
-        "type-toggle", "logs-toggle",
-        "queue-status", "queue-process",
         "index-project", "index-status", "memories", "forget",
         "auto-toggle", "auto-set",
         "llm-stats", "llm-feedback-good", "llm-feedback-bad", "llm-reset-stats",
@@ -981,24 +688,6 @@ function M.setup()
     cmd_tree_view()
   end, { desc = "View tree.log" })
 
-  -- Ask panel commands
-  vim.api.nvim_create_user_command("CoderAsk", function(opts)
-    local selection = nil
-    -- Check if called from visual mode (range is set)
-    if opts.range > 0 then
-      selection = utils.get_visual_selection()
-    end
-    cmd_ask(selection)
-  end, { range = true, desc = "Open Ask panel (with optional visual selection)" })
-
-  vim.api.nvim_create_user_command("CoderAskToggle", function()
-    cmd_ask_toggle()
-  end, { desc = "Toggle Ask panel" })
-
-  vim.api.nvim_create_user_command("CoderAskClear", function()
-    cmd_ask_clear()
-  end, { desc = "Clear Ask history" })
-
   -- Transform commands (inline /@ @/ tag replacement)
   vim.api.nvim_create_user_command("CoderTransform", function()
     cmd_transform()
@@ -1013,59 +702,6 @@ function M.setup()
     local end_line = opts.line2
     cmd_transform_range(start_line, end_line)
   end, { range = true, desc = "Transform /@ @/ tags in visual selection" })
-
-  -- Agent commands
-  vim.api.nvim_create_user_command("CoderAgent", function(opts)
-    local selection = nil
-    -- Check if called from visual mode (range is set)
-    if opts.range > 0 then
-      selection = utils.get_visual_selection()
-    end
-    cmd_agent(selection)
-  end, { range = true, desc = "Open Agent panel (with optional visual selection)" })
-
-  vim.api.nvim_create_user_command("CoderAgentToggle", function()
-    cmd_agent_toggle()
-  end, { desc = "Toggle Agent panel" })
-
-  vim.api.nvim_create_user_command("CoderAgentStop", function()
-    cmd_agent_stop()
-  end, { desc = "Stop running agent" })
-
-  -- Agentic commands (full IDE-like agent functionality)
-  vim.api.nvim_create_user_command("CoderAgenticRun", function(opts)
-    local task = opts.args
-    if task == "" then
-      vim.ui.input({ prompt = "Task: " }, function(input)
-        if input and input ~= "" then
-          cmd_agentic_run(input)
-        end
-      end)
-    else
-      cmd_agentic_run(task)
-    end
-  end, {
-    desc = "Run agentic task (IDE-like multi-file changes)",
-    nargs = "*",
-  })
-
-  vim.api.nvim_create_user_command("CoderAgenticList", function()
-    cmd_agentic_list()
-  end, { desc = "List available agents" })
-
-  vim.api.nvim_create_user_command("CoderAgenticInit", function()
-    cmd_agentic_init()
-  end, { desc = "Initialize .coder/agents/ and .coder/rules/ directories" })
-
-  -- Chat type switcher command
-  vim.api.nvim_create_user_command("CoderType", function()
-    cmd_type_toggle()
-  end, { desc = "Show Ask/Agent mode switcher" })
-
-  -- Logs panel command
-  vim.api.nvim_create_user_command("CoderLogs", function()
-    cmd_logs_toggle()
-  end, { desc = "Toggle logs panel" })
 
   -- Index command - open coder companion for current file
   vim.api.nvim_create_user_command("CoderIndex", function()
@@ -1092,15 +728,6 @@ function M.setup()
     desc = "Clear memories (optionally matching pattern)",
     nargs = "?",
   })
-
-  -- Queue commands
-  vim.api.nvim_create_user_command("CoderQueueStatus", function()
-    cmd_queue_status()
-  end, { desc = "Show scheduler and queue status" })
-
-  vim.api.nvim_create_user_command("CoderQueueProcess", function()
-    cmd_queue_process()
-  end, { desc = "Manually trigger queue processing" })
 
   -- Preferences commands
   vim.api.nvim_create_user_command("CoderAutoToggle", function()
@@ -1313,145 +940,6 @@ function M.setup()
     end,
   })
 
-  -- Conflict mode commands
-  vim.api.nvim_create_user_command("CoderConflictToggle", function()
-    local patch = require("codetyper.core.diff.patch")
-    local current = patch.is_conflict_mode()
-    patch.configure({ use_conflict_mode = not current })
-    utils.notify("Conflict mode " .. (not current and "enabled" or "disabled"), vim.log.levels.INFO)
-  end, { desc = "Toggle conflict mode for code changes" })
-
-  vim.api.nvim_create_user_command("CoderConflictResolveAll", function(opts)
-    local conflict = require("codetyper.core.diff.conflict")
-    local bufnr = vim.api.nvim_get_current_buf()
-    local keep = opts.args ~= "" and opts.args or "theirs"
-    if not vim.tbl_contains({ "ours", "theirs", "both", "none" }, keep) then
-      utils.notify("Invalid option. Use: ours, theirs, both, or none", vim.log.levels.ERROR)
-      return
-    end
-    conflict.resolve_all(bufnr, keep)
-    utils.notify("Resolved all conflicts with: " .. keep, vim.log.levels.INFO)
-  end, {
-    nargs = "?",
-    complete = function() return { "ours", "theirs", "both", "none" } end,
-    desc = "Resolve all conflicts (ours/theirs/both/none)"
-  })
-
-  vim.api.nvim_create_user_command("CoderConflictNext", function()
-    local conflict = require("codetyper.core.diff.conflict")
-    conflict.goto_next(vim.api.nvim_get_current_buf())
-  end, { desc = "Go to next conflict" })
-
-  vim.api.nvim_create_user_command("CoderConflictPrev", function()
-    local conflict = require("codetyper.core.diff.conflict")
-    conflict.goto_prev(vim.api.nvim_get_current_buf())
-  end, { desc = "Go to previous conflict" })
-
-  vim.api.nvim_create_user_command("CoderConflictStatus", function()
-    local conflict = require("codetyper.core.diff.conflict")
-    local patch = require("codetyper.core.diff.patch")
-    local bufnr = vim.api.nvim_get_current_buf()
-    local count = conflict.count_conflicts(bufnr)
-    local mode = patch.is_conflict_mode() and "enabled" or "disabled"
-    utils.notify(string.format("Conflicts in buffer: %d | Conflict mode: %s", count, mode), vim.log.levels.INFO)
-  end, { desc = "Show conflict status" })
-
-  vim.api.nvim_create_user_command("CoderConflictMenu", function()
-    local conflict = require("codetyper.core.diff.conflict")
-    local bufnr = vim.api.nvim_get_current_buf()
-    -- Ensure conflicts are processed first (sets up highlights and keymaps)
-    conflict.process(bufnr)
-    conflict.show_floating_menu(bufnr)
-  end, { desc = "Show conflict resolution menu" })
-
-  -- Manual commands to accept conflicts
-  vim.api.nvim_create_user_command("CoderConflictAcceptCurrent", function()
-    local conflict = require("codetyper.core.diff.conflict")
-    local bufnr = vim.api.nvim_get_current_buf()
-    conflict.process(bufnr) -- Ensure keymaps are set up
-    conflict.accept_ours(bufnr)
-  end, { desc = "Accept current (original) code" })
-
-  vim.api.nvim_create_user_command("CoderConflictAcceptIncoming", function()
-    local conflict = require("codetyper.core.diff.conflict")
-    local bufnr = vim.api.nvim_get_current_buf()
-    conflict.process(bufnr) -- Ensure keymaps are set up
-    conflict.accept_theirs(bufnr)
-  end, { desc = "Accept incoming (AI) code" })
-
-  vim.api.nvim_create_user_command("CoderConflictAcceptBoth", function()
-    local conflict = require("codetyper.core.diff.conflict")
-    local bufnr = vim.api.nvim_get_current_buf()
-    conflict.process(bufnr)
-    conflict.accept_both(bufnr)
-  end, { desc = "Accept both versions" })
-
-  vim.api.nvim_create_user_command("CoderConflictAcceptNone", function()
-    local conflict = require("codetyper.core.diff.conflict")
-    local bufnr = vim.api.nvim_get_current_buf()
-    conflict.process(bufnr)
-    conflict.accept_none(bufnr)
-  end, { desc = "Delete conflict (accept none)" })
-
-  vim.api.nvim_create_user_command("CoderConflictAutoMenu", function()
-    local conflict = require("codetyper.core.diff.conflict")
-    local conf = conflict.get_config()
-    local new_state = not conf.auto_show_menu
-    conflict.configure({ auto_show_menu = new_state, auto_show_next_menu = new_state })
-    utils.notify("Auto-show conflict menu " .. (new_state and "enabled" or "disabled"), vim.log.levels.INFO)
-  end, { desc = "Toggle auto-show conflict menu after code injection" })
-
-  -- Initialize conflict module
-  local conflict = require("codetyper.core.diff.conflict")
-  conflict.setup()
-
-  -- Linter validation commands
-  vim.api.nvim_create_user_command("CoderLintCheck", function()
-    local linter = require("codetyper.features.agents.linter")
-    local bufnr = vim.api.nvim_get_current_buf()
-    linter.validate_after_injection(bufnr, nil, nil, function(result)
-      if result then
-        if not result.has_errors and not result.has_warnings then
-          utils.notify("No lint errors found", vim.log.levels.INFO)
-        end
-      end
-    end)
-  end, { desc = "Check current buffer for lint errors" })
-
-  vim.api.nvim_create_user_command("CoderLintFix", function()
-    local linter = require("codetyper.features.agents.linter")
-    local bufnr = vim.api.nvim_get_current_buf()
-    local line_count = vim.api.nvim_buf_line_count(bufnr)
-    local result = linter.check_region(bufnr, 1, line_count)
-    if result.has_errors or result.has_warnings then
-      linter.request_ai_fix(bufnr, result)
-    else
-      utils.notify("No lint errors to fix", vim.log.levels.INFO)
-    end
-  end, { desc = "Request AI to fix lint errors in current buffer" })
-
-  vim.api.nvim_create_user_command("CoderLintQuickfix", function()
-    local linter = require("codetyper.features.agents.linter")
-    local bufnr = vim.api.nvim_get_current_buf()
-    local line_count = vim.api.nvim_buf_line_count(bufnr)
-    local result = linter.check_region(bufnr, 1, line_count)
-    if #result.diagnostics > 0 then
-      linter.show_in_quickfix(bufnr, result)
-    else
-      utils.notify("No lint errors to show", vim.log.levels.INFO)
-    end
-  end, { desc = "Show lint errors in quickfix list" })
-
-  vim.api.nvim_create_user_command("CoderLintToggleAuto", function()
-    local conflict = require("codetyper.core.diff.conflict")
-    local linter = require("codetyper.features.agents.linter")
-    local linter_config = linter.get_config()
-    local new_state = not linter_config.auto_save
-    linter.configure({ auto_save = new_state })
-    conflict.configure({ lint_after_accept = new_state, auto_fix_lint_errors = new_state })
-    utils.notify("Auto lint check " .. (new_state and "enabled" or "disabled"), vim.log.levels.INFO)
-  end, { desc = "Toggle automatic lint checking after code acceptance" })
-
   -- Setup default keymaps
   M.setup_keymaps()
 end
@@ -1474,12 +962,6 @@ function M.setup_keymaps()
   vim.keymap.set("n", "<leader>ctT", "<cmd>CoderTransform<CR>", {
     silent = true,
     desc = "Coder: Transform all tags in file"
-  })
-
-  -- Agent keymaps
-  vim.keymap.set("n", "<leader>ca", "<cmd>CoderAgentToggle<CR>", {
-    silent = true,
-    desc = "Coder: Toggle Agent panel"
   })
 
   -- Index keymap - open coder companion

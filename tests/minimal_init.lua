@@ -44,5 +44,4 @@ require("codetyper").setup({
 		enabled = false, -- Disable scheduler during tests
 	},
 	auto_gitignore = false,
-	auto_open_ask = false,
 })

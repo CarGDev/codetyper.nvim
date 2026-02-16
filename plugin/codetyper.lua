@@ -91,10 +91,6 @@ end, {
 			"tree-view",
 			"reset",
 			"gitignore",
-			"ask",
-			"ask-close",
-			"ask-toggle",
-			"ask-clear",
 		}
 	end,
 	desc = "Codetyper.nvim commands",
@@ -131,18 +127,4 @@ api.nvim_create_user_command("CoderTreeView", function()
 	cmd("CoderTreeView")
 end, { desc = "View tree.log" })
 
--- Ask panel commands
-api.nvim_create_user_command("CoderAsk", function()
-	require("codetyper").setup()
-	cmd("CoderAsk")
-end, { desc = "Open Ask panel" })
 
-api.nvim_create_user_command("CoderAskToggle", function()
-	require("codetyper").setup()
-	cmd("CoderAskToggle")
-end, { desc = "Toggle Ask panel" })
-
-api.nvim_create_user_command("CoderAskClear", function()
-	require("codetyper").setup()
-	cmd("CoderAskClear")
-end, { desc = "Clear Ask history" })

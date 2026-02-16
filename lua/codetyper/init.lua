@@ -31,7 +31,6 @@ function M.setup(opts)
   local autocmds = require("codetyper.adapters.nvim.autocmds")
   local tree = require("codetyper.support.tree")
   local completion = require("codetyper.features.completion.inline")
-  local logs_panel = require("codetyper.adapters.nvim.ui.logs_panel")
 
   -- Register commands
   commands.setup()
@@ -41,9 +40,6 @@ function M.setup(opts)
 
   -- Setup file reference completion
   completion.setup()
-
-  -- Setup logs panel (handles VimLeavePre cleanup)
-  logs_panel.setup()
 
   -- Ensure .gitignore has coder files excluded
   gitignore.ensure_ignored()
@@ -69,23 +65,7 @@ function M.setup(opts)
     suggestion.setup(M.config.suggestion)
   end
 
-  -- Start the event-driven scheduler if enabled
-  if M.config.scheduler and M.config.scheduler.enabled then
-    local scheduler = require("codetyper.core.scheduler.scheduler")
-    scheduler.start(M.config.scheduler)
-  end
-
   M._initialized = true
-
-  -- Auto-open Ask panel after a short delay (to let UI settle)
-  if M.config.auto_open_ask then
-    vim.defer_fn(function()
-      local ask = require("codetyper.features.ask.engine")
-      if not ask.is_open() then
-        ask.open()
-      end
-    end, 300)
-  end
 end
 
 --- Get current configuration
