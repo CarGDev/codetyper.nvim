@@ -127,11 +127,36 @@ function M.ensure_dir(dirpath)
   return true
 end
 
---- Notify user with proper formatting
+--- Notify user with proper formatting and log to file
 ---@param msg string Message to display
 ---@param level? number Vim log level (default: INFO)
 function M.notify(msg, level)
   level = level or vim.log.levels.INFO
+  
+  -- Also log to file
+  local logger = require("codetyper.support.logger")
+  local level_name = "INFO"
+  if level == vim.log.levels.DEBUG then
+    level_name = "DEBUG"
+  elseif level == vim.log.levels.WARN then
+    level_name = "WARN"
+  elseif level == vim.log.levels.ERROR then
+    level_name = "ERROR"
+  end
+  
+  -- Write to log file
+  local log_dir = vim.fn.expand("~/.config/nvim/logs")
+  vim.fn.mkdir(log_dir, "p")
+  local log_file = log_dir .. "/codetyper.log"
+  local timestamp = os.date("%Y-%m-%d %H:%M:%S")
+  local log_entry = string.format("[%s] [%s] [utils.notify] %s\n", timestamp, level_name, msg)
+  
+  local f = io.open(log_file, "a")
+  if f then
+    f:write(log_entry)
+    f:close()
+  end
+  
   vim.notify("[Codetyper] " .. msg, level)
 end
 

@@ -8,6 +8,7 @@
 local M = {}
 
 local params = require("codetyper.params.agents.patch")
+local logger = require("codetyper.support.logger")
 
 
 --- Lazy load inject module to avoid circular requires
@@ -242,6 +243,30 @@ function M.create_from_event(event, generated_code, confidence, strategy)
 				message = string.format("Using SEARCH/REPLACE mode with %d block(s)", #sr_blocks),
 			})
 		end)
+	elseif is_inline and event.range then
+		-- Inline prompts: always replace the selection (we asked LLM for "code that replaces lines X-Y")
+		injection_strategy = "replace"
+		local start_line = math.max(1, event.range.start_line or 1)
+		local end_line = math.max(1, event.range.end_line or 1)
+		if end_line < start_line then
+			end_line = start_line
+		end
+		-- Prefer scope_range if event.range is invalid (0-0) and we have scope
+		if (event.range.start_line == 0 or event.range.end_line == 0) and event.scope_range then
+			start_line = math.max(1, event.scope_range.start_line or 1)
+			end_line = math.max(1, event.scope_range.end_line or 1)
+			if end_line < start_line then
+				end_line = start_line
+			end
+		end
+		injection_range = { start_line = start_line, end_line = end_line }
+		pcall(function()
+			local logs = require("codetyper.adapters.nvim.ui.logs")
+			logs.add({
+				type = "info",
+				message = string.format("Inline: replace lines %d-%d", start_line, end_line),
+			})
+		end)
 	elseif not injection_strategy and event.intent then
 		local intent_mod = require("codetyper.core.intent")
 		if intent_mod.is_replacement(event.intent) then
@@ -294,6 +319,18 @@ function M.create_from_event(event, generated_code, confidence, strategy)
 
 	injection_strategy = injection_strategy or "append"
 
+	local range_str = injection_range
+		and string.format("%d-%d", injection_range.start_line, injection_range.end_line)
+		or "nil"
+	logger.info("patch", string.format(
+		"create: is_inline=%s strategy=%s range=%s use_sr=%s intent_action=%s",
+		tostring(is_inline),
+		injection_strategy,
+		range_str,
+		tostring(use_search_replace),
+		event.intent and event.intent.action or "nil"
+	))
+
 	return {
 		id = M.generate_id(),
 		event_id = event.id,
@@ -316,6 +353,8 @@ function M.create_from_event(event, generated_code, confidence, strategy)
 		-- SEARCH/REPLACE support
 		use_search_replace = use_search_replace,
 		search_replace_blocks = use_search_replace and sr_blocks or nil,
+		-- Extmarks for injection range (99-style: apply at current position after user edits)
+		injection_marks = event.injection_marks,
 	}
 end
 
@@ -499,24 +538,28 @@ end
 ---@return boolean success
 ---@return string|nil error
 function M.apply(patch)
+	logger.info("patch", string.format("apply() entered: id=%s strategy=%s has_range=%s", patch.id, tostring(patch.injection_strategy), patch.injection_range and "yes" or "no"))
+
 	-- Check if safe to modify (not in insert mode)
 	if not is_safe_to_modify() then
+		logger.info("patch", "apply aborted: user_typing (insert mode or pum visible)")
 		return false, "user_typing"
 	end
 
-	-- Check staleness first
-	local is_stale, stale_reason = M.is_stale(patch)
+	-- Check staleness (skip when we have valid extmarks - 99-style: position tracked across edits)
+	local is_stale, stale_reason = true, nil
+	if patch.injection_marks and patch.injection_marks.start_mark and patch.injection_marks.end_mark then
+		local marks_mod = require("codetyper.core.marks")
+		if marks_mod.is_valid(patch.injection_marks.start_mark) and marks_mod.is_valid(patch.injection_marks.end_mark) then
+			is_stale = false
+		end
+	end
+	if is_stale then
+		is_stale, stale_reason = M.is_stale(patch)
+	end
 	if is_stale then
 		M.mark_stale(patch.id, stale_reason)
-
-		pcall(function()
-			local logs = require("codetyper.adapters.nvim.ui.logs")
-			logs.add({
-				type = "warning",
-				message = string.format("Patch %s is stale: %s", patch.id, stale_reason or "unknown"),
-			})
-		end)
-
+		logger.warn("patch", string.format("Patch %s is stale: %s", patch.id, stale_reason or "unknown"))
 		return false, "patch_stale: " .. (stale_reason or "unknown")
 	end
 
@@ -533,8 +576,28 @@ function M.apply(patch)
 		patch.target_bufnr = target_bufnr
 	end
 
-	-- Prepare code lines
+	-- Prepare code to inject (may be overwritten when SEARCH/REPLACE fails and we use REPLACE parts only)
+	local code_to_inject = patch.generated_code
 	local code_lines = vim.split(patch.generated_code, "\n", { plain = true })
+
+	-- Replace in-buffer thinking placeholder with actual code (if we inserted one when worker started).
+	-- Skip when patch uses SEARCH/REPLACE: that path needs the original buffer content and parses blocks itself.
+	local thinking_placeholder = require("codetyper.core.thinking_placeholder")
+	local ph = thinking_placeholder.get(patch.event_id)
+	if ph and ph.bufnr and vim.api.nvim_buf_is_valid(ph.bufnr)
+		and not (patch.use_search_replace and patch.search_replace_blocks and #patch.search_replace_blocks > 0) then
+		local marks_mod = require("codetyper.core.marks")
+		if marks_mod.is_valid(ph.start_mark) and marks_mod.is_valid(ph.end_mark) then
+			local sr, sc, er, ec = marks_mod.range_to_vim(ph.start_mark, ph.end_mark)
+			if sr ~= nil then
+				vim.api.nvim_buf_set_text(ph.bufnr, sr, sc, er, ec, code_lines)
+				thinking_placeholder.clear(patch.event_id)
+				M.mark_applied(patch.id)
+				return true
+			end
+		end
+		thinking_placeholder.clear(patch.event_id)
+	end
 
 	-- Use the stored inline prompt flag (computed during patch creation)
 	-- For inline prompts, we replace the tag region directly instead of separate remove + inject
@@ -622,21 +685,42 @@ function M.apply(patch)
 
 			return true, nil
 		else
-			-- SEARCH/REPLACE failed, log the error
+			-- SEARCH/REPLACE failed: use only REPLACE parts for fallback (never inject raw markers)
 			pcall(function()
 				local logs = require("codetyper.adapters.nvim.ui.logs")
 				logs.add({
 					type = "warning",
-					message = string.format("SEARCH/REPLACE failed: %s. Falling back to line-based injection.", err or "unknown"),
+					message = string.format("SEARCH/REPLACE failed: %s. Using REPLACE content only for injection.", err or "unknown"),
 				})
 			end)
-			-- Fall through to line-based injection as fallback
+			local replace_only = {}
+			for _, block in ipairs(patch.search_replace_blocks) do
+				if block.replace and block.replace ~= "" then
+					for _, line in ipairs(vim.split(block.replace, "\n", { plain = true })) do
+						table.insert(replace_only, line)
+					end
+				end
+			end
+			if #replace_only > 0 then
+				code_lines = replace_only
+				code_to_inject = table.concat(replace_only, "\n")
+			end
+			-- Fall through to line-based injection
 		end
 	end
 
 	-- Use smart injection module for intelligent import handling
 	local inject = get_inject_module()
 	local inject_result = nil
+
+	local has_range = patch.injection_range ~= nil
+	local apply_msg = string.format("apply: id=%s strategy=%s has_range=%s is_inline=%s target_bufnr=%s",
+		patch.id,
+		patch.injection_strategy or "nil",
+		tostring(has_range),
+		tostring(is_inline_prompt),
+		tostring(target_bufnr))
+	logger.info("patch", apply_msg)
 
 	-- Apply based on strategy using smart injection
 	local ok, err = pcall(function()
@@ -651,6 +735,28 @@ function M.apply(patch)
 			-- Replace the scope range with the new code
 			local start_line = patch.injection_range.start_line
 			local end_line = patch.injection_range.end_line
+
+			-- 99-style: use extmarks so we apply at current position (survives user typing)
+			local marks = require("codetyper.core.marks")
+			if patch.injection_marks and patch.injection_marks.start_mark and patch.injection_marks.end_mark then
+				local sm, em = patch.injection_marks.start_mark, patch.injection_marks.end_mark
+				if marks.is_valid(sm) and marks.is_valid(em) then
+					local sr, sc, er, ec = marks.range_to_vim(sm, em)
+					if sr ~= nil then
+						start_line = sr + 1
+						end_line = er + 1
+						pcall(function()
+							local logs = require("codetyper.adapters.nvim.ui.logs")
+							logs.add({
+								type = "info",
+								message = string.format("Applying at extmark range (lines %d-%d)", start_line, end_line),
+							})
+						end)
+						marks.delete(sm)
+						marks.delete(em)
+					end
+				end
+			end
 
 			-- For inline prompts, use scope range directly (tags are inside scope)
 			-- No adjustment needed since we didn't remove tags yet
@@ -733,8 +839,26 @@ function M.apply(patch)
 			end)
 		end
 
+		-- Diagnostic: log inject_opts before calling inject (why injection might not run)
+		local range_str = inject_opts.range
+			and string.format("%d-%d", inject_opts.range.start_line, inject_opts.range.end_line)
+			or "nil"
+		logger.info("patch", string.format(
+			"inject_opts: strategy=%s range=%s code_len=%d",
+			inject_opts.strategy or "nil",
+			range_str,
+			code_to_inject and #code_to_inject or 0
+		))
+
+		if not inject_opts.range then
+			logger.warn("patch", string.format(
+				"inject has no range (strategy=%s) - inject may append or skip",
+				tostring(patch.injection_strategy)
+			))
+		end
+
 		-- Use smart injection - handles imports automatically
-		inject_result = inject.inject(target_bufnr, patch.generated_code, inject_opts)
+		inject_result = inject.inject(target_bufnr, code_to_inject, inject_opts)
 
 		-- Log injection details
 		pcall(function()
@@ -759,9 +883,13 @@ function M.apply(patch)
 	end)
 
 	if not ok then
+		logger.error("patch", string.format("inject failed: %s", tostring(err)))
 		M.mark_rejected(patch.id, err)
 		return false, err
 	end
+
+	local body_lines = inject_result and inject_result.body_lines or "nil"
+	logger.info("patch", string.format("inject done: body_lines=%s", tostring(body_lines)))
 
 	M.mark_applied(patch.id)
 
@@ -1081,13 +1209,17 @@ function M.flush_pending_smart()
 
 	for _, p in ipairs(patches) do
 		if p.status == "pending" then
+			logger.info("patch", string.format("flush trying: id=%s", p.id))
 			local success, err = M.smart_apply(p)
 			if success then
 				applied = applied + 1
+				logger.info("patch", string.format("flush result: id=%s success", p.id))
 			elseif err == "user_typing" then
 				deferred = deferred + 1
+				logger.info("patch", string.format("flush result: id=%s deferred (user_typing)", p.id))
 			else
 				stale = stale + 1
+				logger.info("patch", string.format("flush result: id=%s stale (%s)", p.id, tostring(err)))
 			end
 		end
 	end

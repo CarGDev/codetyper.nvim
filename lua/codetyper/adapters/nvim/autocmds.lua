@@ -280,6 +280,10 @@ function M.setup()
 		end,
 		desc = "Auto-index source files with coder companion",
 	})
+
+	-- Thinking indicator (throbber) cleanup on exit
+	local thinking = require("codetyper.adapters.nvim.ui.thinking")
+	thinking.setup()
 end
 
 --- Get config with fallback defaults
@@ -297,6 +301,47 @@ local function get_config_safe()
 		}
 	end
 	return config
+end
+
+--- Create extmarks for injection range so position survives user edits (99-style).
+---@param target_bufnr number Target buffer (where code will be injected)
+---@param range { start_line: number, end_line: number } Range to mark (1-based)
+---@return table|nil injection_marks { start_mark, end_mark } or nil if buffer invalid
+local function create_injection_marks(target_bufnr, range)
+	if not range or target_bufnr == -1 or not vim.api.nvim_buf_is_valid(target_bufnr) then
+		return nil
+	end
+	local line_count = vim.api.nvim_buf_line_count(target_bufnr)
+	if line_count == 0 then
+		return nil
+	end
+	-- Clamp to valid 1-based line range (event range may refer to source buffer, target can be different)
+	local start_line = math.max(1, math.min(range.start_line, line_count))
+	local end_line = math.max(1, math.min(range.end_line, line_count))
+	if start_line > end_line then
+		end_line = start_line
+	end
+	local marks = require("codetyper.core.marks")
+	local end_line_content = vim.api.nvim_buf_get_lines(
+		target_bufnr,
+		end_line - 1,
+		end_line,
+		false
+	)
+	local end_col_0 = 0
+	if end_line_content and end_line_content[1] then
+		end_col_0 = #end_line_content[1]
+	end
+	local start_mark, end_mark = marks.mark_range(
+		target_bufnr,
+		start_line,
+		end_line,
+		end_col_0
+	)
+	if not start_mark.id or not end_mark.id then
+		return nil
+	end
+	return { start_mark = start_mark, end_mark = end_mark }
 end
 
 --- Read attached files from prompt content
@@ -401,10 +446,7 @@ function M.check_for_closed_prompt()
 					local patch_mod = require("codetyper.core.diff.patch")
 					local intent_mod = require("codetyper.core.intent")
 					local scope_mod = require("codetyper.core.scope")
-					local logs_panel = require("codetyper.adapters.nvim.ui.logs_panel")
-
-					-- Open logs panel to show progress
-					logs_panel.ensure_open()
+					-- In-buffer placeholder "@thinking .... end thinking" is inserted when worker starts (scheduler)
 
 					-- Take buffer snapshot
 					local snapshot = patch_mod.snapshot_buffer(bufnr, {
@@ -497,11 +539,27 @@ function M.check_for_closed_prompt()
 						priority = 3 -- Lower priority for tests and docs
 					end
 
-					-- Enqueue the event
+					-- Use captured injection range when provided, else prompt.start_line/end_line
+					local raw_start = (prompt.injection_range and prompt.injection_range.start_line) or prompt.start_line or 1
+					local raw_end = (prompt.injection_range and prompt.injection_range.end_line) or prompt.end_line or 1
+					local tc = vim.api.nvim_buf_line_count(target_bufnr)
+					tc = math.max(1, tc)
+					local rs = math.max(1, math.min(raw_start, tc))
+					local re = math.max(1, math.min(raw_end, tc))
+					if re < rs then
+						re = rs
+					end
+					local event_range = { start_line = rs, end_line = re }
+
+					-- Extmarks for injection range (99-style: position survives user typing)
+					local range_for_marks = scope_range or event_range
+					local injection_marks = create_injection_marks(target_bufnr, range_for_marks)
+
+					-- Enqueue the event (event.range = where to apply the generated code)
 					queue.enqueue({
 						id = queue.generate_id(),
 						bufnr = bufnr,
-						range = { start_line = prompt.start_line, end_line = prompt.end_line },
+						range = event_range,
 						timestamp = os.clock(),
 						changedtick = snapshot.changedtick,
 						content_hash = snapshot.content_hash,
@@ -515,6 +573,7 @@ function M.check_for_closed_prompt()
 						scope_text = scope_text,
 						scope_range = scope_range,
 						attached_files = attached_files,
+						injection_marks = injection_marks,
 					})
 
 					local scope_info = scope
@@ -571,10 +630,7 @@ function M.process_single_prompt(bufnr, prompt, current_file, skip_processed_che
 		local patch_mod = require("codetyper.core.diff.patch")
 		local intent_mod = require("codetyper.core.intent")
 		local scope_mod = require("codetyper.core.scope")
-		local logs_panel = require("codetyper.adapters.nvim.ui.logs_panel")
-
-		-- Open logs panel to show progress
-		logs_panel.ensure_open()
+		-- In-buffer placeholder "@thinking .... end thinking" is inserted when worker starts (scheduler)
 
 		-- Take buffer snapshot
 		local snapshot = patch_mod.snapshot_buffer(bufnr, {
@@ -664,11 +720,28 @@ function M.process_single_prompt(bufnr, prompt, current_file, skip_processed_che
 			priority = 3
 		end
 
-		-- Enqueue the event
+		-- Use captured injection range when provided (from transform-selection), else prompt.start_line/end_line
+		local raw_start = (prompt.injection_range and prompt.injection_range.start_line) or prompt.start_line or 1
+		local raw_end = (prompt.injection_range and prompt.injection_range.end_line) or prompt.end_line or 1
+		-- Clamp to target buffer (1-based, valid lines)
+		local tc = vim.api.nvim_buf_line_count(target_bufnr)
+		tc = math.max(1, tc)
+		local rs = math.max(1, math.min(raw_start, tc))
+		local re = math.max(1, math.min(raw_end, tc))
+		if re < rs then
+			re = rs
+		end
+		local event_range = { start_line = rs, end_line = re }
+
+		-- Extmarks for injection range (99-style: position survives user typing)
+		local range_for_marks = scope_range or event_range
+		local injection_marks = create_injection_marks(target_bufnr, range_for_marks)
+
+		-- Enqueue the event (event.range = where to apply the generated code)
 		queue.enqueue({
 			id = queue.generate_id(),
 			bufnr = bufnr,
-			range = { start_line = prompt.start_line, end_line = prompt.end_line },
+			range = event_range,
 			timestamp = os.clock(),
 			changedtick = snapshot.changedtick,
 			content_hash = snapshot.content_hash,
@@ -682,6 +755,7 @@ function M.process_single_prompt(bufnr, prompt, current_file, skip_processed_che
 			scope_text = scope_text,
 			scope_range = scope_range,
 			attached_files = attached_files,
+			injection_marks = injection_marks,
 		})
 
 		local scope_info = scope
@@ -1072,7 +1146,9 @@ function M.update_brain_from_file(filepath)
 			name = summary,
 			description = #functions .. " functions, " .. #classes .. " classes",
 			language = ext,
-			symbols = vim.tbl_map(function(f) return f.name end, functions),
+			symbols = vim.tbl_map(function(f)
+				return f.name
+			end, functions),
 			example = nil,
 		},
 	})
@@ -1309,7 +1385,18 @@ function M.auto_index_file(bufnr)
 		local comment_prefix = "--"
 		local comment_block_start = "--[["
 		local comment_block_end = "]]"
-		if ext == "ts" or ext == "tsx" or ext == "js" or ext == "jsx" or ext == "java" or ext == "c" or ext == "cpp" or ext == "cs" or ext == "go" or ext == "rs" then
+		if
+			ext == "ts"
+			or ext == "tsx"
+			or ext == "js"
+			or ext == "jsx"
+			or ext == "java"
+			or ext == "c"
+			or ext == "cpp"
+			or ext == "cs"
+			or ext == "go"
+			or ext == "rs"
+		then
 			comment_prefix = "//"
 			comment_block_start = "/*"
 			comment_block_end = "*/"
@@ -1337,27 +1424,54 @@ function M.auto_index_file(bufnr)
 		local pseudo_code = {}
 
 		-- Header
-		table.insert(pseudo_code, comment_prefix .. " ═══════════════════════════════════════════════════════════")
+		table.insert(
+			pseudo_code,
+			comment_prefix
+				.. " ═══════════════════════════════════════════════════════════"
+		)
 		table.insert(pseudo_code, comment_prefix .. " CODER COMPANION: " .. filename)
-		table.insert(pseudo_code, comment_prefix .. " ═══════════════════════════════════════════════════════════")
-		table.insert(pseudo_code, comment_prefix .. " This file describes the business logic and behavior of " .. filename)
+		table.insert(
+			pseudo_code,
+			comment_prefix
+				.. " ═══════════════════════════════════════════════════════════"
+		)
+		table.insert(
+			pseudo_code,
+			comment_prefix .. " This file describes the business logic and behavior of " .. filename
+		)
 		table.insert(pseudo_code, comment_prefix .. " Edit this pseudo-code to guide code generation.")
 		table.insert(pseudo_code, comment_prefix .. " Use /@ @/ tags for specific generation requests.")
 		table.insert(pseudo_code, comment_prefix .. "")
 
 		-- Module purpose
-		table.insert(pseudo_code, comment_prefix .. " ─────────────────────────────────────────────────────────────")
+		table.insert(
+			pseudo_code,
+			comment_prefix
+				.. " ─────────────────────────────────────────────────────────────"
+		)
 		table.insert(pseudo_code, comment_prefix .. " MODULE PURPOSE:")
-		table.insert(pseudo_code, comment_prefix .. " ─────────────────────────────────────────────────────────────")
+		table.insert(
+			pseudo_code,
+			comment_prefix
+				.. " ─────────────────────────────────────────────────────────────"
+		)
 		table.insert(pseudo_code, comment_prefix .. " TODO: Describe what this module/file is responsible for")
-		table.insert(pseudo_code, comment_prefix .. " Example: \"Handles user authentication and session management\"")
+		table.insert(pseudo_code, comment_prefix .. ' Example: "Handles user authentication and session management"')
 		table.insert(pseudo_code, comment_prefix .. "")
 
 		-- Dependencies section
 		if #imports > 0 then
-			table.insert(pseudo_code, comment_prefix .. " ─────────────────────────────────────────────────────────────")
+			table.insert(
+				pseudo_code,
+				comment_prefix
+					.. " ─────────────────────────────────────────────────────────────"
+			)
 			table.insert(pseudo_code, comment_prefix .. " DEPENDENCIES:")
-			table.insert(pseudo_code, comment_prefix .. " ─────────────────────────────────────────────────────────────")
+			table.insert(
+				pseudo_code,
+				comment_prefix
+					.. " ─────────────────────────────────────────────────────────────"
+			)
 			for _, imp in ipairs(imports) do
 				table.insert(pseudo_code, comment_prefix .. " • " .. imp)
 			end
@@ -1366,9 +1480,17 @@ function M.auto_index_file(bufnr)
 
 		-- Classes section
 		if #classes > 0 then
-			table.insert(pseudo_code, comment_prefix .. " ─────────────────────────────────────────────────────────────")
+			table.insert(
+				pseudo_code,
+				comment_prefix
+					.. " ─────────────────────────────────────────────────────────────"
+			)
 			table.insert(pseudo_code, comment_prefix .. " CLASSES:")
-			table.insert(pseudo_code, comment_prefix .. " ─────────────────────────────────────────────────────────────")
+			table.insert(
+				pseudo_code,
+				comment_prefix
+					.. " ─────────────────────────────────────────────────────────────"
+			)
 			for _, class in ipairs(classes) do
 				table.insert(pseudo_code, comment_prefix .. "")
 				table.insert(pseudo_code, comment_prefix .. " class " .. class.name .. ":")
@@ -1381,9 +1503,17 @@ function M.auto_index_file(bufnr)
 
 		-- Functions section
 		if #functions > 0 then
-			table.insert(pseudo_code, comment_prefix .. " ─────────────────────────────────────────────────────────────")
+			table.insert(
+				pseudo_code,
+				comment_prefix
+					.. " ─────────────────────────────────────────────────────────────"
+			)
 			table.insert(pseudo_code, comment_prefix .. " FUNCTIONS:")
-			table.insert(pseudo_code, comment_prefix .. " ─────────────────────────────────────────────────────────────")
+			table.insert(
+				pseudo_code,
+				comment_prefix
+					.. " ─────────────────────────────────────────────────────────────"
+			)
 			for _, func in ipairs(functions) do
 				table.insert(pseudo_code, comment_prefix .. "")
 				table.insert(pseudo_code, comment_prefix .. " " .. func.name .. "():")
@@ -1398,9 +1528,17 @@ function M.auto_index_file(bufnr)
 
 		-- If empty file, provide starter template
 		if #functions == 0 and #classes == 0 then
-			table.insert(pseudo_code, comment_prefix .. " ─────────────────────────────────────────────────────────────")
+			table.insert(
+				pseudo_code,
+				comment_prefix
+					.. " ─────────────────────────────────────────────────────────────"
+			)
 			table.insert(pseudo_code, comment_prefix .. " PLANNED STRUCTURE:")
-			table.insert(pseudo_code, comment_prefix .. " ─────────────────────────────────────────────────────────────")
+			table.insert(
+				pseudo_code,
+				comment_prefix
+					.. " ─────────────────────────────────────────────────────────────"
+			)
 			table.insert(pseudo_code, comment_prefix .. " TODO: Describe what you want to build in this file")
 			table.insert(pseudo_code, comment_prefix .. "")
 			table.insert(pseudo_code, comment_prefix .. " Example pseudo-code:")
@@ -1414,9 +1552,17 @@ function M.auto_index_file(bufnr)
 		end
 
 		-- Business rules section
-		table.insert(pseudo_code, comment_prefix .. " ─────────────────────────────────────────────────────────────")
+		table.insert(
+			pseudo_code,
+			comment_prefix
+				.. " ─────────────────────────────────────────────────────────────"
+		)
 		table.insert(pseudo_code, comment_prefix .. " BUSINESS RULES:")
-		table.insert(pseudo_code, comment_prefix .. " ─────────────────────────────────────────────────────────────")
+		table.insert(
+			pseudo_code,
+			comment_prefix
+				.. " ─────────────────────────────────────────────────────────────"
+		)
 		table.insert(pseudo_code, comment_prefix .. " TODO: Document any business rules, constraints, or requirements")
 		table.insert(pseudo_code, comment_prefix .. " Example:")
 		table.insert(pseudo_code, comment_prefix .. "   - Users must be authenticated before accessing this feature")
@@ -1425,9 +1571,17 @@ function M.auto_index_file(bufnr)
 		table.insert(pseudo_code, comment_prefix .. "")
 
 		-- Footer with generation tags example
-		table.insert(pseudo_code, comment_prefix .. " ═══════════════════════════════════════════════════════════")
+		table.insert(
+			pseudo_code,
+			comment_prefix
+				.. " ═══════════════════════════════════════════════════════════"
+		)
 		table.insert(pseudo_code, comment_prefix .. " Use /@ @/ tags below to request code generation:")
-		table.insert(pseudo_code, comment_prefix .. " ═══════════════════════════════════════════════════════════")
+		table.insert(
+			pseudo_code,
+			comment_prefix
+				.. " ═══════════════════════════════════════════════════════════"
+		)
 		table.insert(pseudo_code, "")
 
 		utils.write_file(coder_path, table.concat(pseudo_code, "\n"))
@@ -1439,80 +1593,6 @@ function M.auto_index_file(bufnr)
 		utils.notify("Coder companion available: " .. coder_filename, vim.log.levels.DEBUG)
 	else
 		utils.notify("Created coder companion: " .. coder_filename, vim.log.levels.INFO)
-	end
-end
-
---- Open the coder companion for the current file
----@param open_split? boolean Whether to open in split view (default: true)
-function M.open_coder_companion(open_split)
-	open_split = open_split ~= false -- Default to true
-
-	local filepath = vim.fn.expand("%:p")
-	if not filepath or filepath == "" then
-		utils.notify("No file open", vim.log.levels.WARN)
-		return
-	end
-
-	if utils.is_coder_file(filepath) then
-		utils.notify("Already in coder file", vim.log.levels.INFO)
-		return
-	end
-
-	local coder_path = utils.get_coder_path(filepath)
-
-	-- Create if it doesn't exist
-	if not utils.file_exists(coder_path) then
-		local filename = vim.fn.fnamemodify(filepath, ":t")
-		local ext = vim.fn.fnamemodify(filepath, ":e")
-		local comment_prefix = "--"
-		if vim.tbl_contains({ "js", "jsx", "ts", "tsx", "java", "c", "cpp", "cs", "go", "rs", "php" }, ext) then
-			comment_prefix = "//"
-		elseif vim.tbl_contains({ "py", "sh", "zsh", "yaml", "yml" }, ext) then
-			comment_prefix = "#"
-		elseif vim.tbl_contains({ "html", "md" }, ext) then
-			comment_prefix = "<!--"
-		end
-
-		local close_comment = comment_prefix == "<!--" and " -->" or ""
-		local template = string.format(
-			[[%s Coder companion for %s%s
-%s Use /@ @/ tags to write pseudo-code prompts%s
-%s Example:%s
-%s /@%s
-%s Add a function that validates user input%s
-%s - Check for empty strings%s
-%s - Validate email format%s
-%s @/%s
-
-]],
-			comment_prefix,
-			filename,
-			close_comment,
-			comment_prefix,
-			close_comment,
-			comment_prefix,
-			close_comment,
-			comment_prefix,
-			close_comment,
-			comment_prefix,
-			close_comment,
-			comment_prefix,
-			close_comment,
-			comment_prefix,
-			close_comment,
-			comment_prefix,
-			close_comment
-		)
-		utils.write_file(coder_path, template)
-	end
-
-	if open_split then
-		-- Use the window module to open split view
-		local window = require("codetyper.adapters.nvim.windows")
-		window.open_split(coder_path, filepath)
-	else
-		-- Just open the coder file
-		vim.cmd("edit " .. vim.fn.fnameescape(coder_path))
 	end
 end
 

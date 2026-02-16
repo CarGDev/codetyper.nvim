@@ -88,12 +88,34 @@ end
 ---@param response string Raw LLM response
 ---@param filetype string|nil File type for language detection
 ---@return string Cleaned code
+--- Strip @thinking ... end thinking block; return only the code part for injection.
+---@param text string Raw response that may start with @thinking ... end thinking
+---@return string Text with thinking block removed (or original if no block)
+local function strip_thinking_block(text)
+	if not text or text == "" then
+		return text or ""
+	end
+	-- Match from start: @thinking, any content, then line "end thinking"; capture everything after that
+	local after = text:match("^%s*@thinking[%s%S]*\nend thinking%s*\n(.*)")
+	if after then
+		return after:match("^%s*(.-)%s*$") or after
+	end
+	return text
+end
+
+--- Clean LLM response to extract only code
+---@param response string Raw LLM response
+---@param filetype string|nil File type for language detection
+---@return string Cleaned code
 local function clean_response(response, filetype)
 	if not response then
 		return ""
 	end
 
 	local cleaned = response
+
+	-- Remove @thinking ... end thinking block first (we show thinking in placeholder; inject only code)
+	cleaned = strip_thinking_block(cleaned)
 
 	-- Remove LLM special tokens (deepseek, llama, etc.)
 	cleaned = cleaned:gsub("<｜begin▁of▁sentence｜>", "")
@@ -502,89 +524,55 @@ local function build_prompt(event)
 		system_prompt = intent_mod.get_prompt_modifier(event.intent)
 	end
 
+	-- Ask the LLM to show its thinking (so we can display it in the buffer)
+	system_prompt = system_prompt .. [[
+
+OUTPUT FORMAT - Show your reasoning first:
+1. Start with exactly this line: @thinking
+2. Then write your reasoning (what you will do and why) on the following lines.
+3. End the reasoning block with exactly this line: end thinking
+4. Then output the code on the following lines.
+
+Example:
+@thinking
+I will add a validation check because the user asked for it. I'll place it at the start of the function.
+end thinking
+<your code here>
+]]
+
 	-- SPECIAL HANDLING: Inline prompts with /@ ... @/ tags
-	-- Uses SEARCH/REPLACE block format for reliable code editing
+	-- Output only the code that replaces the tagged region (no SEARCH/REPLACE markers)
 	if is_inline_prompt(event) and event.range and event.range.start_line then
 		local start_line = event.range.start_line
 		local end_line = event.range.end_line or start_line
 
-		-- Build full file content WITHOUT the /@ @/ tags for cleaner context
-		local file_content_clean = {}
-		for i, line in ipairs(target_lines) do
-			-- Skip lines that are part of the tag
-			if i < start_line or i > end_line then
-				table.insert(file_content_clean, line)
-			end
-		end
+		-- Full file content for context
+		local file_content = table.concat(target_lines, "\n"):sub(1, 12000)
 
 		user_prompt = string.format(
 			[[You are editing a %s file: %s
 
 TASK: %s
 
-FULL FILE CONTENT:
+FULL FILE:
 ```%s
 %s
 ```
 
-IMPORTANT: The instruction above may ask you to make changes ANYWHERE in the file (e.g., "at the top", "after function X", etc.). Read the instruction carefully to determine WHERE to apply the change.
-
-INSTRUCTIONS:
-You MUST respond using SEARCH/REPLACE blocks. This format lets you precisely specify what to find and what to replace it with.
-
-FORMAT:
-<<<<<<< SEARCH
-[exact lines to find in the file - copy them exactly including whitespace]
-=======
-[new lines to replace them with]
->>>>>>> REPLACE
-
-RULES:
-1. The SEARCH section must contain EXACT lines from the file (copy-paste them)
-2. Include 2-3 context lines to uniquely identify the location
-3. The REPLACE section contains the modified code
-4. You can use multiple SEARCH/REPLACE blocks for multiple changes
-5. Preserve the original indentation style
-6. If adding new code at the start/end of file, include the first/last few lines in SEARCH
-
-EXAMPLES:
-
-Example 1 - Adding code at the TOP of file:
-Task: "Add a comment at the top"
-<<<<<<< SEARCH
-// existing first line
-// existing second line
-=======
-// NEW COMMENT ADDED HERE
-// existing first line
-// existing second line
->>>>>>> REPLACE
-
-Example 2 - Modifying a function:
-Task: "Add validation to setValue"
-<<<<<<< SEARCH
-export function setValue(key, value) {
-  cache.set(key, value);
-}
-=======
-export function setValue(key, value) {
-  if (!key) throw new Error("key required");
-  cache.set(key, value);
-}
->>>>>>> REPLACE
-
-Now apply the requested changes using SEARCH/REPLACE blocks:]],
+The user has selected lines %d-%d. Your output will REPLACE those lines exactly.
+Output ONLY the new code for that region (no markers, no explanations, no code fences). Your response replaces the selection. Preserve indentation.]],
 			filetype,
 			vim.fn.fnamemodify(event.target_path or "", ":t"),
 			event.prompt_content,
 			filetype,
-			table.concat(file_content_clean, "\n"):sub(1, 8000) -- Limit size
+			file_content,
+			start_line,
+			end_line
 		)
 
 		context.system_prompt = system_prompt
 		context.formatted_prompt = user_prompt
 		context.is_inline_prompt = true
-		context.use_search_replace = true
 
 		return user_prompt, context
 	end

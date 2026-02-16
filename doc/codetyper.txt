@@ -263,11 +263,6 @@ The plugin detects the type of request from your prompt:
 :CoderTransformVisual
     Transform selected /@ @/ tags (visual mode).
 
-                                                         *:CoderIndex*
-:CoderIndex
-    Open coder companion file for current source file.
-
-                                                          *:CoderLogs*
 :CoderLogs
     Toggle the logs panel showing LLM request details.
 

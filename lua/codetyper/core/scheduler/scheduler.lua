@@ -12,6 +12,7 @@ local worker = require("codetyper.core.scheduler.worker")
 local confidence_mod = require("codetyper.core.llm.confidence")
 local context_modal = require("codetyper.adapters.nvim.ui.context_modal")
 local params = require("codetyper.params.agents.scheduler")
+local logger = require("codetyper.support.logger")
 
 -- Setup context modal cleanup on exit
 context_modal.setup()
@@ -226,8 +227,12 @@ end
 ---@param event table PromptEvent
 ---@param result table WorkerResult
 local function handle_worker_result(event, result)
+	-- Clear 99-style inline "Thinking..." virtual text when worker finishes (any outcome)
+	require("codetyper.core.thinking_placeholder").clear_inline(event.id)
+
 	-- Check if LLM needs more context
 	if result.needs_context then
+		require("codetyper.core.thinking_placeholder").remove_on_failure(event.id)
 		pcall(function()
 			local logs = require("codetyper.adapters.nvim.ui.logs")
 			logs.add({
@@ -325,6 +330,8 @@ local function handle_worker_result(event, result)
 	end
 
 	if not result.success then
+		-- Remove in-buffer placeholder on failure (will be re-inserted if we escalate/retry)
+		require("codetyper.core.thinking_placeholder").remove_on_failure(event.id)
 		-- Failed - try escalation if this was ollama
 		if result.worker_type == "ollama" and event.attempt_count < 2 then
 			pcall(function()
@@ -446,6 +453,19 @@ local function dispatch_next()
 		})
 	end)
 
+	-- Show thinking indicator: top-right window (always) + in-buffer or 99-style inline
+	local thinking = require("codetyper.adapters.nvim.ui.thinking")
+	thinking.ensure_shown()
+
+	local is_inline = event.target_path and not event.target_path:match("%.coder%.") and (event.bufnr == vim.fn.bufnr(event.target_path))
+	local thinking_placeholder = require("codetyper.core.thinking_placeholder")
+	if is_inline then
+		-- 99-style: virtual text "⠋ Thinking..." at selection (no buffer change, SEARCH/REPLACE safe)
+		thinking_placeholder.start_inline(event)
+	else
+		thinking_placeholder.insert(event)
+	end
+
 	-- Create worker
 	worker.create(event, provider, function(result)
 		vim.schedule(function()
@@ -463,36 +483,26 @@ function M.schedule_patch_flush()
 	vim.defer_fn(function()
 		-- Check if there are any pending patches
 		local pending = patch.get_pending()
+		logger.info("scheduler", string.format("schedule_patch_flush: %d pending", #pending))
 		if #pending == 0 then
 			waiting_to_flush = false
 			return -- Nothing to apply
 		end
 
 		local safe, reason = M.is_safe_to_inject()
+		logger.info("scheduler", string.format("is_safe_to_inject=%s (%s)", tostring(safe), tostring(reason or "ok")))
 		if safe then
 			waiting_to_flush = false
 			local applied, stale = patch.flush_pending_smart()
 			if applied > 0 or stale > 0 then
-				pcall(function()
-					local logs = require("codetyper.adapters.nvim.ui.logs")
-					logs.add({
-						type = "info",
-						message = string.format("Patches flushed: %d applied, %d stale", applied, stale),
-					})
-				end)
+				logger.info("scheduler", string.format("Patches flushed: %d applied, %d stale", applied, stale))
 			end
 		else
 			-- Not safe yet (user is typing), reschedule to try again
 			-- Only log once when we start waiting
 			if not waiting_to_flush then
 				waiting_to_flush = true
-				pcall(function()
-					local logs = require("codetyper.adapters.nvim.ui.logs")
-					logs.add({
-						type = "info",
-						message = "Waiting for user to finish typing before applying code...",
-					})
-				end)
+				logger.info("scheduler", "Waiting for user to finish typing before applying code...")
 			end
 			-- Retry after a delay - keep waiting for user to finish typing
 			M.schedule_patch_flush()
