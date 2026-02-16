@@ -9,7 +9,7 @@ local llm = require("codetyper.core.llm")
 ---@return string Host URL
 local function get_host()
 	-- Priority: stored credentials > config
-	local credentials = require("codetyper.credentials")
+	local credentials = require("codetyper.config.credentials")
 	local stored_host = credentials.get_ollama_host()
 	if stored_host then
 		return stored_host
@@ -24,7 +24,7 @@ end
 ---@return string Model name
 local function get_model()
 	-- Priority: stored credentials > config
-	local credentials = require("codetyper.credentials")
+	local credentials = require("codetyper.config.credentials")
 	local stored_model = credentials.get_model("ollama")
 	if stored_model then
 		return stored_model

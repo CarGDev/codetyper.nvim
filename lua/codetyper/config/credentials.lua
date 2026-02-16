@@ -1,4 +1,4 @@
----@mod codetyper.credentials Secure credential storage for Codetyper.nvim
+---@mod codetyper.config.credentials Secure credential storage for Codetyper.nvim
 ---@brief [[
 --- Manages API keys and model preferences stored outside of config files.
 --- Credentials are stored in ~/.local/share/nvim/codetyper/configuration.json
@@ -512,12 +512,10 @@ function M.show_status()
 		end
 		local model_info = p.model and (" - " .. p.model) or ""
 
-		table.insert(lines, string.format("  %s %s%s%s%s",
-			status_icon,
-			p.name:upper(),
-			active_marker,
-			source_info,
-			model_info))
+		table.insert(
+			lines,
+			string.format("  %s %s%s%s%s", status_icon, p.name:upper(), active_marker, source_info, model_info)
+		)
 	end
 
 	table.insert(lines, "")

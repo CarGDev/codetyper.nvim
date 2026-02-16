@@ -12,7 +12,7 @@ local API_URL = "https://api.openai.com/v1/chat/completions"
 ---@return string|nil API key
 local function get_api_key()
 	-- Priority: stored credentials > config > environment
-	local credentials = require("codetyper.credentials")
+	local credentials = require("codetyper.config.credentials")
 	local stored_key = credentials.get_api_key("openai")
 	if stored_key then
 		return stored_key
@@ -27,7 +27,7 @@ end
 ---@return string Model name
 local function get_model()
 	-- Priority: stored credentials > config
-	local credentials = require("codetyper.credentials")
+	local credentials = require("codetyper.config.credentials")
 	local stored_model = credentials.get_model("openai")
 	if stored_model then
 		return stored_model
@@ -42,7 +42,7 @@ end
 ---@return string API endpoint
 local function get_endpoint()
 	-- Priority: stored credentials > config > default
-	local credentials = require("codetyper.credentials")
+	local credentials = require("codetyper.config.credentials")
 	local stored_endpoint = credentials.get_endpoint("openai")
 	if stored_endpoint then
 		return stored_endpoint

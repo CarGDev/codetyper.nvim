@@ -100,7 +100,7 @@ end
 ---@return string Model name
 local function get_model()
 	-- Priority: stored credentials > config
-	local credentials = require("codetyper.credentials")
+	local credentials = require("codetyper.config.credentials")
 	local stored_model = credentials.get_model("copilot")
 	if stored_model then
 		return stored_model
@@ -224,8 +224,7 @@ end
 ---@param body table Request body
 ---@param callback fun(response: string|nil, error: string|nil, usage: table|nil)
 local function make_request(token, body, callback)
-	local endpoint = (token.endpoints and token.endpoints.api or "https://api.githubcopilot.com")
-		.. "/chat/completions"
+	local endpoint = (token.endpoints and token.endpoints.api or "https://api.githubcopilot.com") .. "/chat/completions"
 	local json_body = vim.json.encode(body)
 
 	local headers = build_headers(token)
@@ -280,7 +279,10 @@ local function make_request(token, body, callback)
 
 			if response.error then
 				local error_msg = response.error.message or "Copilot API error"
-				if response.error.code == "rate_limit_exceeded" or (error_msg:match("limit") and error_msg:match("plan")) then
+				if
+					response.error.code == "rate_limit_exceeded"
+					or (error_msg:match("limit") and error_msg:match("plan"))
+				then
 					error_msg = "Copilot rate limit: " .. error_msg
 					M.suggest_ollama_fallback(error_msg)
 				end
