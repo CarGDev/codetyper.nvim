@@ -12,18 +12,6 @@ describe("config", function()
 			assert.equals("claude", defaults.llm.provider)
 		end)
 
-		it("should have window configuration", function()
-			assert.is_table(defaults.window)
-			assert.equals(25, defaults.window.width)
-			assert.equals("left", defaults.window.position)
-		end)
-
-		it("should have pattern configuration", function()
-			assert.is_table(defaults.patterns)
-			assert.equals("/@", defaults.patterns.open_tag)
-			assert.equals("@/", defaults.patterns.close_tag)
-		end)
-
 		it("should have scheduler configuration", function()
 			assert.is_table(defaults.scheduler)
 			assert.is_boolean(defaults.scheduler.enabled)

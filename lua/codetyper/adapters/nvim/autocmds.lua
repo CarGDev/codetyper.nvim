@@ -322,22 +322,12 @@ local function create_injection_marks(target_bufnr, range)
 		end_line = start_line
 	end
 	local marks = require("codetyper.core.marks")
-	local end_line_content = vim.api.nvim_buf_get_lines(
-		target_bufnr,
-		end_line - 1,
-		end_line,
-		false
-	)
+	local end_line_content = vim.api.nvim_buf_get_lines(target_bufnr, end_line - 1, end_line, false)
 	local end_col_0 = 0
 	if end_line_content and end_line_content[1] then
 		end_col_0 = #end_line_content[1]
 	end
-	local start_mark, end_mark = marks.mark_range(
-		target_bufnr,
-		start_line,
-		end_line,
-		end_col_0
-	)
+	local start_mark, end_mark = marks.mark_range(target_bufnr, start_line, end_line, end_col_0)
 	if not start_mark.id or not end_mark.id then
 		return nil
 	end
@@ -540,7 +530,9 @@ function M.check_for_closed_prompt()
 					end
 
 					-- Use captured injection range when provided, else prompt.start_line/end_line
-					local raw_start = (prompt.injection_range and prompt.injection_range.start_line) or prompt.start_line or 1
+					local raw_start = (prompt.injection_range and prompt.injection_range.start_line)
+						or prompt.start_line
+						or 1
 					local raw_end = (prompt.injection_range and prompt.injection_range.end_line) or prompt.end_line or 1
 					local tc = vim.api.nvim_buf_line_count(target_bufnr)
 					tc = math.max(1, tc)

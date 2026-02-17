@@ -59,6 +59,13 @@ function M.is_insert_mode()
 	return mode == "i" or mode == "ic" or mode == "ix"
 end
 
+--- Check if we're in visual mode
+---@return boolean
+function M.is_visual_mode()
+	local mode = vim.fn.mode()
+	return mode == "v" or mode == "V" or mode == "\22"
+end
+
 --- Check if it's safe to inject code
 ---@return boolean
 ---@return string|nil reason if not safe
@@ -69,6 +76,10 @@ function M.is_safe_to_inject()
 
 	if M.is_insert_mode() then
 		return false, "insert_mode"
+	end
+
+	if M.is_visual_mode() then
+		return false, "visual_mode"
 	end
 
 	return true, nil
@@ -503,6 +514,13 @@ function M.schedule_patch_flush()
 			if not waiting_to_flush then
 				waiting_to_flush = true
 				logger.info("scheduler", "Waiting for user to finish typing before applying code...")
+				-- Notify user about the wait
+				local utils = require("codetyper.support.utils")
+				if reason == "visual_mode" then
+					utils.notify("Queue waiting: exit Visual mode to inject code", vim.log.levels.INFO)
+				elseif reason == "insert_mode" then
+					utils.notify("Queue waiting: exit Insert mode to inject code", vim.log.levels.INFO)
+				end
 			end
 			-- Retry after a delay - keep waiting for user to finish typing
 			M.schedule_patch_flush()
@@ -547,6 +565,20 @@ local function setup_autocmds()
 			end, state.config.completion_delay_ms)
 		end,
 		desc = "Flush pending patches on InsertLeave",
+	})
+
+	-- Flush patches when leaving visual mode
+	vim.api.nvim_create_autocmd("ModeChanged", {
+		group = augroup,
+		pattern = "[vV\x16]*:*", -- visual mode to any other mode
+		callback = function()
+			vim.defer_fn(function()
+				if not M.is_insert_mode() and not M.is_completion_visible() then
+					patch.flush_pending_smart()
+				end
+			end, state.config.completion_delay_ms)
+		end,
+		desc = "Flush pending patches on VisualLeave",
 	})
 
 	-- Flush patches on cursor hold

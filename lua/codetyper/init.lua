@@ -18,66 +18,66 @@ M._initialized = false
 --- Setup the plugin with user configuration
 ---@param opts? CoderConfig User configuration options
 function M.setup(opts)
-  if M._initialized then
-    return
-  end
+	if M._initialized then
+		return
+	end
 
-  local config = require("codetyper.config.defaults")
-  M.config = config.setup(opts)
+	local config = require("codetyper.config.defaults")
+	M.config = config.setup(opts)
 
-  -- Initialize modules
-  local commands = require("codetyper.adapters.nvim.commands")
-  local gitignore = require("codetyper.support.gitignore")
-  local autocmds = require("codetyper.adapters.nvim.autocmds")
-  local tree = require("codetyper.support.tree")
-  local completion = require("codetyper.features.completion.inline")
+	-- Initialize modules
+	local commands = require("codetyper.adapters.nvim.commands")
+	local gitignore = require("codetyper.support.gitignore")
+	local autocmds = require("codetyper.adapters.nvim.autocmds")
+	local tree = require("codetyper.support.tree")
+	local completion = require("codetyper.features.completion.inline")
 
-  -- Register commands
-  commands.setup()
+	-- Register commands
+	commands.setup()
 
-  -- Setup autocommands
-  autocmds.setup()
+	-- Setup autocommands
+	autocmds.setup()
 
-  -- Setup file reference completion
-  completion.setup()
+	-- Setup file reference completion
+	completion.setup()
 
-  -- Ensure .gitignore has coder files excluded
-  gitignore.ensure_ignored()
+	-- Ensure .gitignore has coder files excluded
+	gitignore.ensure_ignored()
 
-  -- Initialize tree logging (creates .coder folder and initial tree.log)
-  tree.setup()
+	-- Initialize tree logging (creates .coder folder and initial tree.log)
+	tree.setup()
 
-  -- Initialize project indexer if enabled
-  if M.config.indexer and M.config.indexer.enabled then
-    local indexer = require("codetyper.features.indexer")
-    indexer.setup(M.config.indexer)
-  end
+	-- Initialize project indexer if enabled
+	if M.config.indexer and M.config.indexer.enabled then
+		local indexer = require("codetyper.features.indexer")
+		indexer.setup(M.config.indexer)
+	end
 
-  -- Initialize brain learning system if enabled
-  if M.config.brain and M.config.brain.enabled then
-    local brain = require("codetyper.core.memory")
-    brain.setup(M.config.brain)
-  end
+	-- Initialize brain learning system if enabled
+	if M.config.brain and M.config.brain.enabled then
+		local brain = require("codetyper.core.memory")
+		brain.setup(M.config.brain)
+	end
 
-  -- Setup inline ghost text suggestions (Copilot-style)
-  if M.config.suggestion and M.config.suggestion.enabled then
-    local suggestion = require("codetyper.features.completion.suggestion")
-    suggestion.setup(M.config.suggestion)
-  end
+	-- Setup inline ghost text suggestions (Copilot-style)
+	if M.config.suggestion and M.config.suggestion.enabled then
+		local suggestion = require("codetyper.features.completion.suggestion")
+		suggestion.setup(M.config.suggestion)
+	end
 
-  M._initialized = true
+	M._initialized = true
 end
 
 --- Get current configuration
 ---@return CoderConfig
 function M.get_config()
-  return M.config
+	return M.config
 end
 
 --- Check if plugin is initialized
 ---@return boolean
 function M.is_initialized()
-  return M._initialized
+	return M._initialized
 end
 
 return M

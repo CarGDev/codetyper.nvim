@@ -233,8 +233,24 @@ function M.create_from_event(event, generated_code, confidence, strategy)
 	local injection_strategy = strategy
 	local injection_range = nil
 
+	-- Handle intent_override from transform-selection (e.g., cursor insert mode)
+	if event.intent_override and event.intent_override.action then
+		injection_strategy = event.intent_override.action
+		-- Use injection_range from transform-selection, not event.range
+		injection_range = event.injection_range or (event.range and {
+			start_line = event.range.start_line,
+			end_line = event.range.end_line,
+		})
+		pcall(function()
+			local logs = require("codetyper.adapters.nvim.ui.logs")
+			logs.add({
+				type = "info",
+				message = string.format("Using override strategy: %s (%s)", injection_strategy,
+					injection_range and (injection_range.start_line .. "-" .. injection_range.end_line) or "nil"),
+			})
+		end)
 	-- If we have SEARCH/REPLACE blocks, use that strategy
-	if use_search_replace then
+	elseif use_search_replace then
 		injection_strategy = "search_replace"
 		pcall(function()
 			local logs = require("codetyper.adapters.nvim.ui.logs")
@@ -519,12 +535,16 @@ local function remove_prompt_tags(bufnr)
 	return removed
 end
 
---- Check if it's safe to modify the buffer (not in insert mode)
+--- Check if it's safe to modify the buffer (not in insert or visual mode)
 ---@return boolean
 local function is_safe_to_modify()
 	local mode = vim.fn.mode()
-	-- Don't modify if in insert mode or completion is visible
+	-- Don't modify if in insert mode, visual mode, or completion is visible
 	if mode == "i" or mode == "ic" or mode == "ix" then
+		return false
+	end
+	-- Visual modes: v (char), V (line), \22 (block)
+	if mode == "v" or mode == "V" or mode == "\22" then
 		return false
 	end
 	if vim.fn.pumvisible() == 1 then
@@ -540,9 +560,9 @@ end
 function M.apply(patch)
 	logger.info("patch", string.format("apply() entered: id=%s strategy=%s has_range=%s", patch.id, tostring(patch.injection_strategy), patch.injection_range and "yes" or "no"))
 
-	-- Check if safe to modify (not in insert mode)
+	-- Check if safe to modify (not in insert or visual mode)
 	if not is_safe_to_modify() then
-		logger.info("patch", "apply aborted: user_typing (insert mode or pum visible)")
+		logger.info("patch", "apply aborted: not safe (insert/visual mode or pum visible)")
 		return false, "user_typing"
 	end
 
