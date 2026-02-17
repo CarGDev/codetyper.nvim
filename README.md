@@ -319,6 +319,7 @@ llm = {
 | `:Coder transform` | `:CoderTransform` | Transform all tags in file |
 | `:Coder transform-cursor` | `:CoderTransformCursor` | Transform tag at cursor |
 | - | `:CoderTransformVisual` | Transform selected tags |
+| - | `:CoderTransformSelection` | Transform with prompt (insert/replace) |
 
 ### Conflict Resolution
 
@@ -490,6 +491,52 @@ Write prompts using `/@` and `@/` tags:
 - size: 'sm' | 'md' | 'lg'
 Use Tailwind CSS for styling @/
 ```
+
+### Transform Selection (Quick Prompt)
+
+The `<leader>ctt` command opens a prompt window for quick code transformations without needing tag markers:
+
+#### Normal Mode (No Selection)
+Press `<leader>ctt` in Normal mode to:
+- Opens a prompt window
+- Enter your request (e.g., "add a function to validate credit cards")
+- Code will be **inserted at the current cursor line**
+
+#### Visual Mode (With Selection)
+Select code in Visual mode and press `<leader>ctt` to:
+- Opens a prompt window with your selection
+- Enter your request (e.g., "add error handling")
+- The **selected code will be replaced** with the generated code
+
+#### Usage Examples
+
+**Insert new code at cursor:**
+```vim
+# In Normal mode, cursor on line 10
+<leader>ctt
+" Enter: add a function to parse ISO dates"
+" Code inserted at line 10
+```
+
+**Replace selected code:**
+```vim
+# In Visual mode, select lines 5-8
+<leader>ctt
+" Enter: add try-catch and error handling"
+" Selected lines 5-8 replaced with new code
+```
+
+**Queue Waiting**
+If you're in Visual or Insert mode when the code is generated, you'll see a notification:
+- "Queue waiting: exit Visual mode to inject code"
+- Exit Visual mode to apply the changes
+
+#### Keymaps
+
+| Key | Mode | Description |
+|-----|------|-------------|
+| `<leader>ctt` | Normal | Open prompt to insert at cursor |
+| `<leader>ctt` | Visual | Open prompt to replace selection |
 
 ### Prompt Types
 
