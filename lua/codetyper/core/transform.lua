@@ -42,10 +42,32 @@ local function get_visual_selection()
 	if start_line <= 0 or end_line <= 0 then
 		return nil
 	end
-	-- Third argument must be a Vim dictionary; empty Lua table can be treated as list
-	local opts = { type = mode }
-	local selection = vim.fn.getregion(vim.fn.getpos("'<"), vim.fn.getpos("'>"), opts)
-	local text = type(selection) == "table" and table.concat(selection, "\n") or tostring(selection or "")
+    -- Third argument must be a Vim dictionary; empty Lua table can be treated as list
+    local opts = { type = mode }
+    -- Protect against invalid column numbers returned by getpos (can happen with virtual/long multibyte lines)
+    local ok, selection = pcall(function()
+        local s_pos = vim.fn.getpos("'<")
+        local e_pos = vim.fn.getpos("'>")
+        local bufnr = vim.api.nvim_get_current_buf()
+        -- clamp columns to the actual line length + 1 to avoid E964
+        local function clamp_pos(pos)
+            local lnum = pos[2]
+            local col = pos[3]
+            local line = (vim.api.nvim_buf_get_lines(bufnr, lnum - 1, lnum, false) or {""})[1] or ""
+            local maxcol = #line + 1
+            pos[3] = math.max(1, math.min(col, maxcol))
+            return pos
+        end
+        s_pos = clamp_pos(s_pos)
+        e_pos = clamp_pos(e_pos)
+        return vim.fn.getregion(s_pos, e_pos, opts)
+    end)
+    if not ok then
+        -- Fallback: grab whole lines between start_line and end_line
+        local lines = vim.api.nvim_buf_get_lines(0, start_line - 1, end_line, false)
+        selection = lines
+    end
+    local text = type(selection) == "table" and table.concat(selection, "\n") or tostring(selection or "")
 	return {
 		text = text,
 		start_line = start_line,
