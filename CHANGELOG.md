@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-03-19
+
+### Added
+
+- **Version command** — `:Coder version` shows plugin version
+- **CI workflows** — Lua CI with StyLua auto-format, Luacheck, and plugin load check
+- **Release workflow** — tag-based GitHub Releases with changelog extraction
+- **`.stylua.toml`** — 2-space indentation formatting config
+- **`.luacheckrc`** — Luacheck config with proper globals and per-file ignores
+
+### Changed
+
+- Switched code style from tabs to 2-space indentation across all Lua files
+- Updated all documentation (`README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `llms.txt`,
+  `doc/codetyper.txt`, `doc/tags`) to match current project state
+- Removed stale references to Claude, OpenAI, Gemini, Split View, Ask Panel, and Agent Mode
+- `:Coder` with no arguments now defaults to `version` instead of `toggle`
+- Simplified Makefile — removed nonexistent test targets, added `docs` and `format-check`
+
+### Fixed
+
+- Fixed 7 files missing `local M = {}` declaration (`params/agents/bash.lua`, `edit.lua`,
+  `grep.lua`, `prompts/agents/bash.lua`, `edit.lua`, `grep.lua`, `write.lua`)
+- Fixed `cmp/init.lua` literal newline in string pattern (replaced with `\n`)
+- Fixed `prompts/agents/loop.lua` raw markdown outside string literal
+- Removed avante.nvim workflow files (Rust CI, pre-commit with Python deps) that were
+  causing CI failures
+
+### Removed
+
+- Deleted `.github/workflows/rust.yaml` (not applicable — no Rust code)
+- Deleted `.github/workflows/pre-commit.yaml` (referenced nonexistent Python deps)
+
+---
+
 ## [1.0.0] - 2026-03-18
 
 ### Added
@@ -226,7 +261,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fixed** — Bug fixes
 - **Security** — Vulnerability fixes
 
-[Unreleased]: https://github.com/cargdev/codetyper.nvim/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/cargdev/codetyper.nvim/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/cargdev/codetyper.nvim/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/cargdev/codetyper.nvim/compare/v0.6.0...v1.0.0
 [0.6.0]: https://github.com/cargdev/codetyper.nvim/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/cargdev/codetyper.nvim/compare/v0.4.0...v0.5.0
