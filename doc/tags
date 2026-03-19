@@ -39,3 +39,4 @@ codetyper.get_config()	codetyper.txt	/*codetyper.get_config()*
 codetyper.is_initialized()	codetyper.txt	/*codetyper.is_initialized()*
 codetyper.setup()	codetyper.txt	/*codetyper.setup()*
 codetyper.txt	codetyper.txt	/*codetyper.txt*
+codetyper-auto-process	codetyper.txt	/*codetyper-auto-process*
