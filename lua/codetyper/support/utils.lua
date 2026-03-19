@@ -6,8 +6,8 @@ local M = {}
 ---@param prefix? string Prefix for the ID (default: "id")
 ---@return string Unique ID
 function M.generate_id(prefix)
-	prefix = prefix or "id"
-	return prefix .. "_" .. string.format("%x", os.time()) .. "_" .. string.format("%x", math.random(0, 0xFFFF))
+  prefix = prefix or "id"
+  return prefix .. "_" .. string.format("%x", os.time()) .. "_" .. string.format("%x", math.random(0, 0xFFFF))
 end
 
 --- Get the project root directory
@@ -132,7 +132,7 @@ end
 ---@param level? number Vim log level (default: INFO)
 function M.notify(msg, level)
   level = level or vim.log.levels.INFO
-  
+
   -- Also log to file
   local logger = require("codetyper.support.logger")
   local level_name = "INFO"
@@ -143,20 +143,20 @@ function M.notify(msg, level)
   elseif level == vim.log.levels.ERROR then
     level_name = "ERROR"
   end
-  
+
   -- Write to log file
   local log_dir = vim.fn.expand("~/.config/nvim/logs")
   vim.fn.mkdir(log_dir, "p")
   local log_file = log_dir .. "/codetyper.log"
   local timestamp = os.date("%Y-%m-%d %H:%M:%S")
   local log_entry = string.format("[%s] [%s] [utils.notify] %s\n", timestamp, level_name, msg)
-  
+
   local f = io.open(log_file, "a")
   if f then
     f:write(log_entry)
     f:close()
   end
-  
+
   vim.notify("[Codetyper] " .. msg, level)
 end
 
@@ -231,36 +231,36 @@ end
 ---@param response string
 ---@return boolean balanced
 function M.check_brackets(response)
-	local pairs = {
-		["{"] = "}",
-		["["] = "]",
-		["("] = ")",
-	}
+  local pairs = {
+    ["{"] = "}",
+    ["["] = "]",
+    ["("] = ")",
+  }
 
-	local stack = {}
+  local stack = {}
 
-	for char in response:gmatch(".") do
-		if pairs[char] then
-			table.insert(stack, pairs[char])
-		elseif char == "}" or char == "]" or char == ")" then
-			if #stack == 0 or stack[#stack] ~= char then
-				return false
-			end
-			table.remove(stack)
-		end
-	end
+  for char in response:gmatch(".") do
+    if pairs[char] then
+      table.insert(stack, pairs[char])
+    elseif char == "}" or char == "]" or char == ")" then
+      if #stack == 0 or stack[#stack] ~= char then
+        return false
+      end
+      table.remove(stack)
+    end
+  end
 
-	return #stack == 0
+  return #stack == 0
 end
 
 --- Simple hash function for content
 ---@param content string
 ---@return string
 function M.hash_content(content)
-	local hash = vim.fn.sha256(content)
-	-- If sha256 returns hex string, format %x might be wrong if it expects number?
-	-- vim.fn.sha256 returns a hex string already.
-	return hash
+  local hash = vim.fn.sha256(content)
+  -- If sha256 returns hex string, format %x might be wrong if it expects number?
+  -- vim.fn.sha256 returns a hex string already.
+  return hash
 end
 
 --- Check if a line is empty or a comment
@@ -269,22 +269,24 @@ end
 ---@param filetype string
 ---@return boolean
 function M.is_empty_or_comment(line, filetype)
-	local trimmed = line:match("^%s*(.-)%s*$")
-	if trimmed == "" then
-		return true
-	end
+  local trimmed = line:match("^%s*(.-)%s*$")
+  if trimmed == "" then
+    return true
+  end
 
-	local ok, languages = pcall(require, "codetyper.params.agent.languages")
-	if not ok then return false end
+  local ok, languages = pcall(require, "codetyper.params.agent.languages")
+  if not ok then
+    return false
+  end
 
-	local patterns = languages.comment_patterns[filetype] or languages.comment_patterns.javascript
-	for _, pattern in ipairs(patterns) do
-		if trimmed:match(pattern) then
-			return true
-		end
-	end
+  local patterns = languages.comment_patterns[filetype] or languages.comment_patterns.javascript
+  for _, pattern in ipairs(patterns) do
+    if trimmed:match(pattern) then
+      return true
+    end
+  end
 
-	return false
+  return false
 end
 
 --- Classify an import as "builtin", "local", or "third_party"
@@ -292,37 +294,42 @@ end
 ---@param filetype string The filetype
 ---@return string category "builtin"|"local"|"third_party"
 function M.classify_import(imp, filetype)
-	local is_local = false
-	local is_builtin = false
+  local is_local = false
+  local is_builtin = false
 
-	if filetype == "javascript" or filetype == "typescript" or filetype == "ts" or filetype == "tsx" then
-		-- Local: starts with . or ..
-		is_local = imp:match("from%s+['\"]%.") or imp:match("require%(['\"]%.")
-		-- Node builtin modules
-		is_builtin = imp:match("from%s+['\"]node:") or imp:match("from%s+['\"]fs['\"]")
-			or imp:match("from%s+['\"]path['\"]") or imp:match("from%s+['\"]http['\"]")
-	elseif filetype == "python" or filetype == "py" then
-		-- Local: relative imports
-		is_local = imp:match("^from%s+%.") or imp:match("^import%s+%.")
-		-- Python stdlib (simplified check)
-		is_builtin = imp:match("^import%s+os") or imp:match("^import%s+sys")
-			or imp:match("^from%s+os%s+") or imp:match("^from%s+sys%s+")
-			or imp:match("^import%s+re") or imp:match("^import%s+json")
-	elseif filetype == "lua" then
-		-- Local: relative requires
-		is_local = imp:match("require%(['\"]%.") or imp:match("require%s+['\"]%.")
-	elseif filetype == "go" then
-		-- Local: project imports (contain /)
-		is_local = imp:match("['\"][^'\"]+/[^'\"]+['\"]") and not imp:match("github%.com")
-	end
+  if filetype == "javascript" or filetype == "typescript" or filetype == "ts" or filetype == "tsx" then
+    -- Local: starts with . or ..
+    is_local = imp:match("from%s+['\"]%.") or imp:match("require%(['\"]%.")
+    -- Node builtin modules
+    is_builtin = imp:match("from%s+['\"]node:")
+      or imp:match("from%s+['\"]fs['\"]")
+      or imp:match("from%s+['\"]path['\"]")
+      or imp:match("from%s+['\"]http['\"]")
+  elseif filetype == "python" or filetype == "py" then
+    -- Local: relative imports
+    is_local = imp:match("^from%s+%.") or imp:match("^import%s+%.")
+    -- Python stdlib (simplified check)
+    is_builtin = imp:match("^import%s+os")
+      or imp:match("^import%s+sys")
+      or imp:match("^from%s+os%s+")
+      or imp:match("^from%s+sys%s+")
+      or imp:match("^import%s+re")
+      or imp:match("^import%s+json")
+  elseif filetype == "lua" then
+    -- Local: relative requires
+    is_local = imp:match("require%(['\"]%.") or imp:match("require%s+['\"]%.")
+  elseif filetype == "go" then
+    -- Local: project imports (contain /)
+    is_local = imp:match("['\"][^'\"]+/[^'\"]+['\"]") and not imp:match("github%.com")
+  end
 
-	if is_builtin then
-		return "builtin"
-	elseif is_local then
-		return "local"
-	else
-		return "third_party"
-	end
+  if is_builtin then
+    return "builtin"
+  elseif is_local then
+    return "local"
+  else
+    return "third_party"
+  end
 end
 
 --- Check if a line ends a multi-line import
@@ -330,44 +337,44 @@ end
 ---@param filetype string
 ---@return boolean
 function M.ends_multiline_import(line, filetype)
-	-- Check for closing patterns
-	if filetype == "javascript" or filetype == "typescript" or filetype == "ts" or filetype == "tsx" then
-		-- ES6 imports end with 'from "..." ;' or just ';' or a line with just '}'
-		if line:match("from%s+['\"][^'\"]+['\"]%s*;?%s*$") then
-			return true
-		end
-		if line:match("}%s*from%s+['\"]") then
-			return true
-		end
-		if line:match("^%s*}%s*;?%s*$") then
-			return true
-		end
-		if line:match(";%s*$") then
-			return true
-		end
-	elseif filetype == "python" or filetype == "py" then
-		-- Python single-line import: doesn't end with \, (, or ,
-		-- Examples: "from typing import List, Dict" or "import os"
-		if not line:match("\\%s*$") and not line:match("%(%s*$") and not line:match(",%s*$") then
-			return true
-		end
-		-- Python multiline imports end with closing paren
-		if line:match("%)%s*$") then
-			return true
-		end
-	elseif filetype == "go" then
-		-- Go multi-line imports end with ')'
-		if line:match("%)%s*$") then
-			return true
-		end
-	elseif filetype == "rust" or filetype == "rs" then
-		-- Rust use statements end with ';'
-		if line:match(";%s*$") then
-			return true
-		end
-	end
+  -- Check for closing patterns
+  if filetype == "javascript" or filetype == "typescript" or filetype == "ts" or filetype == "tsx" then
+    -- ES6 imports end with 'from "..." ;' or just ';' or a line with just '}'
+    if line:match("from%s+['\"][^'\"]+['\"]%s*;?%s*$") then
+      return true
+    end
+    if line:match("}%s*from%s+['\"]") then
+      return true
+    end
+    if line:match("^%s*}%s*;?%s*$") then
+      return true
+    end
+    if line:match(";%s*$") then
+      return true
+    end
+  elseif filetype == "python" or filetype == "py" then
+    -- Python single-line import: doesn't end with \, (, or ,
+    -- Examples: "from typing import List, Dict" or "import os"
+    if not line:match("\\%s*$") and not line:match("%(%s*$") and not line:match(",%s*$") then
+      return true
+    end
+    -- Python multiline imports end with closing paren
+    if line:match("%)%s*$") then
+      return true
+    end
+  elseif filetype == "go" then
+    -- Go multi-line imports end with ')'
+    if line:match("%)%s*$") then
+      return true
+    end
+  elseif filetype == "rust" or filetype == "rs" then
+    -- Rust use statements end with ';'
+    if line:match(";%s*$") then
+      return true
+    end
+  end
 
-	return false
+  return false
 end
 
 return M

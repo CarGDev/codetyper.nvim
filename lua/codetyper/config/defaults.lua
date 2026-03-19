@@ -4,48 +4,48 @@ local M = {}
 
 ---@type CoderConfig
 local defaults = {
-	llm = {
-		provider = "ollama", -- Options: "ollama", "copilot"
-		ollama = {
-			host = "http://localhost:11434",
-			model = "deepseek-coder:6.7b",
-		},
-		copilot = {
-			model = "claude-sonnet-4", -- Uses GitHub Copilot authentication
-		},
-	},
-	auto_gitignore = true,
-	auto_index = false, -- Auto-create coder companion files on file open
-	indexer = {
-		enabled = true, -- Enable project indexing
-		auto_index = true, -- Index files on save
-		index_on_open = false, -- Index project when opening
-		max_file_size = 100000, -- Skip files larger than 100KB
-		excluded_dirs = { "node_modules", "dist", "build", ".git", ".codetyper", "__pycache__", "vendor", "target" },
-		index_extensions = { "lua", "ts", "tsx", "js", "jsx", "py", "go", "rs", "rb", "java", "c", "cpp", "h", "hpp" },
-		memory = {
-			enabled = true, -- Enable memory persistence
-			max_memories = 1000, -- Maximum stored memories
-			prune_threshold = 0.1, -- Remove low-weight memories
-		},
-	},
-	brain = {
-		enabled = true, -- Enable brain learning system
-		auto_learn = true, -- Auto-learn from events
-		auto_commit = true, -- Auto-commit after threshold
-		commit_threshold = 10, -- Changes before auto-commit
-		max_nodes = 5000, -- Maximum nodes before pruning
-		max_deltas = 500, -- Maximum delta history
-		prune = {
-			enabled = true, -- Enable auto-pruning
-			threshold = 0.1, -- Remove nodes below this weight
-			unused_days = 90, -- Remove unused nodes after N days
-		},
-		output = {
-			max_tokens = 4000, -- Token budget for LLM context
-			format = "compact", -- "compact"|"json"|"natural"
-		},
-	},
+  llm = {
+    provider = "ollama", -- Options: "ollama", "copilot"
+    ollama = {
+      host = "http://localhost:11434",
+      model = "deepseek-coder:6.7b",
+    },
+    copilot = {
+      model = "claude-sonnet-4", -- Uses GitHub Copilot authentication
+    },
+  },
+  auto_gitignore = true,
+  auto_index = false, -- Auto-create coder companion files on file open
+  indexer = {
+    enabled = true, -- Enable project indexing
+    auto_index = true, -- Index files on save
+    index_on_open = false, -- Index project when opening
+    max_file_size = 100000, -- Skip files larger than 100KB
+    excluded_dirs = { "node_modules", "dist", "build", ".git", ".codetyper", "__pycache__", "vendor", "target" },
+    index_extensions = { "lua", "ts", "tsx", "js", "jsx", "py", "go", "rs", "rb", "java", "c", "cpp", "h", "hpp" },
+    memory = {
+      enabled = true, -- Enable memory persistence
+      max_memories = 1000, -- Maximum stored memories
+      prune_threshold = 0.1, -- Remove low-weight memories
+    },
+  },
+  brain = {
+    enabled = true, -- Enable brain learning system
+    auto_learn = true, -- Auto-learn from events
+    auto_commit = true, -- Auto-commit after threshold
+    commit_threshold = 10, -- Changes before auto-commit
+    max_nodes = 5000, -- Maximum nodes before pruning
+    max_deltas = 500, -- Maximum delta history
+    prune = {
+      enabled = true, -- Enable auto-pruning
+      threshold = 0.1, -- Remove nodes below this weight
+      unused_days = 90, -- Remove unused nodes after N days
+    },
+    output = {
+      max_tokens = 4000, -- Token budget for LLM context
+      format = "compact", -- "compact"|"json"|"natural"
+    },
+  },
 }
 
 --- Deep merge two tables
@@ -53,53 +53,53 @@ local defaults = {
 ---@param t2 table Table to merge into base
 ---@return table Merged table
 local function deep_merge(t1, t2)
-	local result = vim.deepcopy(t1)
-	for k, v in pairs(t2) do
-		if type(v) == "table" and type(result[k]) == "table" then
-			result[k] = deep_merge(result[k], v)
-		else
-			result[k] = v
-		end
-	end
-	return result
+  local result = vim.deepcopy(t1)
+  for k, v in pairs(t2) do
+    if type(v) == "table" and type(result[k]) == "table" then
+      result[k] = deep_merge(result[k], v)
+    else
+      result[k] = v
+    end
+  end
+  return result
 end
 
 --- Setup configuration with user options
 ---@param opts? CoderConfig User configuration options
 ---@return CoderConfig Final configuration
 function M.setup(opts)
-	opts = opts or {}
-	return deep_merge(defaults, opts)
+  opts = opts or {}
+  return deep_merge(defaults, opts)
 end
 
 --- Get default configuration
 ---@return CoderConfig Default configuration
 function M.get_defaults()
-	return vim.deepcopy(defaults)
+  return vim.deepcopy(defaults)
 end
 
 --- Validate configuration
 ---@param config CoderConfig Configuration to validate
 ---@return boolean, string? Valid status and optional error message
 function M.validate(config)
-	if not config.llm then
-		return false, "Missing LLM configuration"
-	end
+  if not config.llm then
+    return false, "Missing LLM configuration"
+  end
 
-	local valid_providers = { "ollama", "copilot" }
-	local is_valid_provider = false
-	for _, p in ipairs(valid_providers) do
-		if config.llm.provider == p then
-			is_valid_provider = true
-			break
-		end
-	end
+  local valid_providers = { "ollama", "copilot" }
+  local is_valid_provider = false
+  for _, p in ipairs(valid_providers) do
+    if config.llm.provider == p then
+      is_valid_provider = true
+      break
+    end
+  end
 
-	if not is_valid_provider then
-		return false, "Invalid LLM provider. Must be one of: " .. table.concat(valid_providers, ", ")
-	end
+  if not is_valid_provider then
+    return false, "Invalid LLM provider. Must be one of: " .. table.concat(valid_providers, ", ")
+  end
 
-	return true
+  return true
 end
 
 return M

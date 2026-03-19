@@ -8,7 +8,6 @@ local M = {}
 local utils = require("codetyper.support.utils")
 local prompts = require("codetyper.prompts.agents.diff")
 
-
 ---@class DiffEntry
 ---@field path string File path
 ---@field operation string "create"|"edit"|"delete"
@@ -96,9 +95,16 @@ local function generate_diff_lines(original, modified, filepath)
 
       if orig ~= mod then
         if not in_change then
-          table.insert(lines, string.format("@@ -%d,%d +%d,%d @@",
-            math.max(1, i - 2), math.min(5, #orig_lines - i + 3),
-            math.max(1, i - 2), math.min(5, #mod_lines - i + 3)))
+          table.insert(
+            lines,
+            string.format(
+              "@@ -%d,%d +%d,%d @@",
+              math.max(1, i - 2),
+              math.min(5, #orig_lines - i + 3),
+              math.max(1, i - 2),
+              math.min(5, #mod_lines - i + 3)
+            )
+          )
           in_change = true
         end
         if orig ~= "" then
@@ -140,10 +146,12 @@ local function update_diff_view()
   local status_icon = entry.applied and " " or (entry.approved and " " or " ")
   local op_icon = entry.operation == "create" and "+" or (entry.operation == "delete" and "-" or "~")
   local current_status = entry.applied and ui_prompts.status.applied
-      or (entry.approved and ui_prompts.status.approved or ui_prompts.status.pending)
+    or (entry.approved and ui_prompts.status.approved or ui_prompts.status.pending)
 
-  table.insert(lines, string.format(ui_prompts.diff_header.top,
-    status_icon, op_icon, vim.fn.fnamemodify(entry.path, ":t")))
+  table.insert(
+    lines,
+    string.format(ui_prompts.diff_header.top, status_icon, op_icon, vim.fn.fnamemodify(entry.path, ":t"))
+  )
   table.insert(lines, string.format(ui_prompts.diff_header.path, entry.path))
   table.insert(lines, string.format(ui_prompts.diff_header.op, entry.operation))
   table.insert(lines, string.format(ui_prompts.diff_header.status, current_status))
@@ -332,7 +340,9 @@ function M.open()
   vim.keymap.set("n", "k", M.prev, list_opts)
   vim.keymap.set("n", "<Down>", M.next, list_opts)
   vim.keymap.set("n", "<Up>", M.prev, list_opts)
-  vim.keymap.set("n", "<CR>", function() vim.api.nvim_set_current_win(state.diff_win) end, list_opts)
+  vim.keymap.set("n", "<CR>", function()
+    vim.api.nvim_set_current_win(state.diff_win)
+  end, list_opts)
   vim.keymap.set("n", "a", M.approve_current, list_opts)
   vim.keymap.set("n", "r", M.reject_current, list_opts)
   vim.keymap.set("n", "A", M.approve_all, list_opts)
@@ -343,7 +353,9 @@ function M.open()
   local diff_opts = { buffer = state.diff_buf, noremap = true, silent = true }
   vim.keymap.set("n", "j", M.next, diff_opts)
   vim.keymap.set("n", "k", M.prev, diff_opts)
-  vim.keymap.set("n", "<Tab>", function() vim.api.nvim_set_current_win(state.list_win) end, diff_opts)
+  vim.keymap.set("n", "<Tab>", function()
+    vim.api.nvim_set_current_win(state.list_win)
+  end, diff_opts)
   vim.keymap.set("n", "a", M.approve_current, diff_opts)
   vim.keymap.set("n", "r", M.reject_current, diff_opts)
   vim.keymap.set("n", "A", M.approve_all, diff_opts)

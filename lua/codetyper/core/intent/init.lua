@@ -22,96 +22,96 @@ local prompts = require("codetyper.prompts.agents.intent")
 ---@param prompt string The prompt content
 ---@return Intent
 function M.detect(prompt)
-	local lower = prompt:lower()
-	local best_match = nil
-	local best_priority = 999
-	local matched_keywords = {}
+  local lower = prompt:lower()
+  local best_match = nil
+  local best_priority = 999
+  local matched_keywords = {}
 
-	-- Check each intent type
-	for intent_type, config in pairs(intent_patterns) do
-		for _, pattern in ipairs(config.patterns) do
-			if lower:find(pattern, 1, true) then
-				if config.priority < best_priority then
-					best_match = intent_type
-					best_priority = config.priority
-					matched_keywords = { pattern }
-				elseif config.priority == best_priority and best_match == intent_type then
-					table.insert(matched_keywords, pattern)
-				end
-			end
-		end
-	end
+  -- Check each intent type
+  for intent_type, config in pairs(intent_patterns) do
+    for _, pattern in ipairs(config.patterns) do
+      if lower:find(pattern, 1, true) then
+        if config.priority < best_priority then
+          best_match = intent_type
+          best_priority = config.priority
+          matched_keywords = { pattern }
+        elseif config.priority == best_priority and best_match == intent_type then
+          table.insert(matched_keywords, pattern)
+        end
+      end
+    end
+  end
 
-	-- Default to "add" if no clear intent
-	if not best_match then
-		best_match = "add"
-		matched_keywords = {}
-	end
+  -- Default to "add" if no clear intent
+  if not best_match then
+    best_match = "add"
+    matched_keywords = {}
+  end
 
-	local config = intent_patterns[best_match]
+  local config = intent_patterns[best_match]
 
-	-- Detect scope hint from prompt
-	local scope_hint = config.scope_hint
-	for pattern, hint in pairs(scope_patterns) do
-		if lower:find(pattern, 1, true) then
-			scope_hint = hint or scope_hint
-			break
-		end
-	end
+  -- Detect scope hint from prompt
+  local scope_hint = config.scope_hint
+  for pattern, hint in pairs(scope_patterns) do
+    if lower:find(pattern, 1, true) then
+      scope_hint = hint or scope_hint
+      break
+    end
+  end
 
-	-- Calculate confidence based on keyword matches
-	local confidence = 0.5 + (#matched_keywords * 0.15)
-	confidence = math.min(confidence, 1.0)
+  -- Calculate confidence based on keyword matches
+  local confidence = 0.5 + (#matched_keywords * 0.15)
+  confidence = math.min(confidence, 1.0)
 
-	return {
-		type = best_match,
-		scope_hint = scope_hint,
-		confidence = confidence,
-		action = config.action,
-		keywords = matched_keywords,
-	}
+  return {
+    type = best_match,
+    scope_hint = scope_hint,
+    confidence = confidence,
+    action = config.action,
+    keywords = matched_keywords,
+  }
 end
 
 --- Check if intent requires code modification
 ---@param intent Intent
 ---@return boolean
 function M.modifies_code(intent)
-	return intent.action ~= "none"
+  return intent.action ~= "none"
 end
 
 --- Check if intent should replace existing code
 ---@param intent Intent
 ---@return boolean
 function M.is_replacement(intent)
-	return intent.action == "replace"
+  return intent.action == "replace"
 end
 
 --- Check if intent adds new code
 ---@param intent Intent
 ---@return boolean
 function M.is_insertion(intent)
-	return intent.action == "insert" or intent.action == "append"
+  return intent.action == "insert" or intent.action == "append"
 end
 
 --- Get system prompt modifier based on intent
 ---@param intent Intent
 ---@return string
 function M.get_prompt_modifier(intent)
-	local modifiers = prompts.modifiers
-	return modifiers[intent.type] or modifiers.add
+  local modifiers = prompts.modifiers
+  return modifiers[intent.type] or modifiers.add
 end
 
 --- Format intent for logging
 ---@param intent Intent
 ---@return string
 function M.format(intent)
-	return string.format(
-		"%s (scope: %s, action: %s, confidence: %.2f)",
-		intent.type,
-		intent.scope_hint or "auto",
-		intent.action,
-		intent.confidence
-	)
+  return string.format(
+    "%s (scope: %s, action: %s, confidence: %.2f)",
+    intent.type,
+    intent.scope_hint or "auto",
+    intent.action,
+    intent.confidence
+  )
 end
 
 return M

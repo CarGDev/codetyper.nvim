@@ -323,8 +323,8 @@ function M.execute(opts)
   -- Nodes connected to multiple relevant seeds get higher activation
   local final_activations = spreading_activation(
     seed_activations,
-    opts.spread_iterations or 3,  -- How far activation spreads
-    opts.spread_decay or 0.5,     -- How much activation decays per hop
+    opts.spread_iterations or 3, -- How far activation spreads
+    opts.spread_decay or 0.5, -- How much activation decays per hop
     opts.spread_threshold or 0.05 -- Minimum activation to continue spreading
   )
 

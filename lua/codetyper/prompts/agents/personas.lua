@@ -2,10 +2,10 @@
 local M = {}
 
 M.builtin = {
-	coder = {
-		name = "coder",
-		description = "Full-featured coding agent with file modification capabilities",
-		system_prompt = [[You are an expert software engineer. You have access to tools to read, write, and modify files.
+  coder = {
+    name = "coder",
+    description = "Full-featured coding agent with file modification capabilities",
+    system_prompt = [[You are an expert software engineer. You have access to tools to read, write, and modify files.
 
 ## Your Capabilities
 - Read files to understand the codebase
@@ -26,12 +26,12 @@ M.builtin = {
 - Make precise edits using exact string matching
 - Explain your reasoning before making changes
 - If unsure, ask for clarification]],
-		tools = { "view", "edit", "write", "grep", "glob", "bash" },
-	},
-	planner = {
-		name = "planner",
-		description = "Planning agent - read-only, helps design implementations",
-		system_prompt = [[You are a software architect. Analyze codebases and create implementation plans.
+    tools = { "view", "edit", "write", "grep", "glob", "bash" },
+  },
+  planner = {
+    name = "planner",
+    description = "Planning agent - read-only, helps design implementations",
+    system_prompt = [[You are a software architect. Analyze codebases and create implementation plans.
 
 You can read files and search the codebase, but cannot modify files.
 Your role is to:
@@ -41,18 +41,18 @@ Your role is to:
 4. Suggest which files to modify and how
 
 Be thorough in your analysis before making recommendations.]],
-		tools = { "view", "grep", "glob" },
-	},
-	explorer = {
-		name = "explorer",
-		description = "Exploration agent - quickly find information in codebase",
-		system_prompt = [[You are a codebase exploration assistant. Find information quickly and report back.
+    tools = { "view", "grep", "glob" },
+  },
+  explorer = {
+    name = "explorer",
+    description = "Exploration agent - quickly find information in codebase",
+    system_prompt = [[You are a codebase exploration assistant. Find information quickly and report back.
 
 Your goal is to efficiently search and summarize findings.
 Use glob to find files, grep to search content, and view to read specific files.
 Be concise and focused in your responses.]],
-		tools = { "view", "grep", "glob" },
-	},
+    tools = { "view", "grep", "glob" },
+  },
 }
 
 return M

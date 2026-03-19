@@ -6,7 +6,6 @@ local M = {}
 
 local params = require("codetyper.params.agents.logs")
 
-
 ---@class LogEntry
 ---@field timestamp string ISO timestamp
 ---@field level string "info" | "debug" | "request" | "response" | "tool" | "error"
@@ -195,7 +194,10 @@ end
 ---@param tokens number Tokens used
 ---@param duration number Duration in seconds
 function M.explore_done(tool_uses, tokens, duration)
-  M.log("result", string.format("  ⎿  Done (%d tool uses · %.1fk tokens · %.1fs)", tool_uses, tokens / 1000, duration))
+  M.log(
+    "result",
+    string.format("  ⎿  Done (%d tool uses · %.1fk tokens · %.1fs)", tool_uses, tokens / 1000, duration)
+  )
 end
 
 --- Log update/edit operation

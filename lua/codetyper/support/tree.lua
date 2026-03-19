@@ -208,7 +208,7 @@ function M.generate_tree()
 
   -- Patterns to ignore
   local ignore_patterns = {
-    "^%.",           -- Hidden files/folders
+    "^%.", -- Hidden files/folders
     "^node_modules$",
     "^__pycache__$",
     "^%.git$",
@@ -217,7 +217,7 @@ function M.generate_tree()
     "^build$",
     "^target$",
     "^vendor$",
-    "%.codetyper%.",     -- Coder files
+    "%.codetyper%.", -- Coder files
   }
 
   local lines = {

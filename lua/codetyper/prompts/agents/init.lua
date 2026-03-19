@@ -23,7 +23,7 @@ end
 
 --- System prompt for agent mode
 M.system =
-	[[You are an expert AI coding assistant integrated into Neovim. You MUST use the provided tools to accomplish tasks.
+  [[You are an expert AI coding assistant integrated into Neovim. You MUST use the provided tools to accomplish tasks.
 
 ## CRITICAL: YOU MUST USE TOOLS
 

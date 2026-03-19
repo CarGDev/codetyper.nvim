@@ -1,3 +1,5 @@
+local M = {}
+
 M.description = [[Makes a targeted edit to a file by replacing text.
 
 The old_string should match the content you want to replace. The tool uses multiple

@@ -282,7 +282,12 @@ function M.format(delta)
     "",
     "    " .. (delta.m.msg or "No message"),
     "",
-    string.format(" %d additions, %d modifications, %d deletions", summary.stats.adds, summary.stats.modifies, summary.stats.deletes),
+    string.format(
+      " %d additions, %d modifications, %d deletions",
+      summary.stats.adds,
+      summary.stats.modifies,
+      summary.stats.deletes
+    ),
   }
 
   return lines

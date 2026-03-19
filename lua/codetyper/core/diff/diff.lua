@@ -163,9 +163,9 @@ function M.show_diff(diff_data, callback)
   local final_help = {}
   for _, item in ipairs(help_msg) do
     if item[1] == "{path}" then
-       table.insert(final_help, { diff_data.path, item[2] })
+      table.insert(final_help, { diff_data.path, item[2] })
     else
-       table.insert(final_help, item)
+      table.insert(final_help, item)
     end
   end
 
@@ -210,7 +210,7 @@ function M.show_bash_approval(command, callback)
   table.insert(lines, approval_prompts.divider)
   table.insert(lines, "")
   for _, opt in ipairs(approval_prompts.options) do
-     table.insert(lines, opt)
+    table.insert(lines, opt)
   end
   table.insert(lines, "")
   table.insert(lines, approval_prompts.divider)

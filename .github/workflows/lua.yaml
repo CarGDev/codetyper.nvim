@@ -6,15 +6,41 @@ on:
     paths:
       - "lua/**/*.lua"
       - "plugin/**/*.lua"
+      - ".stylua.toml"
+      - ".luacheckrc"
       - .github/workflows/lua.yaml
   pull_request:
     branches: [master]
     paths:
       - "lua/**/*.lua"
       - "plugin/**/*.lua"
+      - ".stylua.toml"
+      - ".luacheckrc"
       - .github/workflows/lua.yaml
 
 jobs:
+  format:
+    name: StyLua auto-format
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run StyLua
+        uses: JohnnyMorganz/stylua-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          version: latest
+          args: lua/ plugin/
+
+      - name: Commit formatting changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "style: auto-format with stylua"
+          file_pattern: "lua/**/*.lua plugin/**/*.lua"
+
   lint:
     name: Luacheck
     runs-on: ubuntu-latest
@@ -31,19 +57,7 @@ jobs:
         run: luarocks install luacheck
 
       - name: Run luacheck
-        run: luacheck lua/ plugin/ --globals vim describe it before_each after_each assert --no-max-line-length
-
-  stylua:
-    name: StyLua format check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: JohnnyMorganz/stylua-action@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          version: latest
-          args: --check lua/ plugin/
+        run: luacheck lua/ plugin/
 
   health:
     name: Plugin load check

@@ -80,13 +80,7 @@ function M.to_compact(result, opts)
         break
       end
 
-      local conn_line = string.format(
-        "  %s --%s(%.2f)--> %s",
-        edge.s:sub(-8),
-        edge.ty,
-        edge.p.w or 0.5,
-        edge.t:sub(-8)
-      )
+      local conn_line = string.format("  %s --%s(%.2f)--> %s", edge.s:sub(-8), edge.ty, edge.p.w or 0.5, edge.t:sub(-8))
       table.insert(lines, conn_line)
       current_tokens = current_tokens + M.estimate_tokens(conn_line)
     end
@@ -235,7 +229,10 @@ function M.format_chain(chain)
   for i, item in ipairs(chain) do
     if item.node then
       local prefix = i == 1 and "" or "  -> "
-      table.insert(lines, string.format("%s[%s] %s (w:%.2f)", prefix, item.node.t:upper(), item.node.c.s:sub(1, 50), item.node.sc.w))
+      table.insert(
+        lines,
+        string.format("%s[%s] %s (w:%.2f)", prefix, item.node.t:upper(), item.node.c.s:sub(1, 50), item.node.sc.w)
+      )
     end
     if item.edge then
       table.insert(lines, string.format("     via %s (w:%.2f)", item.edge.ty, item.edge.p.w))

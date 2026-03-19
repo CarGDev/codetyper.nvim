@@ -247,7 +247,10 @@ function M.handle_bash(params, callback)
   local command = params.command
 
   -- Log the bash operation
-  logs.add({ type = "action", message = string.format("Bash(%s)", command:sub(1, 50) .. (#command > 50 and "..." or "")) })
+  logs.add({
+    type = "action",
+    message = string.format("Bash(%s)", command:sub(1, 50) .. (#command > 50 and "..." or "")),
+  })
   logs.add({ type = "result", message = "  ⎿  Pending approval" })
 
   -- Requires user approval first
@@ -374,7 +377,8 @@ function M.handle_search_files(params, callback)
   if content_search then
     -- Search by content using grep
     local grep_results = {}
-    local grep_cmd = string.format("grep -rl '%s' '%s' 2>/dev/null | head -20", content_search:gsub("'", "\\'"), search_path)
+    local grep_cmd =
+      string.format("grep -rl '%s' '%s' 2>/dev/null | head -20", content_search:gsub("'", "\\'"), search_path)
 
     local handle = io.popen(grep_cmd)
     if handle then

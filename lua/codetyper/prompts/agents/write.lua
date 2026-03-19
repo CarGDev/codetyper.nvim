@@ -1,3 +1,5 @@
+local M = {}
+
 M.description = [[Creates or overwrites a file with new content.
 
 IMPORTANT:

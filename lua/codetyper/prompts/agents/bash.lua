@@ -1,3 +1,5 @@
+local M = {}
+
 M.description = [[Executes a bash command in a shell.
 
 IMPORTANT RULES:
