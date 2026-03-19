@@ -1,13 +1,15 @@
 ---@mod codetyper Codetyper.nvim - AI-powered coding partner
 ---@brief [[
 --- Codetyper.nvim is a Neovim plugin that acts as your coding partner.
---- It uses LLM APIs (OpenAI, Gemini, Copilot, Ollama) to help you
---- write code faster using special `.codetyper/*` files and inline prompt tags.
+--- It uses LLM APIs (Copilot, Ollama) to help you write code faster
+--- with inline prompt tags and visual selection transforms.
 --- Features an event-driven scheduler with confidence scoring and
 --- completion-aware injection timing.
 ---@brief ]]
 
 local M = {}
+
+M.version = "0.7.0-dev"
 
 ---@type CoderConfig
 M.config = {}

@@ -220,9 +220,13 @@ local function cmd_llm_reset_stats()
 end
 
 local function coder_cmd(args)
-	local subcommand = args.fargs[1] or "toggle"
+	local subcommand = args.fargs[1] or "version"
 
 	local commands = {
+		["version"] = function()
+			local codetyper = require("codetyper")
+			utils.notify("Codetyper.nvim " .. codetyper.version, vim.log.levels.INFO)
+		end,
 		tree = cmd_tree,
 		["tree-view"] = cmd_tree_view,
 		reset = cmd_reset,
@@ -287,6 +291,7 @@ function M.setup()
 		nargs = "?",
 		complete = function()
 			return {
+				"version",
 				"tree",
 				"tree-view",
 				"reset",
