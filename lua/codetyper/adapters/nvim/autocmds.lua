@@ -154,7 +154,7 @@ function M.setup()
 	-- Auto-set filetype for coder files based on extension
 	vim.api.nvim_create_autocmd({ "BufRead", "BufNewFile" }, {
 		group = group,
-		pattern = "*.coder.*",
+		pattern = "*.codetyper/*",
 		callback = function()
 			M.set_coder_filetype()
 		end,
@@ -164,7 +164,7 @@ function M.setup()
 	-- Auto-open split view when opening a coder file directly (e.g., from nvim-tree)
 	vim.api.nvim_create_autocmd("BufEnter", {
 		group = group,
-		pattern = "*.coder.*",
+		pattern = "*.codetyper/*",
 		callback = function()
 			-- Delay slightly to ensure buffer is fully loaded
 			vim.defer_fn(function()
@@ -177,7 +177,7 @@ function M.setup()
 	-- Cleanup on buffer close
 	vim.api.nvim_create_autocmd("BufWipeout", {
 		group = group,
-		pattern = "*.coder.*",
+		pattern = "*.codetyper/*",
 		callback = function(ev)
 			local window = require("codetyper.adapters.nvim.windows")
 			if window.is_open() then
@@ -203,11 +203,11 @@ function M.setup()
 		callback = function(ev)
 			-- Skip coder files and tree.log itself
 			local filepath = ev.file or vim.fn.expand("%:p")
-			if filepath:match("%.coder%.") or filepath:match("tree%.log$") then
+			if filepath:match("%.codetyper%.") or filepath:match("tree%.log$") then
 				return
 			end
 			-- Skip non-project files
-			if filepath:match("node_modules") or filepath:match("%.git/") or filepath:match("%.coder/") then
+			if filepath:match("node_modules") or filepath:match("%.git/") or filepath:match("%.codetyper/") then
 				return
 			end
 			-- Schedule tree update with debounce
@@ -237,7 +237,7 @@ function M.setup()
 		callback = function(ev)
 			local filepath = ev.file or ""
 			-- Skip special buffers and coder files
-			if filepath == "" or filepath:match("%.coder%.") or filepath:match("tree%.log$") then
+			if filepath == "" or filepath:match("%.codetyper%.") or filepath:match("tree%.log$") then
 				return
 			end
 			schedule_tree_update()
@@ -284,23 +284,6 @@ function M.setup()
 	-- Thinking indicator (throbber) cleanup on exit
 	local thinking = require("codetyper.adapters.nvim.ui.thinking")
 	thinking.setup()
-end
-
---- Get config with fallback defaults
-local function get_config_safe()
-	local codetyper = require("codetyper")
-	local config = codetyper.get_config()
-	-- Return defaults if not initialized
-	if not config or not config.patterns then
-		return {
-			patterns = {
-				open_tag = "/@",
-				close_tag = "@/",
-				file_pattern = "*.coder.*",
-			},
-		}
-	end
-	return config
 end
 
 --- Create extmarks for injection range so position survives user edits (99-style).
@@ -383,7 +366,6 @@ function M.check_for_closed_prompt()
 	end
 	is_processing = true
 
-	local config = get_config_safe()
 	local parser = require("codetyper.parser")
 
 	local bufnr = vim.api.nvim_get_current_buf()
@@ -793,34 +775,12 @@ end
 --- Check for closed prompt with preference check
 --- If user hasn't chosen auto/manual mode, ask them first
 function M.check_for_closed_prompt_with_preference()
-	local preferences = require("codetyper.config.preferences")
 	local parser = require("codetyper.parser")
 
 	-- First check if there are any prompts to process
 	local bufnr = vim.api.nvim_get_current_buf()
 	local prompts = parser.find_prompts_in_buffer(bufnr)
 	if #prompts == 0 then
-		return
-	end
-
-	-- Check user preference
-	local auto_process = preferences.is_auto_process_enabled()
-
-	if auto_process == nil then
-		-- Not yet decided - ask the user (but only once per session)
-		if not asking_preference then
-			asking_preference = true
-			preferences.ask_auto_process_preference(function(enabled)
-				asking_preference = false
-				if enabled then
-					-- User chose automatic - process now
-					M.check_for_closed_prompt()
-				else
-					-- User chose manual - show hint
-					utils.notify("Use :CoderProcess to process prompt tags manually", vim.log.levels.INFO)
-				end
-			end)
-		end
 		return
 	end
 
@@ -854,27 +814,6 @@ function M.check_all_prompts_with_preference()
 	end
 
 	if not has_unprocessed then
-		return
-	end
-
-	-- Check user preference
-	local auto_process = preferences.is_auto_process_enabled()
-
-	if auto_process == nil then
-		-- Not yet decided - ask the user (but only once per session)
-		if not asking_preference then
-			asking_preference = true
-			preferences.ask_auto_process_preference(function(enabled)
-				asking_preference = false
-				if enabled then
-					-- User chose automatic - process now
-					M.check_all_prompts()
-				else
-					-- User chose manual - show hint
-					utils.notify("Use :CoderProcess to process prompt tags manually", vim.log.levels.INFO)
-				end
-			end)
-		end
 		return
 	end
 
@@ -1006,8 +945,8 @@ end
 function M.set_coder_filetype()
 	local filepath = vim.fn.expand("%:p")
 
-	-- Extract the actual extension (e.g., index.coder.ts -> ts)
-	local ext = filepath:match("%.coder%.(%w+)$")
+	-- Extract the actual extension (e.g., index.codetyper/ts -> ts)
+	local ext = filepath:match("%.codetyper%.(%w+)$")
 
 	if ext then
 		-- Map extension to filetype
@@ -1196,7 +1135,7 @@ end
 --- Directories to ignore for coder file creation
 local ignored_directories = {
 	".git",
-	".coder",
+	".codetyper",
 	".claude",
 	".vscode",
 	".idea",
@@ -1432,7 +1371,6 @@ function M.auto_index_file(bufnr)
 			comment_prefix .. " This file describes the business logic and behavior of " .. filename
 		)
 		table.insert(pseudo_code, comment_prefix .. " Edit this pseudo-code to guide code generation.")
-		table.insert(pseudo_code, comment_prefix .. " Use /@ @/ tags for specific generation requests.")
 		table.insert(pseudo_code, comment_prefix .. "")
 
 		-- Module purpose
@@ -1534,12 +1472,11 @@ function M.auto_index_file(bufnr)
 			table.insert(pseudo_code, comment_prefix .. " TODO: Describe what you want to build in this file")
 			table.insert(pseudo_code, comment_prefix .. "")
 			table.insert(pseudo_code, comment_prefix .. " Example pseudo-code:")
-			table.insert(pseudo_code, comment_prefix .. " /@")
+
 			table.insert(pseudo_code, comment_prefix .. " Create a module that:")
 			table.insert(pseudo_code, comment_prefix .. " 1. Exports a main function")
 			table.insert(pseudo_code, comment_prefix .. " 2. Handles errors gracefully")
 			table.insert(pseudo_code, comment_prefix .. " 3. Returns structured data")
-			table.insert(pseudo_code, comment_prefix .. " @/")
 			table.insert(pseudo_code, comment_prefix .. "")
 		end
 
@@ -1568,7 +1505,6 @@ function M.auto_index_file(bufnr)
 			comment_prefix
 				.. " ═══════════════════════════════════════════════════════════"
 		)
-		table.insert(pseudo_code, comment_prefix .. " Use /@ @/ tags below to request code generation:")
 		table.insert(
 			pseudo_code,
 			comment_prefix

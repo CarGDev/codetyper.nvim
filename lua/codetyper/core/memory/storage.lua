@@ -25,7 +25,7 @@ local DEBOUNCE_MS = 500
 ---@return string Brain directory path
 function M.get_brain_dir(root)
   root = root or utils.get_project_root()
-  return root .. "/.coder/brain"
+  return root .. "/.codetyper/brain"
 end
 
 --- Ensure brain directory structure exists

@@ -213,9 +213,9 @@ function M.create_from_event(event, generated_code, confidence, strategy)
 		end
 	end
 
-	-- Detect if this is an inline prompt (source == target, not a .coder. file)
+	-- Detect if this is an inline prompt (source == target, not a .codetyper/ file)
 	local is_inline = (source_bufnr == target_bufnr) or
-		(event.target_path and not event.target_path:match("%.coder%."))
+		(event.target_path and not event.target_path:match("%.codetyper%."))
 
 	-- Take snapshot of the scope range in target buffer (for staleness detection)
 	local snapshot_range = event.scope_range or event.range
@@ -452,89 +452,6 @@ function M.mark_rejected(id, reason)
 	return false
 end
 
---- Remove /@ @/ prompt tags from buffer
----@param bufnr number Buffer number
----@return number Number of tag regions removed
-local function remove_prompt_tags(bufnr)
-	if not vim.api.nvim_buf_is_valid(bufnr) then
-		return 0
-	end
-
-	local removed = 0
-	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-
-	-- Find and remove all /@ ... @/ regions (can be multiline)
-	local i = 1
-	while i <= #lines do
-		local line = lines[i]
-		local open_start = line:find("/@")
-
-		if open_start then
-			-- Found an opening tag, look for closing tag
-			local close_end = nil
-			local close_line = i
-
-			-- Check if closing tag is on same line
-			local after_open = line:sub(open_start + 2)
-			local same_line_close = after_open:find("@/")
-			if same_line_close then
-				-- Single line tag - remove just this portion
-				local before = line:sub(1, open_start - 1)
-				local after = line:sub(open_start + 2 + same_line_close + 1)
-				lines[i] = before .. after
-				-- If line is now empty or just whitespace, remove it
-				if lines[i]:match("^%s*$") then
-					table.remove(lines, i)
-				else
-					i = i + 1
-				end
-				removed = removed + 1
-			else
-				-- Multi-line tag - find the closing line
-				for j = i, #lines do
-					if lines[j]:find("@/") then
-						close_line = j
-						close_end = lines[j]:find("@/")
-						break
-					end
-				end
-
-				if close_end then
-					-- Remove lines from i to close_line
-					-- Keep content before /@ on first line and after @/ on last line
-					local before = lines[i]:sub(1, open_start - 1)
-					local after = lines[close_line]:sub(close_end + 2)
-
-					-- Remove the lines containing the tag
-					for _ = i, close_line do
-						table.remove(lines, i)
-					end
-
-					-- If there's content to keep, insert it back
-					local remaining = (before .. after):match("^%s*(.-)%s*$")
-					if remaining and remaining ~= "" then
-						table.insert(lines, i, remaining)
-						i = i + 1
-					end
-
-					removed = removed + 1
-				else
-					-- No closing tag found, skip this line
-					i = i + 1
-				end
-			end
-		else
-			i = i + 1
-		end
-	end
-
-	if removed > 0 then
-		vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-	end
-
-	return removed
-end
-
 --- Check if it's safe to modify the buffer (not in insert or visual mode)
 ---@return boolean
 local function is_safe_to_modify()
@@ -625,45 +542,8 @@ function M.apply(patch)
 	local is_inline_prompt = patch.is_inline_prompt or (source_bufnr == target_bufnr)
 	local tags_removed = 0
 
-	-- For CODER FILES (source != target): Remove tags from source, inject into target
-	-- For INLINE PROMPTS (source == target): Include tag range in injection, no separate removal
-	if not is_inline_prompt and source_bufnr and vim.api.nvim_buf_is_valid(source_bufnr) then
-		tags_removed = remove_prompt_tags(source_bufnr)
-
-		pcall(function()
-			if tags_removed > 0 then
-				local logs = require("codetyper.adapters.nvim.ui.logs")
-				local source_name = vim.api.nvim_buf_get_name(source_bufnr)
-				logs.add({
-					type = "info",
-					message = string.format("Removed %d prompt tag(s) from %s",
-						tags_removed,
-						vim.fn.fnamemodify(source_name, ":t")),
-				})
-			end
-		end)
-	end
-
 	-- Get filetype for smart injection
 	local filetype = vim.fn.fnamemodify(patch.target_path or "", ":e")
-
-	-- SEARCH/REPLACE MODE: Use fuzzy matching to find and replace text
-	if patch.use_search_replace and patch.search_replace_blocks and #patch.search_replace_blocks > 0 then
-		local search_replace = get_search_replace_module()
-
-		-- Remove the /@ @/ tags first (they shouldn't be in the file anymore)
-		if is_inline_prompt and source_bufnr and vim.api.nvim_buf_is_valid(source_bufnr) then
-			tags_removed = remove_prompt_tags(source_bufnr)
-			if tags_removed > 0 then
-				pcall(function()
-					local logs = require("codetyper.adapters.nvim.ui.logs")
-					logs.add({
-						type = "info",
-						message = string.format("Removed %d prompt tag(s)", tags_removed),
-					})
-				end)
-			end
-		end
 
 		-- Apply SEARCH/REPLACE blocks
 		local success, err = search_replace.apply_to_buffer(target_bufnr, patch.search_replace_blocks)
@@ -1104,11 +984,7 @@ function M.apply_with_conflict(patch)
 	local source_bufnr = patch.source_bufnr
 	local is_inline_prompt = patch.is_inline_prompt or (source_bufnr == target_bufnr)
 
-	-- Remove tags from coder files
-	if not is_inline_prompt and source_bufnr and vim.api.nvim_buf_is_valid(source_bufnr) then
-		remove_prompt_tags(source_bufnr)
-	end
-
+	
 	-- For SEARCH/REPLACE blocks, convert each block to a conflict
 	if patch.use_search_replace and patch.search_replace_blocks and #patch.search_replace_blocks > 0 then
 		local search_replace = get_search_replace_module()
@@ -1147,11 +1023,6 @@ function M.apply_with_conflict(patch)
 		end
 
 		if applied_count > 0 then
-			-- Remove tags for inline prompts after inserting conflicts
-			if is_inline_prompt and source_bufnr and vim.api.nvim_buf_is_valid(source_bufnr) then
-				remove_prompt_tags(source_bufnr)
-			end
-
 			-- Process conflicts (highlight, keymaps) and show menu
 			conflict.process_and_show_menu(target_bufnr)
 
@@ -1177,11 +1048,6 @@ function M.apply_with_conflict(patch)
 		local start_line = patch.injection_range.start_line
 		local end_line = patch.injection_range.end_line
 		local new_lines = vim.split(patch.generated_code, "\n", { plain = true })
-
-		-- Remove tags for inline prompts
-		if is_inline_prompt and source_bufnr and vim.api.nvim_buf_is_valid(source_bufnr) then
-			remove_prompt_tags(source_bufnr)
-		end
 
 		-- Insert conflict markers
 		conflict.insert_conflict(target_bufnr, start_line, end_line, new_lines, "AI SUGGESTION")

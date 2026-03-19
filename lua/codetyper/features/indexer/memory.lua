@@ -1,6 +1,6 @@
 ---@mod codetyper.indexer.memory Memory persistence manager
 ---@brief [[
---- Stores and retrieves learned patterns and memories in .coder/memories/.
+--- Stores and retrieves learned patterns and memories in .codetyper/memories/.
 --- Supports session history for learning from interactions.
 ---@brief ]]
 
@@ -42,7 +42,7 @@ local function get_memories_dir()
 	if not root then
 		return nil
 	end
-	return root .. "/.coder/" .. MEMORIES_DIR
+	return root .. "/.codetyper/" .. MEMORIES_DIR
 end
 
 --- Get the sessions directory
@@ -52,7 +52,7 @@ local function get_sessions_dir()
 	if not root then
 		return nil
 	end
-	return root .. "/.coder/" .. SESSIONS_DIR
+	return root .. "/.codetyper/" .. SESSIONS_DIR
 end
 
 --- Ensure memories directory exists

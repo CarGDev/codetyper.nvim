@@ -1,7 +1,7 @@
 ---@mod codetyper.indexer Project indexer for Codetyper.nvim
 ---@brief [[
 --- Indexes project structure, dependencies, and code symbols.
---- Stores knowledge in .coder/ directory for enriching LLM context.
+--- Stores knowledge in .codetyper/ directory for enriching LLM context.
 ---@brief ]]
 
 local M = {}
@@ -24,7 +24,7 @@ local default_config = {
 	auto_index = true,
 	index_on_open = false,
 	max_file_size = 100000,
-	excluded_dirs = { "node_modules", "dist", "build", ".git", ".coder", "__pycache__", "vendor", "target" },
+	excluded_dirs = { "node_modules", "dist", "build", ".git", ".codetyper", "__pycache__", "vendor", "target" },
 	index_extensions = { "lua", "ts", "tsx", "js", "jsx", "py", "go", "rs", "rb", "java", "c", "cpp", "h", "hpp" },
 	memory = {
 		enabled = true,
@@ -94,7 +94,7 @@ local function get_index_path()
 	if not root then
 		return nil
 	end
-	return root .. "/.coder/" .. INDEX_FILE
+	return root .. "/.codetyper/" .. INDEX_FILE
 end
 
 --- Create empty index structure
@@ -168,8 +168,8 @@ function M.save_index(index)
 		return false
 	end
 
-	-- Ensure .coder directory exists
-	local coder_dir = root .. "/.coder"
+	-- Ensure .codetyper directory exists
+	local coder_dir = root .. "/.codetyper"
 	utils.ensure_dir(coder_dir)
 
 	local path = get_index_path()

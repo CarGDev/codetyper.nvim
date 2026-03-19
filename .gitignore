@@ -1,6 +1,4 @@
 # Codetyper.nvim - AI coding partner files
-*.coder.*
-.coder/
 .claude/
 Makefile
 

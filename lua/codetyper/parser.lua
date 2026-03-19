@@ -5,31 +5,15 @@ local M = {}
 local utils = require("codetyper.support.utils")
 local logger = require("codetyper.support.logger")
 
---- Get config with safe fallback
----@return table config
-local function get_config_safe()
-	logger.func_entry("parser", "get_config_safe", {})
-	
-	local ok, codetyper = pcall(require, "codetyper")
-	if ok and codetyper.get_config then
-		local config = codetyper.get_config()
-		if config and config.patterns then
-			logger.debug("parser", "get_config_safe: loaded config from codetyper")
-			logger.func_exit("parser", "get_config_safe", "success")
-			return config
-		end
-	end
-	
-	logger.debug("parser", "get_config_safe: using fallback defaults")
-	logger.func_exit("parser", "get_config_safe", "fallback")
-	
-	-- Fallback defaults
-	return {
-		patterns = {
-			open_tag = "/@",
-			close_tag = "@/",
-		},
-	}
+-- Get current codetyper configuration at call time
+local function get_config()
+    local ok, codetyper = pcall(require, "codetyper")
+    if ok and codetyper.get_config then
+        return codetyper.get_config() or {}
+    end
+    -- Fall back to defaults if codetyper isn't available
+    local defaults = require("codetyper.config.defaults")
+    return defaults.get_defaults()
 end
 
 --- Find all prompts in buffer content
@@ -41,9 +25,9 @@ function M.find_prompts(content, open_tag, close_tag)
 	logger.func_entry("parser", "find_prompts", {
 		content_length = #content,
 		open_tag = open_tag,
-		close_tag = close_tag
+		close_tag = close_tag,
 	})
-	
+
 	local prompts = {}
 	local escaped_open = utils.escape_pattern(open_tag)
 	local escaped_close = utils.escape_pattern(close_tag)
@@ -94,7 +78,13 @@ function M.find_prompts(content, open_tag, close_tag)
 				current_prompt.end_line = line_num
 				current_prompt.end_col = end_col + #close_tag - 1
 				table.insert(prompts, current_prompt)
-				logger.debug("parser", "find_prompts: multi-line prompt completed at line " .. line_num .. ", total lines: " .. #prompt_content)
+				logger.debug(
+					"parser",
+					"find_prompts: multi-line prompt completed at line "
+						.. line_num
+						.. ", total lines: "
+						.. #prompt_content
+				)
 				in_prompt = false
 				current_prompt = nil
 				prompt_content = {}
@@ -106,7 +96,7 @@ function M.find_prompts(content, open_tag, close_tag)
 
 	logger.debug("parser", "find_prompts: found " .. #prompts .. " prompts total")
 	logger.func_exit("parser", "find_prompts", "found " .. #prompts .. " prompts")
-	
+
 	return prompts
 end
 
@@ -115,16 +105,18 @@ end
 ---@return CoderPrompt[] List of found prompts
 function M.find_prompts_in_buffer(bufnr)
 	logger.func_entry("parser", "find_prompts_in_buffer", { bufnr = bufnr })
-	
-	local config = get_config_safe()
 
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 	local content = table.concat(lines, "\n")
 
-	logger.debug("parser", "find_prompts_in_buffer: bufnr=" .. bufnr .. ", lines=" .. #lines .. ", content_length=" .. #content)
+	logger.debug(
+		"parser",
+		"find_prompts_in_buffer: bufnr=" .. bufnr .. ", lines=" .. #lines .. ", content_length=" .. #content
+	)
 
-	local result = M.find_prompts(content, config.patterns.open_tag, config.patterns.close_tag)
-	
+    local cfg = get_config()
+    local result = M.find_prompts(content, cfg.patterns.open_tag, cfg.patterns.close_tag)
+
 	logger.func_exit("parser", "find_prompts_in_buffer", "found " .. #result .. " prompts")
 	return result
 end
@@ -141,7 +133,7 @@ function M.get_prompt_at_cursor(bufnr)
 	logger.func_entry("parser", "get_prompt_at_cursor", {
 		bufnr = bufnr,
 		line = line,
-		col = col
+		col = col,
 	})
 
 	local prompts = M.find_prompts_in_buffer(bufnr)
@@ -149,15 +141,30 @@ function M.get_prompt_at_cursor(bufnr)
 	logger.debug("parser", "get_prompt_at_cursor: checking " .. #prompts .. " prompts")
 
 	for i, prompt in ipairs(prompts) do
-		logger.debug("parser", "get_prompt_at_cursor: checking prompt " .. i .. " (lines " .. prompt.start_line .. "-" .. prompt.end_line .. ")")
+		logger.debug(
+			"parser",
+			"get_prompt_at_cursor: checking prompt "
+				.. i
+				.. " (lines "
+				.. prompt.start_line
+				.. "-"
+				.. prompt.end_line
+				.. ")"
+		)
 		if line >= prompt.start_line and line <= prompt.end_line then
 			logger.debug("parser", "get_prompt_at_cursor: cursor line " .. line .. " is within prompt line range")
 			if line == prompt.start_line and col < prompt.start_col then
-				logger.debug("parser", "get_prompt_at_cursor: cursor col " .. col .. " is before prompt start_col " .. prompt.start_col)
+				logger.debug(
+					"parser",
+					"get_prompt_at_cursor: cursor col " .. col .. " is before prompt start_col " .. prompt.start_col
+				)
 				goto continue
 			end
 			if line == prompt.end_line and col > prompt.end_col then
-				logger.debug("parser", "get_prompt_at_cursor: cursor col " .. col .. " is after prompt end_col " .. prompt.end_col)
+				logger.debug(
+					"parser",
+					"get_prompt_at_cursor: cursor col " .. col .. " is after prompt end_col " .. prompt.end_col
+				)
 				goto continue
 			end
 			logger.debug("parser", "get_prompt_at_cursor: found prompt at cursor")
@@ -177,9 +184,9 @@ end
 ---@return CoderPrompt|nil Last prompt or nil
 function M.get_last_prompt(bufnr)
 	bufnr = bufnr or vim.api.nvim_get_current_buf()
-	
+
 	logger.func_entry("parser", "get_last_prompt", { bufnr = bufnr })
-	
+
 	local prompts = M.find_prompts_in_buffer(bufnr)
 
 	if #prompts > 0 then
@@ -199,7 +206,7 @@ end
 ---@return "refactor" | "add" | "document" | "explain" | "generic" Prompt type
 function M.detect_prompt_type(content)
 	logger.func_entry("parser", "detect_prompt_type", { content_preview = content:sub(1, 50) })
-	
+
 	local lower = content:lower()
 
 	if lower:match("refactor") then
@@ -230,15 +237,15 @@ end
 ---@return string Cleaned content
 function M.clean_prompt(content)
 	logger.func_entry("parser", "clean_prompt", { content_length = #content })
-	
+
 	-- Trim leading/trailing whitespace
 	content = content:match("^%s*(.-)%s*$")
 	-- Normalize multiple newlines
 	content = content:gsub("\n\n\n+", "\n\n")
-	
+
 	logger.debug("parser", "clean_prompt: cleaned from " .. #content .. " chars")
 	logger.func_exit("parser", "clean_prompt", "length=" .. #content)
-	
+
 	return content
 end
 
@@ -248,12 +255,12 @@ end
 ---@return boolean
 function M.has_closing_tag(line, close_tag)
 	logger.func_entry("parser", "has_closing_tag", { line_preview = line:sub(1, 30), close_tag = close_tag })
-	
+
 	local result = line:find(utils.escape_pattern(close_tag)) ~= nil
-	
+
 	logger.debug("parser", "has_closing_tag: result=" .. tostring(result))
 	logger.func_exit("parser", "has_closing_tag", result)
-	
+
 	return result
 end
 
@@ -262,25 +269,32 @@ end
 ---@return boolean
 function M.has_unclosed_prompts(bufnr)
 	bufnr = bufnr or vim.api.nvim_get_current_buf()
-	
+
 	logger.func_entry("parser", "has_unclosed_prompts", { bufnr = bufnr })
-	
-	local config = get_config_safe()
 
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 	local content = table.concat(lines, "\n")
 
-	local escaped_open = utils.escape_pattern(config.patterns.open_tag)
-	local escaped_close = utils.escape_pattern(config.patterns.close_tag)
+    local cfg = get_config()
+    local escaped_open = utils.escape_pattern(cfg.patterns.open_tag)
+    local escaped_close = utils.escape_pattern(cfg.patterns.close_tag)
 
 	local _, open_count = content:gsub(escaped_open, "")
 	local _, close_count = content:gsub(escaped_close, "")
 
 	local has_unclosed = open_count > close_count
-	
-	logger.debug("parser", "has_unclosed_prompts: open=" .. open_count .. ", close=" .. close_count .. ", unclosed=" .. tostring(has_unclosed))
+
+	logger.debug(
+		"parser",
+		"has_unclosed_prompts: open="
+			.. open_count
+			.. ", close="
+			.. close_count
+			.. ", unclosed="
+			.. tostring(has_unclosed)
+	)
 	logger.func_exit("parser", "has_unclosed_prompts", has_unclosed)
-	
+
 	return has_unclosed
 end
 
@@ -290,7 +304,7 @@ end
 ---@return string[] List of file references
 function M.extract_file_references(content)
 	logger.func_entry("parser", "extract_file_references", { content_length = #content })
-	
+
 	local files = {}
 	-- Pattern: @ followed by word char, dot, underscore, or dash as FIRST char
 	-- Then optionally more path characters including /
@@ -301,10 +315,10 @@ function M.extract_file_references(content)
 			logger.debug("parser", "extract_file_references: found file reference: " .. file)
 		end
 	end
-	
+
 	logger.debug("parser", "extract_file_references: found " .. #files .. " file references")
 	logger.func_exit("parser", "extract_file_references", files)
-	
+
 	return files
 end
 
@@ -313,14 +327,14 @@ end
 ---@return string Cleaned content without file references
 function M.strip_file_references(content)
 	logger.func_entry("parser", "strip_file_references", { content_length = #content })
-	
+
 	-- Remove @filename patterns but preserve @/ closing tag
 	-- Pattern requires first char after @ to be word char, dot, underscore, or dash (NOT /)
 	local result = content:gsub("@([%w%._%-][%w%._%-/]*)", "")
-	
+
 	logger.debug("parser", "strip_file_references: stripped " .. (#content - #result) .. " chars")
 	logger.func_exit("parser", "strip_file_references", "length=" .. #result)
-	
+
 	return result
 end
 
@@ -330,17 +344,16 @@ end
 ---@return number|nil start_line Line where the open tag starts
 function M.is_cursor_in_open_tag(bufnr)
 	bufnr = bufnr or vim.api.nvim_get_current_buf()
-	
+
 	logger.func_entry("parser", "is_cursor_in_open_tag", { bufnr = bufnr })
-	
-	local config = get_config_safe()
 
 	local cursor = vim.api.nvim_win_get_cursor(0)
 	local cursor_line = cursor[1]
 
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, cursor_line, false)
-	local escaped_open = utils.escape_pattern(config.patterns.open_tag)
-	local escaped_close = utils.escape_pattern(config.patterns.close_tag)
+    local cfg = get_config()
+    local escaped_open = utils.escape_pattern(cfg.patterns.open_tag)
+    local escaped_close = utils.escape_pattern(cfg.patterns.close_tag)
 
 	local open_count = 0
 	local close_count = 0
@@ -361,10 +374,20 @@ function M.is_cursor_in_open_tag(bufnr)
 	end
 
 	local is_inside = open_count > close_count
-	
-	logger.debug("parser", "is_cursor_in_open_tag: open=" .. open_count .. ", close=" .. close_count .. ", is_inside=" .. tostring(is_inside) .. ", last_open_line=" .. tostring(last_open_line))
+
+	logger.debug(
+		"parser",
+		"is_cursor_in_open_tag: open="
+			.. open_count
+			.. ", close="
+			.. close_count
+			.. ", is_inside="
+			.. tostring(is_inside)
+			.. ", last_open_line="
+			.. tostring(last_open_line)
+	)
 	logger.func_exit("parser", "is_cursor_in_open_tag", { is_inside = is_inside, last_open_line = last_open_line })
-	
+
 	return is_inside, is_inside and last_open_line or nil
 end
 
@@ -373,7 +396,7 @@ end
 ---@return string|nil prefix The text after @ being typed, or nil if not typing a file ref
 function M.get_file_ref_prefix(bufnr)
 	bufnr = bufnr or vim.api.nvim_get_current_buf()
-	
+
 	logger.func_entry("parser", "get_file_ref_prefix", { bufnr = bufnr })
 
 	local cursor = vim.api.nvim_win_get_cursor(0)
@@ -400,7 +423,7 @@ function M.get_file_ref_prefix(bufnr)
 
 	logger.debug("parser", "get_file_ref_prefix: prefix=" .. tostring(prefix))
 	logger.func_exit("parser", "get_file_ref_prefix", prefix)
-	
+
 	return prefix
 end
 

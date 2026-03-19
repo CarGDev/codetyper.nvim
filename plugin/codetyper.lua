@@ -19,7 +19,7 @@ if fn.has("nvim-0.8.0") == 0 then
 end
 
 --- Initialize codetyper plugin fully
---- Creates .coder folder, settings.json, tree.log, .gitignore
+--- Creates .codetyper folder, settings.json, tree.log, .gitignore
 --- Also registers autocmds for /@ @/ prompt detection
 ---@return boolean success
 local function init_coder_files()
@@ -38,7 +38,7 @@ local function init_coder_files()
 	return true
 end
 
--- Initialize .coder folder and tree.log on project open
+-- Initialize .codetyper folder and tree.log on project open
 api.nvim_create_autocmd("VimEnter", {
 	callback = function()
 		-- Delay slightly to ensure cwd is set
@@ -46,7 +46,7 @@ api.nvim_create_autocmd("VimEnter", {
 			init_coder_files()
 		end, 100)
 	end,
-	desc = "Initialize Codetyper .coder folder on startup",
+	desc = "Initialize Codetyper .codetyper folder on startup",
 })
 
 -- Also initialize on directory change
@@ -56,12 +56,12 @@ api.nvim_create_autocmd("DirChanged", {
 			init_coder_files()
 		end, 100)
 	end,
-	desc = "Initialize Codetyper .coder folder on directory change",
+	desc = "Initialize Codetyper .codetyper folder on directory change",
 })
 
 -- Auto-initialize when opening a coder file (for nvim-tree, telescope, etc.)
 api.nvim_create_autocmd({ "BufRead", "BufNewFile", "BufEnter" }, {
-	pattern = "*.coder.*",
+	pattern = "*.codetyper/*",
 	callback = function()
 		-- Initialize plugin if not already done
 		local codetyper = require("codetyper")

@@ -468,7 +468,7 @@ local function dispatch_next()
 	local thinking = require("codetyper.adapters.nvim.ui.thinking")
 	thinking.ensure_shown()
 
-	local is_inline = event.target_path and not event.target_path:match("%.coder%.") and (event.bufnr == vim.fn.bufnr(event.target_path))
+	local is_inline = event.target_path and not event.target_path:match("%.codetyper%.") and (event.bufnr == vim.fn.bufnr(event.target_path))
 	local thinking_placeholder = require("codetyper.core.thinking_placeholder")
 	if is_inline then
 		-- 99-style: virtual text "⠋ Thinking..." at selection (no buffer change, SEARCH/REPLACE safe)

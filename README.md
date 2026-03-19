@@ -24,7 +24,7 @@
 - **Auto-Index**: Automatically create coder companion files on file open
 - **Logs Panel**: Real-time visibility into LLM requests and token usage
 - **Cost Tracking**: Persistent LLM cost estimation with session and all-time stats
-- **Git Integration**: Automatically adds `.coder.*` files to `.gitignore`
+- **Git Integration**: Automatically adds `.codetyper/*` files to `.gitignore`
 - **Project Tree Logging**: Maintains a `tree.log` tracking your project structure
 - **Brain System**: Knowledge graph that learns from your coding patterns
 
@@ -179,7 +179,7 @@ require("codetyper").setup({
   patterns = {
     open_tag = "/@",
     close_tag = "@/",
-    file_pattern = "*.coder.*",
+    file_pattern = "*.codetyper/*",
   },
 
   -- Auto Features
@@ -310,7 +310,7 @@ llm = {
 |---------|-------|-------------|
 | `:Coder agentic-run <task>` | `:CoderAgenticRun` | Run agentic task |
 | `:Coder agentic-list` | `:CoderAgenticList` | List available agents |
-| `:Coder agentic-init` | `:CoderAgenticInit` | Initialize .coder/agents/ |
+| `:Coder agentic-init` | `:CoderAgenticInit` | Initialize .codetyper/agents/ |
 
 ### Transform Commands
 
@@ -646,7 +646,7 @@ Features:
 - Session and all-time statistics
 - Per-model breakdown
 - Pricing for 50+ models
-- Persistent history in `.coder/cost_history.json`
+- Persistent history in `.codetyper/cost_history.json`
 
 ---
 
@@ -682,7 +682,7 @@ Autonomous coding assistant with tool access:
 
 ```
 your-project/
-├── .coder/
+├── .codetyper/
 │   ├── tree.log
 │   ├── cost_history.json
 │   ├── brain/
@@ -690,7 +690,7 @@ your-project/
 │   └── rules/
 ├── src/
 │   ├── index.ts
-│   └── index.coder.ts
+│   └── index.codetyper/ts
 └── .gitignore
 ```
 

@@ -15,7 +15,7 @@ local COST_HISTORY_FILE = "cost_history.json"
 ---@return string File path
 local function get_history_path()
 	local root = utils.get_project_root()
-	return root .. "/.coder/" .. COST_HISTORY_FILE
+	return root .. "/.codetyper/" .. COST_HISTORY_FILE
 end
 
 --- Default model for savings comparison (what you'd pay if not using Ollama)

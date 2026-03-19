@@ -10,7 +10,7 @@ local utils = require("codetyper.support.utils")
 ---@return string|nil
 local function get_resume_dir()
   local root = utils.get_project_root() or vim.fn.getcwd()
-  return root .. "/.coder/tmp"
+  return root .. "/.codetyper/tmp"
 end
 
 --- Get the resume context file path

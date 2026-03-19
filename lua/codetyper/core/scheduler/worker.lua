@@ -258,7 +258,7 @@ local function get_coder_companion_path(target_path)
 	end
 
 	-- Skip if target is already a coder file
-	if target_path:match("%.coder%.") then
+	if target_path:match("%.codetyper%.") then
 		return nil
 	end
 
@@ -266,7 +266,7 @@ local function get_coder_companion_path(target_path)
 	local name = vim.fn.fnamemodify(target_path, ":t:r") -- filename without extension
 	local ext = vim.fn.fnamemodify(target_path, ":e")
 
-	local coder_path = dir .. "/" .. name .. ".coder." .. ext
+	local coder_path = dir .. "/" .. name .. ".codetyper/" .. ext
 	if vim.fn.filereadable(coder_path) == 1 then
 		return coder_path
 	end
@@ -382,13 +382,13 @@ end
 ---@return boolean
 local function is_inline_prompt(event)
 	-- Inline prompts have a range with start_line/end_line from tag detection
-	-- and the source file is the same as target (not a .coder. file)
+	-- and the source file is the same as target (not a .codetyper/ file)
 	if not event.range or not event.range.start_line then
 		return false
 	end
-	-- Check if source path (if any) equals target, or if target has no .coder. in it
+	-- Check if source path (if any) equals target, or if target has no .codetyper/ in it
 	local target = event.target_path or ""
-	if target:match("%.coder%.") then
+	if target:match("%.codetyper%.") then
 		return false
 	end
 	return true

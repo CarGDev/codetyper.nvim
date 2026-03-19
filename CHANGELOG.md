@@ -67,7 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Cost Tracking System** - Track LLM API costs across sessions
   - New `:CoderCost` command opens cost estimation floating window
   - Session costs tracked in real-time
-  - All-time costs persisted in `.coder/cost_history.json`
+  - All-time costs persisted in `.codetyper/cost_history.json`
   - Per-model breakdown with token counts
   - Pricing database for 50+ models (GPT-4/5, Claude, O-series, Gemini)
   - Window keymaps: `q` close, `r` refresh, `c` clear session, `C` clear all
@@ -179,7 +179,7 @@ scheduler = {
   - Default keymaps: `<leader>ctt`, `<leader>ctT`
 
 - **Auto-Index Feature** - Automatically create coder companion files
-  - Creates `.coder.` companion files when opening source files
+  - Creates `.codetyper/` companion files when opening source files
   - Language-aware templates
 
 - **Logs Panel** - Real-time visibility into LLM operations

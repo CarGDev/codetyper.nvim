@@ -2,7 +2,7 @@
 ---@brief [[
 --- Codetyper.nvim is a Neovim plugin that acts as your coding partner.
 --- It uses LLM APIs (OpenAI, Gemini, Copilot, Ollama) to help you
---- write code faster using special `.coder.*` files and inline prompt tags.
+--- write code faster using special `.codetyper/*` files and inline prompt tags.
 --- Features an event-driven scheduler with confidence scoring and
 --- completion-aware injection timing.
 ---@brief ]]
@@ -44,7 +44,7 @@ function M.setup(opts)
 	-- Ensure .gitignore has coder files excluded
 	gitignore.ensure_ignored()
 
-	-- Initialize tree logging (creates .coder folder and initial tree.log)
+	-- Initialize tree logging (creates .codetyper folder and initial tree.log)
 	tree.setup()
 
 	-- Initialize project indexer if enabled

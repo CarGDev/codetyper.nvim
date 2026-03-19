@@ -44,7 +44,7 @@ local DEFAULT_IGNORES = {
 	"^node_modules$",
 	"^__pycache__$",
 	"^%.git$",
-	"^%.coder$",
+	"^%.codetyper$",
 	"^dist$",
 	"^build$",
 	"^target$",

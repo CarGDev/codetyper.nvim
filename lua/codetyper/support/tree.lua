@@ -5,7 +5,7 @@ local M = {}
 local utils = require("codetyper.support.utils")
 
 --- Name of the coder folder
-local CODER_FOLDER = ".coder"
+local CODER_FOLDER = ".codetyper"
 
 --- Name of the tree log file
 local TREE_LOG_FILE = "tree.log"
@@ -23,8 +23,8 @@ local DEFAULT_SETTINGS = {
   ["workbench.colorTheme"] = "Default Dark+",
 }
 
---- Get the path to the .coder folder
----@return string|nil Path to .coder folder or nil
+--- Get the path to the .codetyper folder
+---@return string|nil Path to .codetyper folder or nil
 function M.get_coder_folder()
   local root = utils.get_project_root()
   if not root then
@@ -94,7 +94,7 @@ function M.ensure_settings()
   return utils.write_file(settings_path, pretty_json)
 end
 
---- Ensure .coder folder exists
+--- Ensure .codetyper folder exists
 ---@return boolean Success status
 function M.ensure_coder_folder()
   local coder_folder = M.get_coder_folder()
@@ -212,12 +212,12 @@ function M.generate_tree()
     "^node_modules$",
     "^__pycache__$",
     "^%.git$",
-    "^%.coder$",
+    "^%.codetyper$",
     "^dist$",
     "^build$",
     "^target$",
     "^vendor$",
-    "%.coder%.",     -- Coder files
+    "%.codetyper%.",     -- Coder files
   }
 
   local lines = {
@@ -242,7 +242,7 @@ end
 --- Update the tree.log file
 ---@return boolean Success status
 function M.update_tree_log()
-  -- Ensure .coder folder exists
+  -- Ensure .codetyper folder exists
   if not M.ensure_coder_folder() then
     return false
   end
@@ -273,13 +273,13 @@ local function is_project_initialized(root)
 end
 
 --- Initialize tree logging (called on setup)
---- Only creates .coder/ folder for git projects (has .git/ folder)
+--- Only creates .codetyper/ folder for git projects (has .git/ folder)
 ---@param force? boolean Force re-initialization even if cached
 ---@return boolean success
 function M.setup(force)
   -- Only initialize for git projects
   if not utils.is_git_project() then
-    return false -- Not a git project, don't create .coder/
+    return false -- Not a git project, don't create .codetyper/
   end
 
   local coder_folder = M.get_coder_folder()
@@ -297,7 +297,7 @@ function M.setup(force)
     return true
   end
 
-  -- Ensure .coder folder exists (silent, no asking)
+  -- Ensure .codetyper folder exists (silent, no asking)
   if not M.ensure_coder_folder() then
     -- Silent failure - don't bother user
     return false
@@ -338,7 +338,7 @@ function M.get_stats()
       end
 
       -- Skip hidden and special folders
-      if not name:match("^%.") and name ~= "node_modules" and not name:match("%.coder%.") then
+      if not name:match("^%.") and name ~= "node_modules" and not name:match("%.codetyper%.") then
         if type == "directory" then
           stats.directories = stats.directories + 1
           count_recursive(path .. "/" .. name)

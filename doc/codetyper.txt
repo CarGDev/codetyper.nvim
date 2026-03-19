@@ -27,7 +27,6 @@ faster using LLM APIs with a unique workflow.
 
 Key features:
 - Split view with coder file and target file side by side
-- Prompt-based code generation using /@ ... @/ tags
 - Support for Claude, OpenAI, Gemini, Copilot, and Ollama providers
 - Agent mode with autonomous tool use (read, edit, write, bash)
 - Transform commands for inline prompt processing
@@ -106,11 +105,6 @@ Default configuration: >lua
       position = "left",
       border = "rounded",
     },
-    patterns = {
-      open_tag = "/@",
-      close_tag = "@/",
-      file_pattern = "*.coder.*",
-    },
     auto_gitignore = true,
     auto_open_ask = true,
     auto_index = false, -- Auto-create coder companion files
@@ -178,8 +172,8 @@ Run models locally with no API costs.
 2. Run `:Coder open` to create/open the corresponding coder file
 3. In the coder file, write prompts using the tag syntax:
 >
-   /@ Create a function that fetches user data from an API
-   with error handling and returns a User object @/
+   Create a function that fetches user data from an API
+   with error handling and returns a User object
 <
 4. When you close the tag with `@/`, the plugin will:
    - Send the prompt to the configured LLM
@@ -252,17 +246,6 @@ The plugin detects the type of request from your prompt:
     Stop the currently running agent.
 
                                                      *:CoderTransform*
-:CoderTransform
-    Transform all /@ @/ tags in the current file.
-
-                                               *:CoderTransformCursor*
-:CoderTransformCursor
-    Transform the /@ @/ tag at cursor position.
-
-                                               *:CoderTransformVisual*
-:CoderTransformVisual
-    Transform selected /@ @/ tags (visual mode).
-
 :CoderLogs
     Toggle the logs panel showing LLM request details.
 
@@ -272,7 +255,7 @@ The plugin detects the type of request from your prompt:
 
                                                           *:CoderTree*
 :CoderTree
-    Manually refresh the tree.log file in .coder/ folder.
+    Manually refresh the tree.log file in .codetyper/ folder.
 
                                                       *:CoderTreeView*
 :CoderTreeView
@@ -306,28 +289,28 @@ q          Close agent panel
 ==============================================================================
 9. TRANSFORM COMMANDS                                *codetyper-transform*
 
-Transform commands allow you to process /@ @/ tags inline without
+Transform commands allow you to process tags inline without
 opening the split view.
 
                                                    *:CoderTransform*
 :CoderTransform
-    Find and transform all /@ @/ tags in the current buffer.
+    Find and transform all tags in the current buffer.
     Each tag is replaced with generated code.
 
                                              *:CoderTransformCursor*
 :CoderTransformCursor
-    Transform the /@ @/ tag at the current cursor position.
+    Transform the tag at the current cursor position.
     Useful for processing a single prompt.
 
                                              *:CoderTransformVisual*
 :'<,'>CoderTransformVisual
-    Transform /@ @/ tags within the visual selection.
+    Transform tags within the visual selection.
     Select lines containing tags and run this command.
 
 Example~
 >
    // In your source file:
-   /@ Add input validation for email @/
+   Add input validation for email
 
    // After running :CoderTransformCursor:
    function validateEmail(email) {

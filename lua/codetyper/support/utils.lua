@@ -56,30 +56,30 @@ end
 ---@param filepath string File path to check
 ---@return boolean
 function M.is_coder_file(filepath)
-  return filepath:match("%.coder%.") ~= nil
+  return filepath:match("%.codetyper%.") ~= nil
 end
 
 --- Get the target file path from a coder file path
 ---@param coder_path string Path to the coder file
 ---@return string Target file path
 function M.get_target_path(coder_path)
-  -- Convert index.coder.ts -> index.ts
-  return coder_path:gsub("%.coder%.", ".")
+  -- Convert index.codetyper/ts -> index.ts
+  return coder_path:gsub("%.codetyper%.", ".")
 end
 
 --- Get the coder file path from a target file path
 ---@param target_path string Path to the target file
 ---@return string Coder file path
 function M.get_coder_path(target_path)
-  -- Convert index.ts -> index.coder.ts
+  -- Convert index.ts -> index.codetyper/ts
   local dir = vim.fn.fnamemodify(target_path, ":h")
   local name = vim.fn.fnamemodify(target_path, ":t:r")
   local ext = vim.fn.fnamemodify(target_path, ":e")
 
   if dir == "." then
-    return name .. ".coder." .. ext
+    return name .. ".codetyper/" .. ext
   end
-  return dir .. "/" .. name .. ".coder." .. ext
+  return dir .. "/" .. name .. ".codetyper/" .. ext
 end
 
 --- Check if a file exists

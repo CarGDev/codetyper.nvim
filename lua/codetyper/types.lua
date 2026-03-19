@@ -47,7 +47,7 @@
 ---@field end_col number Ending column
 
 ---@class CoderFile
----@field coder_path string Path to the .coder.* file
+---@field coder_path string Path to the .codetyper/* file
 ---@field target_path string Path to the target file
 ---@field filetype string The filetype/extension
 
