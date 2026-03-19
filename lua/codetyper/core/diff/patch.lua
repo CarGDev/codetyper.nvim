@@ -545,7 +545,9 @@ function M.apply(patch)
 	-- Get filetype for smart injection
 	local filetype = vim.fn.fnamemodify(patch.target_path or "", ":e")
 
+	if patch.use_search_replace and patch.search_replace_blocks and #patch.search_replace_blocks > 0 then
 		-- Apply SEARCH/REPLACE blocks
+		local search_replace = get_search_replace_module()
 		local success, err = search_replace.apply_to_buffer(target_bufnr, patch.search_replace_blocks)
 
 		if success then

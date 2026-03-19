@@ -92,21 +92,13 @@ local function get_remote_provider()
 	if ok then
 		local config = codetyper.get_config()
 		if config and config.llm and config.llm.provider then
-			-- If current provider is ollama, use configured remote
 			if config.llm.provider == "ollama" then
-				-- Check which remote provider is configured
-				if config.llm.openai and config.llm.openai.api_key then
-					return "openai"
-				elseif config.llm.gemini and config.llm.gemini.api_key then
-					return "gemini"
-				elseif config.llm.copilot then
-					return "copilot"
-				end
+				return "copilot"
 			end
 			return config.llm.provider
 		end
 	end
-	return state.config.remote_provider
+	return "copilot"
 end
 
 --- Get the primary provider (ollama if scout enabled, else configured)
@@ -393,6 +385,14 @@ local function handle_worker_result(event, result)
 	end
 
 	-- Good enough or final attempt - create patch
+	pcall(function()
+		local tp = require("codetyper.core.thinking_placeholder")
+		tp.update_inline_status(event.id, "Generating patch...")
+		local thinking = require("codetyper.adapters.nvim.ui.thinking")
+		thinking.update_stage("Generating patch...")
+	end)
+	vim.notify("Generating patch...", vim.log.levels.INFO)
+
 	local p = patch.create_from_event(event, result.response, result.confidence)
 	patch.queue_patch(p)
 
@@ -400,6 +400,14 @@ local function handle_worker_result(event, result)
 
 	-- Schedule patch application after delay (gives user time to review/cancel)
 	local delay = state.config.apply_delay_ms or 5000
+	pcall(function()
+		local tp = require("codetyper.core.thinking_placeholder")
+		tp.update_inline_status(event.id, "Applying code...")
+		local thinking = require("codetyper.adapters.nvim.ui.thinking")
+		thinking.update_stage("Applying code...")
+	end)
+	vim.notify("Applying code...", vim.log.levels.INFO)
+
 	pcall(function()
 		local logs = require("codetyper.adapters.nvim.ui.logs")
 		logs.add({

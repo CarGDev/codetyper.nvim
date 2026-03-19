@@ -125,19 +125,27 @@ M.intent_patterns = {
 		priority = 2,
 	},
 
-	-- Explain: provide explanation (no code change)
+	-- Explain: generate documentation for selected code
 	explain = {
 		patterns = {
 			"explain",
 			"what does",
+			"what is",
 			"how does",
-			"why",
-			"describe",
+			"how is",
+			"why does",
+			"why is",
+			"tell me",
 			"walk through",
 			"understand",
+			"question",
+			"what's this",
+			"what this",
+			"about this",
+			"help me understand",
 		},
 		scope_hint = "function",
-		action = "none",
+		action = "insert",
 		priority = 4,
 	},
 }

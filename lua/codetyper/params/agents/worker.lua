@@ -19,12 +19,8 @@ M.context_needed_patterns = {
 
 --- Default timeouts by provider type
 M.default_timeouts = {
-	openai = 60000, -- 60s
-	anthropic = 90000, -- 90s
-	google = 60000, -- 60s
 	ollama = 120000, -- 120s (local models can be slower)
 	copilot = 60000, -- 60s
-	default = 60000,
 }
 
 return M

@@ -7,24 +7,13 @@
 ---@field auto_gitignore boolean Auto-manage .gitignore
 
 ---@class LLMConfig
----@field provider "ollama" | "openai" | "gemini" | "copilot" The LLM provider to use
+---@field provider "ollama" | "copilot" The LLM provider to use
 ---@field ollama OllamaConfig Ollama-specific configuration
----@field openai OpenAIConfig OpenAI-specific configuration
----@field gemini GeminiConfig Gemini-specific configuration
 ---@field copilot CopilotConfig Copilot-specific configuration
 
 ---@class OllamaConfig
 ---@field host string Ollama host URL
 ---@field model string Ollama model to use
-
----@class OpenAIConfig
----@field api_key string | nil OpenAI API key (or env var OPENAI_API_KEY)
----@field model string OpenAI model to use
----@field endpoint string | nil Custom endpoint (Azure, OpenRouter, etc.)
-
----@class GeminiConfig
----@field api_key string | nil Gemini API key (or env var GEMINI_API_KEY)
----@field model string Gemini model to use
 
 ---@class CopilotConfig
 ---@field model string Copilot model to use

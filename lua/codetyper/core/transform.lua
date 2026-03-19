@@ -1,5 +1,23 @@
 local M = {}
 
+local EXPLAIN_PATTERNS = {
+	"explain", "what does", "what is", "how does", "how is",
+	"why does", "why is", "tell me", "walk through", "understand",
+	"question", "what's this", "what this", "about this", "help me understand",
+}
+
+---@param input string
+---@return boolean
+local function is_explain_intent(input)
+	local lower = input:lower()
+	for _, pat in ipairs(EXPLAIN_PATTERNS) do
+		if lower:find(pat, 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
 --- Return editor dimensions (from UI, like 99 plugin)
 ---@return number width
 ---@return number height
@@ -152,39 +170,143 @@ function M.cmd_transform_selection()
 
 	local submitted = false
 
+	-- Resolve enclosing context for the selection (handles all cases:
+	-- partial inside function, whole function, spanning multiple functions, indentation fallback)
+	local scope_mod = require("codetyper.core.scope")
+	local sel_context = nil
+	local is_whole_file = false
+
+	if has_selection and selection_data then
+		sel_context = scope_mod.resolve_selection_context(bufnr, start_line, end_line)
+		is_whole_file = sel_context.type == "file"
+
+		-- Expand injection range to cover full enclosing scopes when needed
+		if sel_context.type == "whole_function" or sel_context.type == "multi_function" then
+			injection_range.start_line = sel_context.expanded_start
+			injection_range.end_line = sel_context.expanded_end
+			start_line = sel_context.expanded_start
+			end_line = sel_context.expanded_end
+			-- Re-read the expanded selection text
+			local exp_lines = vim.api.nvim_buf_get_lines(bufnr, start_line - 1, end_line, false)
+			selection_text = table.concat(exp_lines, "\n")
+		end
+	end
+
 	local function submit_prompt()
 		if not prompt_buf or not vim.api.nvim_buf_is_valid(prompt_buf) then
 			close_prompt()
 			return
 		end
 		submitted = true
-		local lines = vim.api.nvim_buf_get_lines(prompt_buf, 0, -1, false)
-		local input = table.concat(lines, "\n"):gsub("^%s+", ""):gsub("%s+$", "")
+		local lines_input = vim.api.nvim_buf_get_lines(prompt_buf, 0, -1, false)
+		local input = table.concat(lines_input, "\n"):gsub("^%s+", ""):gsub("%s+$", "")
 		close_prompt()
 		if input == "" then
 			logger.info("commands", "User cancelled prompt input")
 			return
 		end
+
+		local is_explain = is_explain_intent(input)
+
+		-- Explain intent requires a selection — notify and bail if none
+		if is_explain and not has_selection then
+			vim.notify("Nothing selected to explain — select code first", vim.log.levels.WARN)
+			return
+		end
+
 		local content
-		if has_selection then
-			content = input .. "\n\nCode to replace (replace this code):\n" .. selection_text
+		local doc_injection_range = injection_range
+		local doc_intent_override = has_selection and { action = "replace" } or (is_cursor_insert and { action = "insert" } or nil)
+
+		if is_explain and has_selection and sel_context then
+			-- Build a prompt that asks the LLM to generate documentation comments only
+			local ft = vim.bo[bufnr].filetype or "text"
+			local context_block = ""
+			if sel_context.type == "partial_function" and #sel_context.scopes > 0 then
+				local scope = sel_context.scopes[1]
+				context_block = string.format(
+					"\n\nEnclosing %s \"%s\":\n```%s\n%s\n```",
+					scope.type, scope.name or "anonymous", ft, scope.text
+				)
+			elseif sel_context.type == "multi_function" and #sel_context.scopes > 0 then
+				local parts = {}
+				for _, s in ipairs(sel_context.scopes) do
+					table.insert(parts, string.format("-- %s \"%s\":\n%s", s.type, s.name or "anonymous", s.text))
+				end
+				context_block = "\n\nRelated scopes:\n```" .. ft .. "\n" .. table.concat(parts, "\n\n") .. "\n```"
+			elseif sel_context.type == "indent_block" and #sel_context.scopes > 0 then
+				context_block = string.format(
+					"\n\nEnclosing block:\n```%s\n%s\n```",
+					ft, sel_context.scopes[1].text
+				)
+			end
+
+			content = string.format(
+				"%s\n\nGenerate documentation comments for the following %s code. "
+				.. "Output ONLY the comment block using the correct comment syntax for %s. "
+				.. "Do NOT include the code itself.%s\n\nCode to document:\n```%s\n%s\n```",
+				input, ft, ft, context_block, ft, selection_text
+			)
+
+			-- Insert above the selection instead of replacing it
+			doc_injection_range = { start_line = start_line, end_line = start_line }
+			doc_intent_override = { action = "insert", type = "explain" }
+
+		elseif has_selection and sel_context then
+			if sel_context.type == "partial_function" and #sel_context.scopes > 0 then
+				local scope = sel_context.scopes[1]
+				content = string.format(
+					"%s\n\nEnclosing %s \"%s\" (lines %d-%d):\n```\n%s\n```\n\nSelected code to modify (lines %d-%d):\n%s",
+					input,
+					scope.type,
+					scope.name or "anonymous",
+					scope.range.start_row, scope.range.end_row,
+					scope.text,
+					start_line, end_line,
+					selection_text
+				)
+			elseif sel_context.type == "multi_function" and #sel_context.scopes > 0 then
+				local scope_descs = {}
+				for _, s in ipairs(sel_context.scopes) do
+					table.insert(scope_descs, string.format("- %s \"%s\" (lines %d-%d)",
+						s.type, s.name or "anonymous", s.range.start_row, s.range.end_row))
+				end
+				content = string.format(
+					"%s\n\nAffected scopes:\n%s\n\nCode to replace (lines %d-%d):\n%s",
+					input,
+					table.concat(scope_descs, "\n"),
+					start_line, end_line,
+					selection_text
+				)
+			elseif sel_context.type == "indent_block" and #sel_context.scopes > 0 then
+				local block = sel_context.scopes[1]
+				content = string.format(
+					"%s\n\nEnclosing block (lines %d-%d):\n```\n%s\n```\n\nSelected code to modify (lines %d-%d):\n%s",
+					input,
+					block.range.start_row, block.range.end_row,
+					block.text,
+					start_line, end_line,
+					selection_text
+				)
+			else
+				content = input .. "\n\nCode to replace (replace this code):\n" .. selection_text
+			end
 		elseif is_cursor_insert then
 			content = "Insert at line " .. start_line .. ":\n" .. input
 		else
 			content = input
 		end
-		-- Pass captured range so scheduler/patch know where to inject the generated code
+
 		local prompt = {
 			content = content,
-			start_line = injection_range.start_line,
-			end_line = injection_range.end_line,
+			start_line = doc_injection_range.start_line,
+			end_line = doc_injection_range.end_line,
 			start_col = 1,
 			end_col = 1,
 			user_prompt = input,
-			-- Explicit injection range (same as start_line/end_line) for downstream
-			injection_range = injection_range,
-			-- When there's a selection, force replace; when no selection, insert at cursor
-			intent_override = has_selection and { action = "replace" } or (is_cursor_insert and { action = "insert" } or nil),
+			injection_range = doc_injection_range,
+			intent_override = doc_intent_override,
+			is_whole_file = is_whole_file,
 		}
 		local autocmds = require("codetyper.adapters.nvim.autocmds")
 		autocmds.process_single_prompt(bufnr, prompt, filepath, true)

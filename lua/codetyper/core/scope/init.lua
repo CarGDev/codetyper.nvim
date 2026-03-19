@@ -428,4 +428,141 @@ function M.get_all_functions(bufnr)
 	return functions
 end
 
+--- Resolve enclosing context for a selection range.
+--- Handles partial selections inside a function, whole function selections,
+--- and selections that span across multiple functions.
+---@param bufnr number
+---@param sel_start number 1-indexed start line of selection
+---@param sel_end number 1-indexed end line of selection
+---@return table context { type: string, scopes: ScopeInfo[], expanded_start: number, expanded_end: number }
+function M.resolve_selection_context(bufnr, sel_start, sel_end)
+	local all_lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+	local total_lines = #all_lines
+
+	local scope_start = M.resolve_scope(bufnr, sel_start, 1)
+	local scope_end = M.resolve_scope(bufnr, sel_end, 1)
+
+	local selected_lines = sel_end - sel_start + 1
+
+	if selected_lines >= (total_lines * 0.8) then
+		return {
+			type = "file",
+			scopes = {},
+			expanded_start = 1,
+			expanded_end = total_lines,
+		}
+	end
+
+	-- Both ends resolve to the same function/method
+	if scope_start.type ~= "file" and scope_end.type ~= "file"
+		and scope_start.name == scope_end.name
+		and scope_start.range.start_row == scope_end.range.start_row then
+
+		local fn_start = scope_start.range.start_row
+		local fn_end = scope_start.range.end_row
+		local fn_lines = fn_end - fn_start + 1
+		local is_whole_fn = selected_lines >= (fn_lines * 0.85)
+
+		if is_whole_fn then
+			return {
+				type = "whole_function",
+				scopes = { scope_start },
+				expanded_start = fn_start,
+				expanded_end = fn_end,
+			}
+		else
+			return {
+				type = "partial_function",
+				scopes = { scope_start },
+				expanded_start = sel_start,
+				expanded_end = sel_end,
+			}
+		end
+	end
+
+	-- Selection spans across multiple functions or one end is file-level
+	local affected = {}
+	local functions = M.get_all_functions(bufnr)
+
+	if #functions > 0 then
+		for _, fn in ipairs(functions) do
+			local fn_start = fn.range.start_row
+			local fn_end = fn.range.end_row
+			if fn_end >= sel_start and fn_start <= sel_end then
+				table.insert(affected, fn)
+			end
+		end
+	end
+
+	if #affected > 0 then
+		local exp_start = sel_start
+		local exp_end = sel_end
+		for _, fn in ipairs(affected) do
+			exp_start = math.min(exp_start, fn.range.start_row)
+			exp_end = math.max(exp_end, fn.range.end_row)
+		end
+		return {
+			type = "multi_function",
+			scopes = affected,
+			expanded_start = exp_start,
+			expanded_end = exp_end,
+		}
+	end
+
+	-- Indentation-based fallback: walk outward to find the enclosing block
+	local base_indent = math.huge
+	for i = sel_start, math.min(sel_end, total_lines) do
+		local line = all_lines[i]
+		if line and not line:match("^%s*$") then
+			local indent = #(line:match("^(%s*)") or "")
+			base_indent = math.min(base_indent, indent)
+		end
+	end
+	if base_indent == math.huge then
+		base_indent = 0
+	end
+
+	local block_start = sel_start
+	for i = sel_start - 1, 1, -1 do
+		local line = all_lines[i]
+		if line and not line:match("^%s*$") then
+			local indent = #(line:match("^(%s*)") or "")
+			if indent < base_indent then
+				block_start = i
+				break
+			end
+		end
+	end
+
+	local block_end = sel_end
+	for i = sel_end + 1, total_lines do
+		local line = all_lines[i]
+		if line and not line:match("^%s*$") then
+			local indent = #(line:match("^(%s*)") or "")
+			if indent < base_indent then
+				block_end = i
+				break
+			end
+		end
+	end
+
+	local block_lines = {}
+	for i = block_start, math.min(block_end, total_lines) do
+		table.insert(block_lines, all_lines[i])
+	end
+
+	return {
+		type = "indent_block",
+		scopes = {{
+			type = "block",
+			node_type = "indentation",
+			range = { start_row = block_start, end_row = block_end },
+			text = table.concat(block_lines, "\n"),
+			name = nil,
+		}},
+		expanded_start = block_start,
+		expanded_end = block_end,
+	}
+end
+
 return M

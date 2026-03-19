@@ -112,7 +112,7 @@ function M.remove_on_failure(event_id)
 	M.clear(event_id)
 end
 
---- 99-style: show "⠋ Thinking..." as virtual text at the line above the selection (no buffer change).
+--- 99-style: show "⠋ Implementing..." as virtual text at the line above the selection (no buffer change).
 --- Use for inline requests where we must not insert placeholder (e.g. SEARCH/REPLACE).
 ---@param event table PromptEvent with id, range, target_path
 function M.start_inline(event)
@@ -132,11 +132,11 @@ function M.start_inline(event)
 	if target_bufnr <= 0 or not vim.api.nvim_buf_is_valid(target_bufnr) then
 		return
 	end
-	-- Mark at line above range (99: mark_above_range). If start is line 1 (0-indexed 0), use row 0.
-	local start_row_0 = math.max(0, range.start_line - 2) -- 1-based start_line -> 0-based, then one line up
+	local start_row_0 = math.max(0, range.start_line - 1)
 	local col = 0
 	local extmark_id = vim.api.nvim_buf_set_extmark(target_bufnr, ns_inline, start_row_0, col, {
 		virt_lines = { { { " Implementing", "Comment" } } },
+		virt_lines_above = true,
 	})
 	local Throbber = require("codetyper.adapters.nvim.ui.throbber")
 	local throb = Throbber.new(function(icon)
@@ -147,9 +147,11 @@ function M.start_inline(event)
 		if not ent.bufnr or not vim.api.nvim_buf_is_valid(ent.bufnr) then
 			return
 		end
+		local text = ent.status_text or "Implementing"
 		local ok = pcall(vim.api.nvim_buf_set_extmark, ent.bufnr, ns_inline, start_row_0, col, {
 			id = ent.extmark_id,
-			virt_lines = { { { icon .. " Implementing", "Comment" } } },
+			virt_lines = { { { icon .. " " .. text, "Comment" } } },
+			virt_lines_above = true,
 		})
 		if not ok then
 			M.clear_inline(event.id)
@@ -162,8 +164,19 @@ function M.start_inline(event)
 		throbber = throb,
 		start_row_0 = start_row_0,
 		col = col,
+		status_text = "Implementing",
 	}
 	throb:start()
+end
+
+--- Update the inline status text for a running event.
+---@param event_id string
+---@param text string New status text (e.g. "Reading context...", "Sending to LLM...")
+function M.update_inline_status(event_id, text)
+	local ent = inline_status[event_id]
+	if ent then
+		ent.status_text = text
+	end
 end
 
 --- Clear 99-style inline virtual text (call when worker completes).

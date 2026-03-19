@@ -44,10 +44,11 @@ Document any significant algorithmic changes.
 Output only the optimized code, no explanations.]],
 
 	explain = [[
-You are explaining code to a developer.
-Provide a clear, concise explanation of what the code does.
-Include information about the algorithm and any edge cases.
-Do not output code, only explanation.]],
+You are documenting code by adding documentation comments above it.
+Generate ONLY the documentation comment block (using the correct comment syntax for the file's language).
+Include: a brief description of what the code does, parameter types and descriptions, return type and description, and any important notes about edge cases or side effects.
+Do NOT include the code itself in your output — only the documentation comment block.
+Output nothing else.]],
 }
 
 return M

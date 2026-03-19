@@ -12,14 +12,10 @@ function M.get_client()
 
 	if config.llm.provider == "ollama" then
 		return require("codetyper.core.llm.ollama")
-	elseif config.llm.provider == "openai" then
-		return require("codetyper.core.llm.openai")
-	elseif config.llm.provider == "gemini" then
-		return require("codetyper.core.llm.gemini")
 	elseif config.llm.provider == "copilot" then
 		return require("codetyper.core.llm.copilot")
 	else
-		error("Unknown LLM provider: " .. config.llm.provider)
+		error("Unknown LLM provider: " .. config.llm.provider .. ". Supported: ollama, copilot")
 	end
 end
 

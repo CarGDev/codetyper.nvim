@@ -26,37 +26,21 @@ local function open_file_in_buffer(path, jump_to_line)
   end
 
   vim.schedule(function()
-    -- Find a suitable window (not the agent UI windows)
+    -- Find a suitable window with a real file buffer
     local target_win = nil
-    local agent_ui_ok, agent_ui = pcall(require, "codetyper.agent.ui")
 
     for _, win in ipairs(vim.api.nvim_list_wins()) do
       local buf = vim.api.nvim_win_get_buf(win)
       local buftype = vim.bo[buf].buftype
 
-      -- Skip special buffers (agent UI, nofile, etc.)
       if buftype == "" or buftype == "acwrite" then
-        -- Check if this is not an agent UI window
-        local is_agent_win = false
-        if agent_ui_ok and agent_ui.is_open() then
-          -- Skip agent windows by checking if it's one of our special buffers
-          local bufname = vim.api.nvim_buf_get_name(buf)
-          if bufname == "" then
-            -- Could be agent buffer, check by buffer option
-            is_agent_win = vim.bo[buf].buftype == "nofile"
-          end
-        end
-
-        if not is_agent_win then
-          target_win = win
-          break
-        end
+        target_win = win
+        break
       end
     end
 
     -- If no suitable window found, create a new split
     if not target_win then
-      -- Get the rightmost non-agent window or create one
       vim.cmd("rightbelow vsplit")
       target_win = vim.api.nvim_get_current_win()
     end

@@ -65,7 +65,7 @@ function M.save(data)
 end
 
 --- Get API key for a provider
----@param provider string Provider name (claude, openai, gemini, copilot, ollama)
+---@param provider string Provider name (copilot, ollama)
 ---@return string|nil API key or nil if not found
 function M.get_api_key(provider)
 	local data = M.load()
@@ -167,14 +167,13 @@ function M.list_providers()
 	local data = M.load()
 	local result = {}
 
-	local all_providers = { "claude", "openai", "gemini", "copilot", "ollama" }
+	local all_providers = { "copilot", "ollama" }
 
 	for _, provider in ipairs(all_providers) do
 		local provider_data = data.providers and data.providers[provider]
 		local has_stored_key = provider_data and provider_data.api_key and provider_data.api_key ~= ""
 		local has_model = provider_data and provider_data.model and provider_data.model ~= ""
 
-		-- Check if configured from config or environment
 		local configured_from_config = false
 		local config_model = nil
 		local ok, codetyper = pcall(require, "codetyper")
@@ -184,14 +183,8 @@ function M.list_providers()
 				local pc = config.llm[provider]
 				config_model = pc.model
 
-				if provider == "claude" then
-					configured_from_config = pc.api_key ~= nil or vim.env.ANTHROPIC_API_KEY ~= nil
-				elseif provider == "openai" then
-					configured_from_config = pc.api_key ~= nil or vim.env.OPENAI_API_KEY ~= nil
-				elseif provider == "gemini" then
-					configured_from_config = pc.api_key ~= nil or vim.env.GEMINI_API_KEY ~= nil
-				elseif provider == "copilot" then
-					configured_from_config = true -- Just needs copilot.lua
+				if provider == "copilot" then
+					configured_from_config = true
 				elseif provider == "ollama" then
 					configured_from_config = pc.host ~= nil
 				end
@@ -218,9 +211,6 @@ end
 
 --- Default models for each provider
 M.default_models = {
-	claude = "claude-sonnet-4-20250514",
-	openai = "gpt-4o",
-	gemini = "gemini-2.0-flash",
 	copilot = "claude-sonnet-4",
 	ollama = "deepseek-coder:6.7b",
 }
@@ -276,18 +266,17 @@ function M.get_copilot_model_cost(model_name)
 	return nil
 end
 
---- Interactive command to add/update API key
+--- Interactive command to add/update configuration
 function M.interactive_add()
-	local providers = { "claude", "openai", "gemini", "copilot", "ollama" }
+	local providers = { "copilot", "ollama" }
 
-	-- Step 1: Select provider
 	vim.ui.select(providers, {
 		prompt = "Select LLM provider:",
 		format_item = function(item)
 			local display = item:sub(1, 1):upper() .. item:sub(2)
 			local creds = M.load()
 			local configured = creds.providers and creds.providers[item]
-			if configured and (configured.api_key or item == "ollama") then
+			if configured and (configured.configured or item == "ollama") then
 				return display .. " [configured]"
 			end
 			return display
@@ -297,33 +286,11 @@ function M.interactive_add()
 			return
 		end
 
-		-- Step 2: Get API key (skip for Ollama)
 		if provider == "ollama" then
 			M.interactive_ollama_config()
-		else
-			M.interactive_api_key(provider)
+		elseif provider == "copilot" then
+			M.interactive_copilot_config()
 		end
-	end)
-end
-
---- Interactive API key input
----@param provider string Provider name
-function M.interactive_api_key(provider)
-	-- Copilot uses OAuth from copilot.lua, no API key needed
-	if provider == "copilot" then
-		M.interactive_copilot_config()
-		return
-	end
-
-	local prompt = string.format("Enter %s API key (leave empty to skip): ", provider:upper())
-
-	vim.ui.input({ prompt = prompt }, function(api_key)
-		if api_key == nil then
-			return -- Cancelled
-		end
-
-		-- Step 3: Get model
-		M.interactive_model(provider, api_key)
 	end)
 end
 
@@ -378,60 +345,6 @@ function M.interactive_copilot_config(silent)
 				configured = true,
 			})
 		end
-	end)
-end
-
---- Interactive model selection
----@param provider string Provider name
----@param api_key string|nil API key
-function M.interactive_model(provider, api_key)
-	local default_model = M.default_models[provider] or ""
-	local prompt = string.format("Enter model (default: %s): ", default_model)
-
-	vim.ui.input({ prompt = prompt, default = default_model }, function(model)
-		if model == nil then
-			return -- Cancelled
-		end
-
-		-- Use default if empty
-		if model == "" then
-			model = default_model
-		end
-
-		-- Save credentials
-		local credentials = {
-			model = model,
-		}
-
-		if api_key and api_key ~= "" then
-			credentials.api_key = api_key
-		end
-
-		-- For OpenAI, also ask for custom endpoint
-		if provider == "openai" then
-			M.interactive_endpoint(provider, credentials)
-		else
-			M.save_and_notify(provider, credentials)
-		end
-	end)
-end
-
---- Interactive endpoint input for OpenAI-compatible providers
----@param provider string Provider name
----@param credentials table Current credentials
-function M.interactive_endpoint(provider, credentials)
-	vim.ui.input({
-		prompt = "Custom endpoint (leave empty for default OpenAI): ",
-	}, function(endpoint)
-		if endpoint == nil then
-			return -- Cancelled
-		end
-
-		if endpoint ~= "" then
-			credentials.endpoint = endpoint
-		end
-
-		M.save_and_notify(provider, credentials)
 	end)
 end
 
@@ -589,16 +502,14 @@ end
 ---@param provider string Provider name
 ---@return boolean configured, string|nil source
 local function is_provider_configured(provider)
-	-- Check stored credentials first
 	local data = M.load()
 	local stored = data.providers and data.providers[provider]
 	if stored then
-		if stored.configured or stored.api_key or provider == "ollama" or provider == "copilot" then
+		if stored.configured or provider == "ollama" or provider == "copilot" then
 			return true, "stored"
 		end
 	end
 
-	-- Check codetyper config
 	local ok, codetyper = pcall(require, "codetyper")
 	if not ok then
 		return false, nil
@@ -614,24 +525,9 @@ local function is_provider_configured(provider)
 		return false, nil
 	end
 
-	-- Check for API key in config or environment
-	if provider == "claude" then
-		if provider_config.api_key or vim.env.ANTHROPIC_API_KEY then
-			return true, "config"
-		end
-	elseif provider == "openai" then
-		if provider_config.api_key or vim.env.OPENAI_API_KEY then
-			return true, "config"
-		end
-	elseif provider == "gemini" then
-		if provider_config.api_key or vim.env.GEMINI_API_KEY then
-			return true, "config"
-		end
-	elseif provider == "copilot" then
-		-- Copilot just needs copilot.lua installed
+	if provider == "copilot" then
 		return true, "config"
 	elseif provider == "ollama" then
-		-- Ollama just needs host configured
 		if provider_config.host then
 			return true, "config"
 		end
@@ -642,7 +538,7 @@ end
 
 --- Interactive switch provider
 function M.interactive_switch_provider()
-	local all_providers = { "claude", "openai", "gemini", "copilot", "ollama" }
+	local all_providers = { "copilot", "ollama" }
 	local available = {}
 	local sources = {}
 

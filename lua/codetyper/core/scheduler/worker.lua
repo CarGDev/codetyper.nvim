@@ -1,6 +1,6 @@
 ---@mod codetyper.agent.worker Async LLM worker wrapper
 ---@brief [[
---- Wraps LLM clients with timeout handling and confidence scoring.
+--- Wraps LLM clients with confidence scoring.
 --- Provides unified interface for scheduler to dispatch work.
 ---@brief ]]
 
@@ -23,14 +23,29 @@ local confidence = require("codetyper.core.llm.confidence")
 ---@field id string Worker ID
 ---@field event table PromptEvent being processed
 ---@field worker_type string LLM provider type
----@field status string "pending"|"running"|"completed"|"failed"|"timeout"
+---@field status string "pending"|"running"|"completed"|"failed"
 ---@field start_time number Start timestamp
----@field timeout_ms number Timeout in milliseconds
----@field timer any Timeout timer handle
 ---@field callback function Result callback
 
 --- Worker ID counter
 local worker_counter = 0
+
+--- Broadcast a stage update to inline placeholder, thinking window, and vim.notify.
+---@param event_id string|nil
+---@param text string Status text
+local function notify_stage(event_id, text)
+	pcall(function()
+		local tp = require("codetyper.core.thinking_placeholder")
+		if event_id then
+			tp.update_inline_status(event_id, text)
+		end
+	end)
+	pcall(function()
+		local thinking = require("codetyper.adapters.nvim.ui.thinking")
+		thinking.update_stage(text)
+	end)
+	vim.notify(text, vim.log.levels.INFO)
+end
 
 --- Patterns that indicate LLM needs more context (must be near start of response)
 local context_needed_patterns = params.context_needed_patterns
@@ -205,8 +220,6 @@ end
 ---@type table<string, Worker>
 local active_workers = {}
 
---- Default timeouts by provider type
-local default_timeouts = params.default_timeouts
 
 --- Generate worker ID
 ---@return string
@@ -422,8 +435,10 @@ end
 ---@return table context
 local function build_prompt(event)
 	local intent_mod = require("codetyper.core.intent")
+	local eid = event and event.id
 
-	-- Get target file content for context
+	notify_stage(eid, "Reading file...")
+
 	local target_content = ""
 	local target_lines = {}
 	if event.target_path then
@@ -438,7 +453,8 @@ local function build_prompt(event)
 
 	local filetype = vim.fn.fnamemodify(event.target_path or "", ":e")
 
-	-- Get indexed project context
+	notify_stage(eid, "Searching index...")
+
 	local indexed_context = nil
 	local indexed_content = ""
 	pcall(function()
@@ -452,21 +468,18 @@ local function build_prompt(event)
 		indexed_content = format_indexed_context(indexed_context)
 	end)
 
-	-- Format attached files
 	local attached_content = format_attached_files(event.attached_files)
 
-	-- Get coder companion context (business logic, pseudo-code)
+	notify_stage(eid, "Gathering context...")
+
 	local coder_context = get_coder_context(event.target_path)
 
-	-- Get brain memories - contextual recall based on current task
+	notify_stage(eid, "Recalling patterns...")
+
 	local brain_context = ""
 	pcall(function()
 		local brain = require("codetyper.core.memory")
 		if brain.is_initialized() then
-			-- Query brain for relevant memories based on:
-			-- 1. Current file (file-specific patterns)
-			-- 2. Prompt content (semantic similarity)
-			-- 3. Intent type (relevant past generations)
 			local query_text = event.prompt_content or ""
 			if event.scope and event.scope.name then
 				query_text = event.scope.name .. " " .. query_text
@@ -500,8 +513,16 @@ local function build_prompt(event)
 		end
 	end)
 
-	-- Combine all context sources: brain memories first, then coder context, attached files, indexed
-	local extra_context = brain_context .. coder_context .. attached_content .. indexed_content
+	notify_stage(eid, "Building prompt...")
+
+	-- Include project tree context for whole-file selections
+	local project_context = ""
+	if event.is_whole_file and event.project_context then
+		project_context = "\n\n--- Project Structure ---\n" .. event.project_context
+	end
+
+	-- Combine all context sources: brain memories first, then coder context, attached files, indexed, project
+	local extra_context = brain_context .. coder_context .. attached_content .. indexed_content .. project_context
 
 	-- Build context with scope information
 	local context = {
@@ -553,7 +574,7 @@ end thinking
 			[[You are editing a %s file: %s
 
 TASK: %s
-
+%s
 FULL FILE:
 ```%s
 %s
@@ -564,6 +585,7 @@ Output ONLY the new code for that region (no markers, no explanations, no code f
 			filetype,
 			vim.fn.fnamemodify(event.target_path or "", ":t"),
 			event.prompt_content,
+			extra_context,
 			filetype,
 			file_content,
 			start_line,
@@ -706,7 +728,6 @@ function M.create(event, worker_type, callback)
 		worker_type = worker_type,
 		status = "pending",
 		start_time = os.clock(),
-		timeout_ms = default_timeouts[worker_type] or 60000,
 		callback = callback,
 	}
 
@@ -736,32 +757,9 @@ end
 ---@param worker Worker
 function M.start(worker)
 	worker.status = "running"
+	local eid = worker.event and worker.event.id
 
-	-- Set up timeout
-	worker.timer = vim.defer_fn(function()
-		if worker.status == "running" then
-			worker.status = "timeout"
-			active_workers[worker.id] = nil
-
-			pcall(function()
-				local logs = require("codetyper.adapters.nvim.ui.logs")
-				logs.add({
-					type = "warning",
-					message = string.format("Worker %s timed out after %dms", worker.id, worker.timeout_ms),
-				})
-			end)
-
-			worker.callback({
-				success = false,
-				response = nil,
-				error = "timeout",
-				confidence = 0,
-				confidence_breakdown = {},
-				duration = (os.clock() - worker.start_time),
-				worker_type = worker.worker_type,
-			})
-		end
-	end, worker.timeout_ms)
+	notify_stage(eid, "Reading context...")
 
 	local prompt, context = build_prompt(worker.event)
 
@@ -773,29 +771,22 @@ function M.start(worker)
 		use_smart_selection = config.llm.smart_selection ~= false -- Default to true
 	end)
 
+	local provider_label = worker.worker_type or "LLM"
+	notify_stage(eid, "Sending to " .. provider_label .. "...")
+
 	-- Define the response handler
 	local function handle_response(response, err, usage_or_metadata)
-		-- Cancel timeout timer
-		if worker.timer then
-			pcall(function()
-				if type(worker.timer) == "userdata" and worker.timer.stop then
-					worker.timer:stop()
-				end
-			end)
+		if worker.status ~= "running" then
+			return -- Already cancelled
 		end
 
-		if worker.status ~= "running" then
-			return -- Already timed out or cancelled
-		end
+		notify_stage(eid, "Processing response...")
 
 		-- Extract usage from metadata if smart_generate was used
 		local usage = usage_or_metadata
 		if type(usage_or_metadata) == "table" and usage_or_metadata.provider then
-			-- This is metadata from smart_generate
 			usage = nil
-			-- Update worker type to reflect actual provider used
 			worker.worker_type = usage_or_metadata.provider
-			-- Log if pondering occurred
 			if usage_or_metadata.pondered then
 				pcall(function()
 					local logs = require("codetyper.adapters.nvim.ui.logs")
@@ -819,7 +810,6 @@ function M.start(worker)
 		local llm = require("codetyper.core.llm")
 		llm.smart_generate(prompt, context, handle_response)
 	else
-		-- Get client and execute directly
 		local client, client_err = get_client(worker.worker_type)
 		if not client then
 			M.complete(worker, nil, client_err)
@@ -948,14 +938,6 @@ function M.cancel(worker_id)
 		return false
 	end
 
-	if worker.timer then
-		pcall(function()
-			if type(worker.timer) == "userdata" and worker.timer.stop then
-				worker.timer:stop()
-			end
-		end)
-	end
-
 	worker.status = "cancelled"
 	active_workers[worker_id] = nil
 
@@ -1012,11 +994,5 @@ function M.cancel_for_event(event_id)
 	return cancelled
 end
 
---- Set timeout for worker type
----@param worker_type string
----@param timeout_ms number
-function M.set_timeout(worker_type, timeout_ms)
-	default_timeouts[worker_type] = timeout_ms
-end
 
 return M

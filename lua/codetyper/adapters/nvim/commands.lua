@@ -230,20 +230,8 @@ local function coder_cmd(args)
 		["transform-selection"] = transform.cmd_transform_selection,
 		["index-project"] = cmd_index_project,
 		["index-status"] = cmd_index_status,
-		memories = cmd_memories,
-		forget = function(args)
-			cmd_forget(args.fargs[2])
-		end,
-		-- LLM smart selection commands
 		["llm-stats"] = cmd_llm_stats,
-		["llm-feedback-good"] = function()
-			cmd_llm_feedback(true)
-		end,
-		["llm-feedback-bad"] = function()
-			cmd_llm_feedback(false)
-		end,
 		["llm-reset-stats"] = cmd_llm_reset_stats,
-		-- Cost tracking commands
 		["cost"] = function()
 			local cost = require("codetyper.core.cost")
 			cost.toggle()
@@ -251,15 +239,6 @@ local function coder_cmd(args)
 		["cost-clear"] = function()
 			local cost = require("codetyper.core.cost")
 			cost.clear()
-		end,
-		-- Credentials management commands
-		["add-api-key"] = function()
-			local credentials = require("codetyper.config.credentials")
-			credentials.interactive_add()
-		end,
-		["remove-api-key"] = function()
-			local credentials = require("codetyper.config.credentials")
-			credentials.interactive_remove()
 		end,
 		["credentials"] = function()
 			local credentials = require("codetyper.config.credentials")
@@ -275,7 +254,6 @@ local function coder_cmd(args)
 			local config = codetyper.get_config()
 			local provider = config.llm.provider
 
-			-- Only available for Copilot provider
 			if provider ~= "copilot" then
 				utils.notify(
 					"CoderModel is only available when using Copilot provider. Current: " .. provider:upper(),
@@ -309,8 +287,6 @@ function M.setup()
 		nargs = "?",
 		complete = function()
 			return {
-				"process",
-				"status",
 				"tree",
 				"tree-view",
 				"reset",
@@ -318,16 +294,10 @@ function M.setup()
 				"transform-selection",
 				"index-project",
 				"index-status",
-				"memories",
-				"forget",
 				"llm-stats",
-				"llm-feedback-good",
-				"llm-feedback-bad",
 				"llm-reset-stats",
 				"cost",
 				"cost-clear",
-				"add-api-key",
-				"remove-api-key",
 				"credentials",
 				"switch-provider",
 				"model",
@@ -357,123 +327,9 @@ function M.setup()
 		cmd_index_status()
 	end, { desc = "Show project index status" })
 
-	vim.api.nvim_create_user_command("CoderMemories", function()
-		cmd_memories()
-	end, { desc = "Show learned memories" })
-
-	vim.api.nvim_create_user_command("CoderForget", function(opts)
-		cmd_forget(opts.args ~= "" and opts.args or nil)
-	end, {
-		desc = "Clear memories (optionally matching pattern)",
-		nargs = "?",
-	})
-
-	-- Brain feedback command - teach the brain from your experience
-	vim.api.nvim_create_user_command("CoderFeedback", function(opts)
-		local brain = require("codetyper.core.memory")
-		if not brain.is_initialized() then
-			vim.notify("Brain not initialized", vim.log.levels.WARN)
-			return
-		end
-
-		local feedback_type = opts.args:lower()
-		local current_file = vim.fn.expand("%:p")
-
-		if feedback_type == "good" or feedback_type == "accept" or feedback_type == "+" then
-			-- Learn positive feedback
-			brain.learn({
-				type = "user_feedback",
-				file = current_file,
-				timestamp = os.time(),
-				data = {
-					feedback = "accepted",
-					description = "User marked code as good/accepted",
-				},
-			})
-			vim.notify("Brain: Learned positive feedback ✓", vim.log.levels.INFO)
-		elseif feedback_type == "bad" or feedback_type == "reject" or feedback_type == "-" then
-			-- Learn negative feedback
-			brain.learn({
-				type = "user_feedback",
-				file = current_file,
-				timestamp = os.time(),
-				data = {
-					feedback = "rejected",
-					description = "User marked code as bad/rejected",
-				},
-			})
-			vim.notify("Brain: Learned negative feedback ✗", vim.log.levels.INFO)
-		elseif feedback_type == "stats" or feedback_type == "status" then
-			-- Show brain stats
-			local stats = brain.stats()
-			local msg = string.format(
-				"Brain Stats:\n• Nodes: %d\n• Edges: %d\n• Pending: %d\n• Deltas: %d",
-				stats.node_count or 0,
-				stats.edge_count or 0,
-				stats.pending_changes or 0,
-				stats.delta_count or 0
-			)
-			vim.notify(msg, vim.log.levels.INFO)
-		else
-			vim.notify("Usage: CoderFeedback <good|bad|stats>", vim.log.levels.INFO)
-		end
-	end, {
-		desc = "Give feedback to the brain (good/bad/stats)",
-		nargs = "?",
-		complete = function()
-			return { "good", "bad", "stats" }
-		end,
-	})
-
-	-- Brain stats command
-	vim.api.nvim_create_user_command("CoderBrain", function(opts)
-		local brain = require("codetyper.core.memory")
-		if not brain.is_initialized() then
-			vim.notify("Brain not initialized", vim.log.levels.WARN)
-			return
-		end
-
-		local action = opts.args:lower()
-
-		if action == "stats" or action == "" then
-			local stats = brain.stats()
-			local lines = {
-				"╭─────────────────────────────────╮",
-				"│       CODETYPER BRAIN           │",
-				"╰─────────────────────────────────╯",
-				"",
-				string.format("  Nodes: %d", stats.node_count or 0),
-				string.format("  Edges: %d", stats.edge_count or 0),
-				string.format("  Deltas: %d", stats.delta_count or 0),
-				string.format("  Pending: %d", stats.pending_changes or 0),
-				"",
-				"  The more you use Codetyper,",
-				"  the smarter it becomes!",
-			}
-			vim.notify(table.concat(lines, "\n"), vim.log.levels.INFO)
-		elseif action == "commit" then
-			local hash = brain.commit("Manual commit")
-			if hash then
-				vim.notify("Brain: Committed changes (hash: " .. hash:sub(1, 8) .. ")", vim.log.levels.INFO)
-			else
-				vim.notify("Brain: Nothing to commit", vim.log.levels.INFO)
-			end
-		elseif action == "flush" then
-			brain.flush()
-			vim.notify("Brain: Flushed to disk", vim.log.levels.INFO)
-		elseif action == "prune" then
-			local pruned = brain.prune()
-			vim.notify("Brain: Pruned " .. pruned .. " low-value nodes", vim.log.levels.INFO)
-		else
-			vim.notify("Usage: CoderBrain <stats|commit|flush|prune>", vim.log.levels.INFO)
-		end
-	end, {
-		desc = "Brain management commands",
-		nargs = "?",
-		complete = function()
-			return { "stats", "commit", "flush", "prune" }
-		end,
-	})
+	-- TODO: re-enable CoderMemories, CoderForget when memory UI is reworked
+	-- TODO: re-enable CoderFeedback when feedback loop is reworked
+	-- TODO: re-enable CoderBrain when brain management UI is reworked
 
 	-- Cost estimation command
 	vim.api.nvim_create_user_command("CoderCost", function()
@@ -481,16 +337,7 @@ function M.setup()
 		cost.toggle()
 	end, { desc = "Show LLM cost estimation window" })
 
-	-- Credentials management commands
-	vim.api.nvim_create_user_command("CoderAddApiKey", function()
-		local credentials = require("codetyper.config.credentials")
-		credentials.interactive_add()
-	end, { desc = "Add or update LLM provider API key" })
-
-	vim.api.nvim_create_user_command("CoderRemoveApiKey", function()
-		local credentials = require("codetyper.config.credentials")
-		credentials.interactive_remove()
-	end, { desc = "Remove LLM provider credentials" })
+	-- TODO: re-enable CoderAddApiKey when multi-provider support returns
 
 	vim.api.nvim_create_user_command("CoderCredentials", function()
 		local credentials = require("codetyper.config.credentials")
@@ -504,7 +351,7 @@ function M.setup()
 
 	-- Quick model switcher command (Copilot only)
 	vim.api.nvim_create_user_command("CoderModel", function(opts)
-		local credentials = require("codetyper.adapters.config.credentials")
+		local credentials = require("codetyper.config.credentials")
 		local codetyper = require("codetyper")
 		local config = codetyper.get_config()
 		local provider = config.llm.provider

@@ -9,22 +9,16 @@ local utils = require("codetyper.support.utils")
 ---@param code string Generated code
 ---@param prompt_type string Type of prompt (refactor, add, document, etc.)
 function M.inject_code(target_path, code, prompt_type)
-  local window = require("codetyper.adapters.nvim.windows")
-
   -- Normalize the target path
   target_path = vim.fn.fnamemodify(target_path, ":p")
 
-  -- Get target buffer
-  local target_buf = window.get_target_buf()
-
-  if not target_buf or not vim.api.nvim_buf_is_valid(target_buf) then
-    -- Try to find buffer by path
-    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-      local buf_name = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":p")
-      if buf_name == target_path then
-        target_buf = buf
-        break
-      end
+  -- Try to find buffer by path
+  local target_buf = nil
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    local buf_name = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":p")
+    if buf_name == target_path then
+      target_buf = buf
+      break
     end
   end
 
@@ -144,16 +138,13 @@ end
 function M.inject_add(bufnr, code)
   local lines = vim.split(code, "\n", { plain = true })
 
-  -- Get cursor position in target window
-  local window = require("codetyper.adapters.nvim.windows")
-  local target_win = window.get_target_win()
-
+  -- Try to find a window displaying this buffer to get cursor position
   local insert_line
-  if target_win and vim.api.nvim_win_is_valid(target_win) then
-    local cursor = vim.api.nvim_win_get_cursor(target_win)
+  local wins = vim.fn.win_findbuf(bufnr)
+  if #wins > 0 then
+    local cursor = vim.api.nvim_win_get_cursor(wins[1])
     insert_line = cursor[1]
   else
-    -- Append at end
     insert_line = vim.api.nvim_buf_line_count(bufnr)
   end
 

@@ -161,28 +161,12 @@ function M.setup()
 		desc = "Set filetype for coder files",
 	})
 
-	-- Auto-open split view when opening a coder file directly (e.g., from nvim-tree)
-	vim.api.nvim_create_autocmd("BufEnter", {
-		group = group,
-		pattern = "*.codetyper/*",
-		callback = function()
-			-- Delay slightly to ensure buffer is fully loaded
-			vim.defer_fn(function()
-				M.auto_open_target_file()
-			end, 50)
-		end,
-		desc = "Auto-open target file when coder file is opened",
-	})
 
 	-- Cleanup on buffer close
 	vim.api.nvim_create_autocmd("BufWipeout", {
 		group = group,
 		pattern = "*.codetyper/*",
 		callback = function(ev)
-			local window = require("codetyper.adapters.nvim.windows")
-			if window.is_open() then
-				window.close_split()
-			end
 			-- Clear processed prompts for this buffer
 			local bufnr = ev.buf
 			for key, _ in pairs(processed_prompts) do
@@ -657,15 +641,16 @@ function M.process_single_prompt(bufnr, prompt, current_file, skip_processed_che
 			end
 		end
 
-		-- Detect intent from prompt
+		-- Detect intent from prompt (honor explicit override from transform-selection)
 		local intent = intent_mod.detect(cleaned)
 
-		-- IMPORTANT: If prompt is inside a function/method and intent is "add",
-		-- override to "complete" since we're completing the function body
-		-- But NOT for coder files - they should use "add/append" by default
-		if not is_from_coder_file and scope and (scope.type == "function" or scope.type == "method") then
+		if prompt.intent_override then
+			intent.action = prompt.intent_override.action or intent.action
+			if prompt.intent_override.type then
+				intent.type = prompt.intent_override.type
+			end
+		elseif not is_from_coder_file and scope and (scope.type == "function" or scope.type == "method") then
 			if intent.type == "add" or intent.action == "insert" or intent.action == "append" then
-				-- Override to complete the function instead of adding new code
 				intent = {
 					type = "complete",
 					scope_hint = "function",
@@ -684,6 +669,22 @@ function M.process_single_prompt(bufnr, prompt, current_file, skip_processed_che
 				action = "append",
 				keywords = intent.keywords,
 			}
+		end
+
+		-- For whole-file selections, gather project tree context
+		local project_context = nil
+		if prompt.is_whole_file then
+			pcall(function()
+				local tree = require("codetyper.support.tree")
+				local tree_log = tree.get_tree_log_path()
+				if tree_log and vim.fn.filereadable(tree_log) == 1 then
+					local tree_lines = vim.fn.readfile(tree_log)
+					if tree_lines and #tree_lines > 0 then
+						local tree_content = table.concat(tree_lines, "\n")
+						project_context = tree_content:sub(1, 4000)
+					end
+				end
+			end)
 		end
 
 		-- Determine priority based on intent
@@ -725,11 +726,15 @@ function M.process_single_prompt(bufnr, prompt, current_file, skip_processed_che
 			status = "pending",
 			attempt_count = 0,
 			intent = intent,
+			intent_override = prompt.intent_override,
 			scope = scope,
 			scope_text = scope_text,
 			scope_range = scope_range,
 			attached_files = attached_files,
 			injection_marks = injection_marks,
+			injection_range = prompt.injection_range,
+			is_whole_file = prompt.is_whole_file,
+			project_context = project_context,
 		})
 
 		local scope_info = scope
@@ -842,98 +847,6 @@ end
 --- Track if we already opened the split for this buffer
 ---@type table<number, boolean>
 local auto_opened_buffers = {}
-
---- Auto-open target file when a coder file is opened directly
-function M.auto_open_target_file()
-	local window = require("codetyper.adapters.nvim.windows")
-
-	-- Skip if split is already open
-	if window.is_open() then
-		return
-	end
-
-	local bufnr = vim.api.nvim_get_current_buf()
-
-	-- Skip if we already handled this buffer
-	if auto_opened_buffers[bufnr] then
-		return
-	end
-
-	local current_file = vim.fn.expand("%:p")
-
-	-- Skip empty paths
-	if not current_file or current_file == "" then
-		return
-	end
-
-	-- Verify it's a coder file
-	if not utils.is_coder_file(current_file) then
-		return
-	end
-
-	-- Skip if we're in a special buffer (nvim-tree, etc.)
-	local buftype = vim.bo[bufnr].buftype
-	if buftype ~= "" then
-		return
-	end
-
-	-- Mark as handled
-	auto_opened_buffers[bufnr] = true
-
-	-- Get the target file path
-	local target_path = utils.get_target_path(current_file)
-
-	-- Check if target file exists
-	if not utils.file_exists(target_path) then
-		utils.notify("Target file not found: " .. vim.fn.fnamemodify(target_path, ":t"), vim.log.levels.WARN)
-		return
-	end
-
-	-- Get config with fallback defaults
-	local codetyper = require("codetyper")
-	local config = codetyper.get_config()
-
-	-- Fallback width if config not fully loaded (percentage, e.g., 25 = 25%)
-	local width_pct = (config and config.window and config.window.width) or 25
-	local width = math.ceil(vim.o.columns * (width_pct / 100))
-
-	-- Store current coder window
-	local coder_win = vim.api.nvim_get_current_win()
-	local coder_buf = bufnr
-
-	-- Open target file in a vertical split on the right
-	local ok, err = pcall(function()
-		vim.cmd("vsplit " .. vim.fn.fnameescape(target_path))
-	end)
-
-	if not ok then
-		utils.notify("Failed to open target file: " .. tostring(err), vim.log.levels.ERROR)
-		auto_opened_buffers[bufnr] = nil -- Allow retry
-		return
-	end
-
-	-- Now we're in the target window (right side)
-	local target_win = vim.api.nvim_get_current_win()
-	local target_buf = vim.api.nvim_get_current_buf()
-
-	-- Set the coder window width (left side)
-	pcall(vim.api.nvim_win_set_width, coder_win, width)
-
-	-- Update window module state
-	window._coder_win = coder_win
-	window._coder_buf = coder_buf
-	window._target_win = target_win
-	window._target_buf = target_buf
-
-	-- Set up window options for coder window
-	pcall(function()
-		vim.wo[coder_win].number = true
-		vim.wo[coder_win].relativenumber = true
-		vim.wo[coder_win].signcolumn = "yes"
-	end)
-
-	utils.notify("Opened target: " .. vim.fn.fnamemodify(target_path, ":t"))
-end
 
 --- Clear auto-opened tracking for a buffer
 ---@param bufnr number Buffer number

@@ -22,6 +22,7 @@ local state = {
 	throbber = nil,
 	queue_listener_id = nil,
 	timer = nil,
+	stage_text = "Thinking...",
 }
 
 local function get_ui_dimensions()
@@ -84,9 +85,10 @@ local function update_display(icon, force)
 	if count <= 0 and not force then
 		return
 	end
+	local text = state.stage_text or "Thinking..."
 	local line = (count <= 1)
-		and (icon .. " Thinking...")
-		or (icon .. " Thinking... (" .. tostring(count) .. " requests)")
+		and (icon .. " " .. text)
+		or (icon .. " " .. text .. " (" .. tostring(count) .. " requests)")
 	vim.schedule(function()
 		if state.buf_id and vim.api.nvim_buf_is_valid(state.buf_id) then
 			vim.bo[state.buf_id].modifiable = true
@@ -145,8 +147,15 @@ function M.ensure_shown()
 	update_display(icon, true)
 end
 
+--- Update the displayed stage text (e.g. "Reading context...", "Sending to LLM...").
+---@param text string
+function M.update_stage(text)
+	state.stage_text = text
+end
+
 --- Force close the thinking window (e.g. on VimLeavePre).
 function M.close()
+	state.stage_text = "Thinking..."
 	close_window()
 end
 

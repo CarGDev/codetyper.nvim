@@ -5,19 +5,10 @@ local M = {}
 ---@type CoderConfig
 local defaults = {
 	llm = {
-		provider = "ollama", -- Options: "ollama", "openai", "gemini", "copilot"
+		provider = "ollama", -- Options: "ollama", "copilot"
 		ollama = {
 			host = "http://localhost:11434",
 			model = "deepseek-coder:6.7b",
-		},
-		openai = {
-			api_key = nil, -- Will use OPENAI_API_KEY env var if nil
-			model = "gpt-4o",
-			endpoint = nil, -- Custom endpoint (Azure, OpenRouter, etc.)
-		},
-		gemini = {
-			api_key = nil, -- Will use GEMINI_API_KEY env var if nil
-			model = "gemini-2.0-flash",
 		},
 		copilot = {
 			model = "claude-sonnet-4", -- Uses GitHub Copilot authentication
@@ -95,7 +86,7 @@ function M.validate(config)
 		return false, "Missing LLM configuration"
 	end
 
-	local valid_providers = { "ollama", "openai", "gemini", "copilot" }
+	local valid_providers = { "ollama", "copilot" }
 	local is_valid_provider = false
 	for _, p in ipairs(valid_providers) do
 		if config.llm.provider == p then
@@ -107,21 +98,6 @@ function M.validate(config)
 	if not is_valid_provider then
 		return false, "Invalid LLM provider. Must be one of: " .. table.concat(valid_providers, ", ")
 	end
-
-	-- Validate provider-specific configuration
-	if config.llm.provider == "openai" then
-		local api_key = config.llm.openai.api_key or vim.env.OPENAI_API_KEY
-		if not api_key or api_key == "" then
-			return false, "OpenAI API key not configured. Set llm.openai.api_key or OPENAI_API_KEY env var"
-		end
-	elseif config.llm.provider == "gemini" then
-		local api_key = config.llm.gemini.api_key or vim.env.GEMINI_API_KEY
-		if not api_key or api_key == "" then
-			return false, "Gemini API key not configured. Set llm.gemini.api_key or GEMINI_API_KEY env var"
-		end
-	end
-	-- Note: copilot uses OAuth from copilot.lua/copilot.vim, validated at runtime
-	-- Note: ollama doesn't require API key, just host configuration
 
 	return true
 end

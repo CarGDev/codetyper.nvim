@@ -219,8 +219,7 @@ local function normalize_model(model)
 	end
 
 	-- Handle common prefixes
-	normalized = normalized:gsub("^openai/", "")
-	normalized = normalized:gsub("^anthropic/", "")
+	normalized = normalized:gsub("^copilot/", "")
 
 	-- Try exact match first
 	if M.pricing[normalized] then

@@ -75,18 +75,11 @@ api.nvim_create_autocmd({ "BufRead", "BufNewFile", "BufEnter" }, {
 -- Lazy-load the plugin on first command usage
 api.nvim_create_user_command("Coder", function(opts)
 	require("codetyper").setup()
-	-- Re-execute the command now that plugin is loaded
 	cmd("Coder " .. (opts.args or ""))
 end, {
 	nargs = "?",
 	complete = function()
 		return {
-			"open",
-			"close",
-			"toggle",
-			"process",
-			"status",
-			"focus",
 			"tree",
 			"tree-view",
 			"reset",
@@ -97,26 +90,6 @@ end, {
 })
 
 -- Lazy-load aliases
-api.nvim_create_user_command("CoderOpen", function()
-	require("codetyper").setup()
-	cmd("CoderOpen")
-end, { desc = "Open Coder view" })
-
-api.nvim_create_user_command("CoderClose", function()
-	require("codetyper").setup()
-	cmd("CoderClose")
-end, { desc = "Close Coder view" })
-
-api.nvim_create_user_command("CoderToggle", function()
-	require("codetyper").setup()
-	cmd("CoderToggle")
-end, { desc = "Toggle Coder view" })
-
-api.nvim_create_user_command("CoderProcess", function()
-	require("codetyper").setup()
-	cmd("CoderProcess")
-end, { desc = "Process prompt and generate code" })
-
 api.nvim_create_user_command("CoderTree", function()
 	require("codetyper").setup()
 	cmd("CoderTree")
