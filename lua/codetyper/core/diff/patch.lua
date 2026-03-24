@@ -7,13 +7,9 @@
 
 local M = {}
 
+local inject = require("codetyper.inject.inject")
 local params = require("codetyper.params.agents.patch")
 local logger = require("codetyper.support.logger")
-
---- Lazy load inject module to avoid circular requires
-local function get_inject_module()
-  return require("codetyper.inject")
-end
 
 --- Lazy load search_replace module
 local function get_search_replace_module()
@@ -630,7 +626,6 @@ function M.apply(patch)
   end
 
   -- Use smart injection module for intelligent import handling
-  local inject = get_inject_module()
   local inject_result = nil
 
   local has_range = patch.injection_range ~= nil
@@ -788,7 +783,7 @@ function M.apply(patch)
     end
 
     -- Use smart injection - handles imports automatically
-    inject_result = inject.inject(target_bufnr, code_to_inject, inject_opts)
+    inject_result = inject(target_bufnr, code_to_inject, inject_opts)
 
     -- Log injection details
     pcall(function()
