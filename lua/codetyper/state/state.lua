@@ -17,6 +17,10 @@ local state = {
   total_response_tokens = 0,
   current_provider = nil,
   current_model = nil,
+  queue_buf = nil,
+  queue_win = nil,
+  listener_id = nil,
+  queue_listener_id = nil,
 }
 
 return state
