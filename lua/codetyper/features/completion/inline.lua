@@ -2,7 +2,8 @@
 ---
 local M = {}
 
-local parser = require("codetyper.parser")
+local is_cursor_in_open_tag = require("codetyper.parser.is_cursor_in_open_tag")
+local get_file_ref_prefix = require("codetyper.parser.get_file_ref_prefix")
 local utils = require("codetyper.support.utils")
 
 --- Get list of files for completion
@@ -110,13 +111,13 @@ end
 --- Show file completion popup
 function M.show_file_completion()
   -- Check if we're in an open prompt tag
-  local is_inside = parser.is_cursor_in_open_tag()
+  local is_inside = is_cursor_in_open_tag()
   if not is_inside then
     return false
   end
 
   -- Get the prefix being typed
-  local prefix = parser.get_file_ref_prefix()
+  local prefix = get_file_ref_prefix()
   if prefix == nil then
     return false
   end
@@ -160,7 +161,7 @@ function M.setup()
         -- Schedule completion popup after the @ is inserted
         vim.schedule(function()
           -- Check we're in an open tag
-          local is_inside = parser.is_cursor_in_open_tag()
+          local is_inside = is_cursor_in_open_tag()
           if not is_inside then
             return
           end

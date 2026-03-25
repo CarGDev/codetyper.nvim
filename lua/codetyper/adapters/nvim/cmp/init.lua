@@ -6,226 +6,13 @@
 
 local M = {}
 
-local source = {}
+local has_cmp = require("codetyper.adapters.nvim.cmp.has_cmp")
+local get_brain_completions = require("codetyper.adapters.nvim.cmp.get_brain_completions")
+local get_indexer_completions = require("codetyper.adapters.nvim.cmp.get_indexer_completions")
+local get_buffer_completions = require("codetyper.adapters.nvim.cmp.get_buffer_completions")
+local get_copilot_suggestion = require("codetyper.adapters.nvim.cmp.get_copilot_suggestion")
 
---- Check if cmp is available
----@return boolean
-local function has_cmp()
-  return pcall(require, "cmp")
-end
-
---- Get completion items from brain context
----@param prefix string Current word prefix
----@return table[] items
-local function get_brain_completions(prefix)
-  local items = {}
-
-  local ok_brain, brain = pcall(require, "codetyper.brain")
-  if not ok_brain then
-    return items
-  end
-
-  -- Check if brain is initialized safely
-  local is_init = false
-  if brain.is_initialized then
-    local ok, result = pcall(brain.is_initialized)
-    is_init = ok and result
-  end
-
-  if not is_init then
-    return items
-  end
-
-  -- Query brain for relevant patterns
-  local ok_query, result = pcall(brain.query, {
-    query = prefix,
-    max_results = 10,
-    types = { "pattern" },
-  })
-
-  if ok_query and result and result.nodes then
-    for _, node in ipairs(result.nodes) do
-      if node.c and node.c.s then
-        -- Extract function/class names from summary
-        local summary = node.c.s
-        for name in summary:gmatch("functions:%s*([^;]+)") do
-          for func in name:gmatch("([%w_]+)") do
-            if func:lower():find(prefix:lower(), 1, true) then
-              table.insert(items, {
-                label = func,
-                kind = 3, -- Function
-                detail = "[brain]",
-                documentation = summary,
-              })
-            end
-          end
-        end
-        for name in summary:gmatch("classes:%s*([^;]+)") do
-          for class in name:gmatch("([%w_]+)") do
-            if class:lower():find(prefix:lower(), 1, true) then
-              table.insert(items, {
-                label = class,
-                kind = 7, -- Class
-                detail = "[brain]",
-                documentation = summary,
-              })
-            end
-          end
-        end
-      end
-    end
-  end
-
-  return items
-end
-
---- Get completion items from indexer symbols
----@param prefix string Current word prefix
----@return table[] items
-local function get_indexer_completions(prefix)
-  local items = {}
-
-  local ok_indexer, indexer = pcall(require, "codetyper.indexer")
-  if not ok_indexer then
-    return items
-  end
-
-  local ok_load, index = pcall(indexer.load_index)
-  if not ok_load or not index then
-    return items
-  end
-
-  -- Search symbols
-  if index.symbols then
-    for symbol, files in pairs(index.symbols) do
-      if symbol:lower():find(prefix:lower(), 1, true) then
-        local files_str = type(files) == "table" and table.concat(files, ", ") or tostring(files)
-        table.insert(items, {
-          label = symbol,
-          kind = 6, -- Variable (generic)
-          detail = "[index] " .. files_str:sub(1, 30),
-          documentation = "Symbol found in: " .. files_str,
-        })
-      end
-    end
-  end
-
-  -- Search functions in files
-  if index.files then
-    for filepath, file_index in pairs(index.files) do
-      if file_index and file_index.functions then
-        for _, func in ipairs(file_index.functions) do
-          if func.name and func.name:lower():find(prefix:lower(), 1, true) then
-            table.insert(items, {
-              label = func.name,
-              kind = 3, -- Function
-              detail = "[index] " .. vim.fn.fnamemodify(filepath, ":t"),
-              documentation = func.docstring or ("Function at line " .. (func.line or "?")),
-            })
-          end
-        end
-      end
-      if file_index and file_index.classes then
-        for _, class in ipairs(file_index.classes) do
-          if class.name and class.name:lower():find(prefix:lower(), 1, true) then
-            table.insert(items, {
-              label = class.name,
-              kind = 7, -- Class
-              detail = "[index] " .. vim.fn.fnamemodify(filepath, ":t"),
-              documentation = class.docstring or ("Class at line " .. (class.line or "?")),
-            })
-          end
-        end
-      end
-    end
-  end
-
-  return items
-end
-
---- Get completion items from current buffer (fallback)
----@param prefix string Current word prefix
----@param bufnr number Buffer number
----@return table[] items
-local function get_buffer_completions(prefix, bufnr)
-  local items = {}
-  local seen = {}
-
-  -- Get all lines in buffer
-  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-  local prefix_lower = prefix:lower()
-
-  for _, line in ipairs(lines) do
-    -- Extract words that could be identifiers
-    for word in line:gmatch("[%a_][%w_]*") do
-      if #word >= 3 and word:lower():find(prefix_lower, 1, true) and not seen[word] and word ~= prefix then
-        seen[word] = true
-        table.insert(items, {
-          label = word,
-          kind = 1, -- Text
-          detail = "[buffer]",
-        })
-      end
-    end
-  end
-
-  return items
-end
-
---- Try to get Copilot suggestion if plugin is installed
----@param prefix string
----@return string|nil suggestion
-local function get_copilot_suggestion(prefix)
-  -- Try copilot.lua suggestion API first
-  local ok, copilot_suggestion = pcall(require, "copilot.suggestion")
-  if ok and copilot_suggestion and type(copilot_suggestion.get_suggestion) == "function" then
-    local ok2, suggestion = pcall(copilot_suggestion.get_suggestion)
-    if ok2 and suggestion and suggestion ~= "" then
-      -- Only return if suggestion seems to start with prefix (best-effort)
-      if prefix == "" or suggestion:lower():match(prefix:lower(), 1) then
-        return suggestion
-      else
-        return suggestion
-      end
-    end
-  end
-
-  -- Fallback: try older copilot module if present
-  local ok3, copilot = pcall(require, "copilot")
-  if ok3 and copilot and type(copilot.get_suggestion) == "function" then
-    local ok4, suggestion = pcall(copilot.get_suggestion)
-    if ok4 and suggestion and suggestion ~= "" then
-      return suggestion
-    end
-  end
-
-  return nil
-end
-
---- Create new cmp source instance
-function source.new()
-  return setmetatable({}, { __index = source })
-end
-
---- Get source name
-function source:get_keyword_pattern()
-  return [[\k\+]]
-end
-
---- Check if source is available
-function source:is_available()
-  return true
-end
-
---- Get debug name
-function source:get_debug_name()
-  return "codetyper"
-end
-
---- Get trigger characters
-function source:get_trigger_characters()
-  return { ".", ":", "_" }
-end
+local source = require("codetyper.utils.cmp_source")
 
 --- Complete
 ---@param params table
@@ -290,9 +77,7 @@ function source:complete(params, callback)
       suggestion = res
     end
     if suggestion and suggestion ~= "" then
-      -- Truncate suggestion to first line for label display
       local first_line = suggestion:match("([^\n]+)") or suggestion
-      -- Avoid duplicates
       if not seen[first_line] then
         seen[first_line] = true
         table.insert(items, 1, {
@@ -335,7 +120,6 @@ function M.is_registered()
     return false
   end
 
-  -- Try to get registered sources
   local config = cmp.get_config()
   if config and config.sources then
     for _, src in ipairs(config.sources) do

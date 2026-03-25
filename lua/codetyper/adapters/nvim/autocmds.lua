@@ -305,8 +305,8 @@ end
 ---@param base_path string Base path to resolve relative file paths
 ---@return table[] attached_files List of {path, content} tables
 local function read_attached_files(prompt_content, base_path)
-  local parser = require("codetyper.parser")
-  local file_refs = parser.extract_file_references(prompt_content)
+  local extract_file_references = require("codetyper.parser.extract_file_references")
+  local file_refs = extract_file_references(prompt_content)
   local attached = {}
   local cwd = vim.fn.getcwd()
   local base_dir = vim.fn.fnamemodify(base_path, ":h")
@@ -349,7 +349,10 @@ function M.check_for_closed_prompt()
   end
   is_processing = true
 
-  local parser = require("codetyper.parser")
+  local has_closing_tag = require("codetyper.parser.has_closing_tag")
+  local get_last_prompt = require("codetyper.parser.get_last_prompt")
+  local clean_prompt = require("codetyper.parser.clean_prompt")
+  local strip_file_references = require("codetyper.parser.strip_file_references")
 
   local bufnr = vim.api.nvim_get_current_buf()
   local current_file = vim.fn.expand("%:p")
@@ -373,9 +376,9 @@ function M.check_for_closed_prompt()
   local current_line = lines[1]
 
   -- Check if line contains closing tag
-  if parser.has_closing_tag(current_line, config.patterns.close_tag) then
+  if has_closing_tag(current_line, config.patterns.close_tag) then
     -- Find the complete prompt
-    local prompt = parser.get_last_prompt(bufnr)
+    local prompt = get_last_prompt(bufnr)
     if prompt and prompt.content and prompt.content ~= "" then
       -- Generate unique key for this prompt
       local prompt_key = get_prompt_key(bufnr, prompt)
@@ -421,7 +424,7 @@ function M.check_for_closed_prompt()
           local attached_files = read_attached_files(prompt.content, current_file)
 
           -- Clean prompt content (strip file references)
-          local cleaned = parser.clean_prompt(parser.strip_file_references(prompt.content))
+          local cleaned = clean_prompt(strip_file_references(prompt.content))
 
           -- Check if we're working from a coder file
           local is_from_coder_file = utils.is_coder_file(current_file)
@@ -556,7 +559,8 @@ end
 ---@param current_file string Current file path
 ---@param skip_processed_check? boolean Skip the processed check (for manual mode)
 function M.process_single_prompt(bufnr, prompt, current_file, skip_processed_check)
-  local parser = require("codetyper.parser")
+  local clean_prompt = require("codetyper.parser.clean_prompt")
+  local strip_file_references = require("codetyper.parser.strip_file_references")
   local scheduler = require("codetyper.core.scheduler.scheduler")
 
   if not prompt.content or prompt.content == "" then
@@ -606,7 +610,7 @@ function M.process_single_prompt(bufnr, prompt, current_file, skip_processed_che
     local attached_files = read_attached_files(prompt.content, current_file)
 
     -- Clean prompt content (strip file references)
-    local cleaned = parser.clean_prompt(parser.strip_file_references(prompt.content))
+    local cleaned = clean_prompt(strip_file_references(prompt.content))
 
     -- Resolve scope in target file FIRST (need it to adjust intent)
     -- Only resolve scope if NOT from coder file (line numbers don't apply)
@@ -744,7 +748,7 @@ end
 
 --- Check and process all closed prompts in the buffer (works on ANY file)
 function M.check_all_prompts()
-  local parser = require("codetyper.parser")
+  local find_prompts_in_buffer = require("codetyper.parser.find_prompts_in_buffer")
   local bufnr = vim.api.nvim_get_current_buf()
   local current_file = vim.fn.expand("%:p")
 
@@ -754,7 +758,7 @@ function M.check_all_prompts()
   end
 
   -- Find all prompts in buffer
-  local prompts = parser.find_prompts_in_buffer(bufnr)
+  local prompts = find_prompts_in_buffer(bufnr)
 
   if #prompts == 0 then
     return
@@ -777,11 +781,11 @@ end
 --- Check for closed prompt with preference check
 --- If user hasn't chosen auto/manual mode, ask them first
 function M.check_for_closed_prompt_with_preference()
-  local parser = require("codetyper.parser")
+  local find_prompts_in_buffer = require("codetyper.parser.find_prompts_in_buffer")
 
   -- First check if there are any prompts to process
   local bufnr = vim.api.nvim_get_current_buf()
-  local prompts = parser.find_prompts_in_buffer(bufnr)
+  local prompts = find_prompts_in_buffer(bufnr)
   if #prompts == 0 then
     return
   end
@@ -796,11 +800,11 @@ end
 --- Check all prompts with preference check
 function M.check_all_prompts_with_preference()
   local preferences = require("codetyper.config.preferences")
-  local parser = require("codetyper.parser")
+  local find_prompts_in_buffer = require("codetyper.parser.find_prompts_in_buffer")
 
   -- First check if there are any prompts to process
   local bufnr = vim.api.nvim_get_current_buf()
-  local prompts = parser.find_prompts_in_buffer(bufnr)
+  local prompts = find_prompts_in_buffer(bufnr)
   if #prompts == 0 then
     return
   end
