@@ -12,6 +12,11 @@ local state = {
   diff_buf = nil,
   diff_win = nil,
   is_open = false,
+  listeners = {},
+  total_prompt_tokens = 0,
+  total_response_tokens = 0,
+  current_provider = nil,
+  current_model = nil,
 }
 
 return state
