@@ -9,7 +9,7 @@
 
 local M = {}
 
-M.version = "1.0.2"
+M.version = "1.0.3"
 
 ---@type CoderConfig
 M.config = {}
