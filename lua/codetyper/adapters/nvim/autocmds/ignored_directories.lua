@@ -1,0 +1,25 @@
+local ignored_directories = {
+  ".git",
+  ".codetyper",
+  ".claude",
+  ".vscode",
+  ".idea",
+  "node_modules",
+  "vendor",
+  "dist",
+  "build",
+  "target",
+  "__pycache__",
+  ".cache",
+  ".npm",
+  ".yarn",
+  "coverage",
+  ".next",
+  ".nuxt",
+  ".svelte-kit",
+  "out",
+  "bin",
+  "obj",
+}
+
+return ignored_directories

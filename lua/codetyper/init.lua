@@ -28,17 +28,17 @@ function M.setup(opts)
   M.config = config.setup(opts)
 
   -- Initialize modules
-  local commands = require("codetyper.adapters.nvim.commands")
+  local commands_setup = require("codetyper.adapters.nvim.commands.setup")
   local gitignore = require("codetyper.support.gitignore")
-  local autocmds = require("codetyper.adapters.nvim.autocmds")
+  local autocmds_setup = require("codetyper.adapters.nvim.autocmds.setup")
   local tree = require("codetyper.support.tree")
   local completion = require("codetyper.features.completion.inline")
 
   -- Register commands
-  commands.setup()
+  commands_setup()
 
   -- Setup autocommands
-  autocmds.setup()
+  autocmds_setup()
 
   -- Setup file reference completion
   completion.setup()

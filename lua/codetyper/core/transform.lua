@@ -334,8 +334,8 @@ function M.cmd_transform_selection()
       intent_override = doc_intent_override,
       is_whole_file = is_whole_file,
     }
-    local autocmds = require("codetyper.adapters.nvim.autocmds")
-    autocmds.process_single_prompt(bufnr, prompt, filepath, true)
+    local process_single_prompt = require("codetyper.adapters.nvim.autocmds.process_single_prompt")
+    process_single_prompt(bufnr, prompt, filepath, true)
   end
 
   local augroup = vim.api.nvim_create_augroup("CodetyperPrompt_" .. prompt_buf, { clear = true })
