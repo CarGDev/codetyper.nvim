@@ -1,14 +1,39 @@
+local state = require("codetyper.state.state")
+
 local M = {}
 
 -- Get current codetyper configuration at call time
 function M.get_config()
-  local ok, codetyper = pcall(require, "codetyper")
-  if ok and codetyper.get_config then
+  local codetyper_loaded, codetyper = pcall(require, "codetyper")
+  if codetyper_loaded and codetyper.get_config then
     return codetyper.get_config() or {}
   end
-  -- Fall back to defaults if codetyper isn't available
   local defaults = require("codetyper.config.defaults")
   return defaults.get_defaults()
+end
+
+--- Clear all collected diff entries and reset index
+function M.clear_diff_entries()
+  state.entries = {}
+  state.current_index = 1
+end
+
+--- Add a diff entry
+---@param entry DiffEntry
+function M.add_diff_entry(entry)
+  table.insert(state.entries, entry)
+end
+
+--- Get all diff entries
+---@return DiffEntry[]
+function M.get_diff_entries()
+  return state.entries
+end
+
+--- Get the number of diff entries
+---@return number
+function M.count_diff_entries()
+  return #state.entries
 end
 
 return M
