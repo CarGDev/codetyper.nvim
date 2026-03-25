@@ -4,38 +4,36 @@
 local function get_brain_completions(prefix)
   local items = {}
 
-  local ok_brain, brain = pcall(require, "codetyper.brain")
-  if not ok_brain then
+  local brain_loaded, brain = pcall(require, "codetyper.brain")
+  if not brain_loaded then
     return items
   end
 
-  -- Check if brain is initialized safely
-  local is_init = false
+  local brain_initialized = false
   if brain.is_initialized then
-    local ok, result = pcall(brain.is_initialized)
-    is_init = ok and result
+    local init_check_success, init_state = pcall(brain.is_initialized)
+    brain_initialized = init_check_success and init_state
   end
 
-  if not is_init then
+  if not brain_initialized then
     return items
   end
 
-  -- Query brain for relevant patterns
-  local ok_query, result = pcall(brain.query, {
+  local query_success, query_result = pcall(brain.query, {
     query = prefix,
     max_results = 10,
     types = { "pattern" },
   })
 
-  if ok_query and result and result.nodes then
-    for _, node in ipairs(result.nodes) do
+  if query_success and query_result and query_result.nodes then
+    for _, node in ipairs(query_result.nodes) do
       if node.c and node.c.s then
         local summary = node.c.s
-        for name in summary:gmatch("functions:%s*([^;]+)") do
-          for func in name:gmatch("([%w_]+)") do
-            if func:lower():find(prefix:lower(), 1, true) then
+        for matched_functions in summary:gmatch("functions:%s*([^;]+)") do
+          for func_name in matched_functions:gmatch("([%w_]+)") do
+            if func_name:lower():find(prefix:lower(), 1, true) then
               table.insert(items, {
-                label = func,
+                label = func_name,
                 kind = 3, -- Function
                 detail = "[brain]",
                 documentation = summary,
@@ -43,11 +41,11 @@ local function get_brain_completions(prefix)
             end
           end
         end
-        for name in summary:gmatch("classes:%s*([^;]+)") do
-          for class in name:gmatch("([%w_]+)") do
-            if class:lower():find(prefix:lower(), 1, true) then
+        for matched_classes in summary:gmatch("classes:%s*([^;]+)") do
+          for class_name in matched_classes:gmatch("([%w_]+)") do
+            if class_name:lower():find(prefix:lower(), 1, true) then
               table.insert(items, {
-                label = class,
+                label = class_name,
                 kind = 7, -- Class
                 detail = "[brain]",
                 documentation = summary,

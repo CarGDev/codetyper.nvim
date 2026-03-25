@@ -4,54 +4,52 @@
 local function get_indexer_completions(prefix)
   local items = {}
 
-  local ok_indexer, indexer = pcall(require, "codetyper.indexer")
-  if not ok_indexer then
+  local indexer_loaded, indexer = pcall(require, "codetyper.indexer")
+  if not indexer_loaded then
     return items
   end
 
-  local ok_load, index = pcall(indexer.load_index)
-  if not ok_load or not index then
+  local index_load_success, index = pcall(indexer.load_index)
+  if not index_load_success or not index then
     return items
   end
 
-  -- Search symbols
   if index.symbols then
     for symbol, files in pairs(index.symbols) do
       if symbol:lower():find(prefix:lower(), 1, true) then
-        local files_str = type(files) == "table" and table.concat(files, ", ") or tostring(files)
+        local files_display = type(files) == "table" and table.concat(files, ", ") or tostring(files)
         table.insert(items, {
           label = symbol,
           kind = 6, -- Variable (generic)
-          detail = "[index] " .. files_str:sub(1, 30),
-          documentation = "Symbol found in: " .. files_str,
+          detail = "[index] " .. files_display:sub(1, 30),
+          documentation = "Symbol found in: " .. files_display,
         })
       end
     end
   end
 
-  -- Search functions in files
   if index.files then
     for filepath, file_index in pairs(index.files) do
       if file_index and file_index.functions then
-        for _, func in ipairs(file_index.functions) do
-          if func.name and func.name:lower():find(prefix:lower(), 1, true) then
+        for _, func_entry in ipairs(file_index.functions) do
+          if func_entry.name and func_entry.name:lower():find(prefix:lower(), 1, true) then
             table.insert(items, {
-              label = func.name,
+              label = func_entry.name,
               kind = 3, -- Function
               detail = "[index] " .. vim.fn.fnamemodify(filepath, ":t"),
-              documentation = func.docstring or ("Function at line " .. (func.line or "?")),
+              documentation = func_entry.docstring or ("Function at line " .. (func_entry.line or "?")),
             })
           end
         end
       end
       if file_index and file_index.classes then
-        for _, class in ipairs(file_index.classes) do
-          if class.name and class.name:lower():find(prefix:lower(), 1, true) then
+        for _, class_entry in ipairs(file_index.classes) do
+          if class_entry.name and class_entry.name:lower():find(prefix:lower(), 1, true) then
             table.insert(items, {
-              label = class.name,
+              label = class_entry.name,
               kind = 7, -- Class
               detail = "[index] " .. vim.fn.fnamemodify(filepath, ":t"),
-              documentation = class.docstring or ("Class at line " .. (class.line or "?")),
+              documentation = class_entry.docstring or ("Class at line " .. (class_entry.line or "?")),
             })
           end
         end

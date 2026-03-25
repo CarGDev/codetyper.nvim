@@ -30,8 +30,8 @@ function source:complete(params, callback)
   local seen = {}
 
   -- Get brain completions (highest priority)
-  local ok1, brain_items = pcall(get_brain_completions, prefix)
-  if ok1 and brain_items then
+  local brain_completions_success, brain_items = pcall(get_brain_completions, prefix)
+  if brain_completions_success and brain_items then
     for _, item in ipairs(brain_items) do
       if not seen[item.label] then
         seen[item.label] = true
@@ -42,8 +42,8 @@ function source:complete(params, callback)
   end
 
   -- Get indexer completions
-  local ok2, indexer_items = pcall(get_indexer_completions, prefix)
-  if ok2 and indexer_items then
+  local indexer_completions_success, indexer_items = pcall(get_indexer_completions, prefix)
+  if indexer_completions_success and indexer_items then
     for _, item in ipairs(indexer_items) do
       if not seen[item.label] then
         seen[item.label] = true
@@ -56,8 +56,8 @@ function source:complete(params, callback)
   -- Get buffer completions as fallback (lower priority)
   local bufnr = params.context.bufnr
   if bufnr then
-    local ok3, buffer_items = pcall(get_buffer_completions, prefix, bufnr)
-    if ok3 and buffer_items then
+    local buffer_completions_success, buffer_items = pcall(get_buffer_completions, prefix, bufnr)
+    if buffer_completions_success and buffer_items then
       for _, item in ipairs(buffer_items) do
         if not seen[item.label] then
           seen[item.label] = true
@@ -69,12 +69,12 @@ function source:complete(params, callback)
   end
 
   -- If Copilot is installed, prefer its suggestion as a top-priority completion
-  local ok_cp, _ = pcall(require, "copilot")
-  if ok_cp then
+  local copilot_installed = pcall(require, "copilot")
+  if copilot_installed then
     local suggestion = nil
-    local ok_sug, res = pcall(get_copilot_suggestion, prefix)
-    if ok_sug then
-      suggestion = res
+    local copilot_suggestion_success, copilot_suggestion_result = pcall(get_copilot_suggestion, prefix)
+    if copilot_suggestion_success then
+      suggestion = copilot_suggestion_result
     end
     if suggestion and suggestion ~= "" then
       local first_line = suggestion:match("([^\n]+)") or suggestion
@@ -115,8 +115,8 @@ end
 --- Check if source is registered
 ---@return boolean
 function M.is_registered()
-  local ok, cmp = pcall(require, "cmp")
-  if not ok then
+  local cmp_loaded, cmp = pcall(require, "cmp")
+  if not cmp_loaded then
     return false
   end
 
