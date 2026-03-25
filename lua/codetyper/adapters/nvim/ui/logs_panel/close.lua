@@ -1,5 +1,5 @@
 local state = require("codetyper.state.state")
-local logs = require("codetyper.adapters.nvim.ui.logs")
+local logs_remove_listener = require("codetyper.adapters.nvim.ui.logs.remove_listener")
 local queue = require("codetyper.core.events.queue")
 
 --- Close the logs panel and clean up listeners, windows, buffers
@@ -10,7 +10,7 @@ local function close(force)
   end
 
   if state.listener_id then
-    pcall(logs.remove_listener, state.listener_id)
+    pcall(logs_remove_listener, state.listener_id)
     state.listener_id = nil
   end
 

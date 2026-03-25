@@ -10,21 +10,15 @@ local queue = require("codetyper.core.events.queue")
 local patch = require("codetyper.core.diff.patch")
 local worker = require("codetyper.core.scheduler.worker")
 local confidence_mod = require("codetyper.core.llm.confidence")
-local context_modal = require("codetyper.adapters.nvim.ui.context_modal")
-local params = require("codetyper.params.agents.scheduler")
+local context_modal_setup = require("codetyper.adapters.nvim.ui.context_modal.setup")
+local context_modal_open = require("codetyper.adapters.nvim.ui.context_modal.open")
 local logger = require("codetyper.support.logger")
 
 -- Setup context modal cleanup on exit
-context_modal.setup()
+context_modal_setup()
 
 --- Scheduler state
-local state = {
-  running = false,
-  timer = nil,
-  poll_interval = 100, -- ms
-  paused = false,
-  config = params.config,
-}
+local state = require("codetyper.state.state")
 
 --- Autocommand group for injection timing
 local augroup = nil
@@ -139,8 +133,8 @@ local function retry_with_context(original_event, additional_context, attached_f
 
   -- Log the retry
   pcall(function()
-    local logs = require("codetyper.adapters.nvim.ui.logs")
-    logs.add({
+    local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+    logs_add({
       type = "info",
       message = string.format("Retrying with additional context (original: %s)", original_event.id),
     })
@@ -234,8 +228,8 @@ local function handle_worker_result(event, result)
   if result.needs_context then
     require("codetyper.core.thinking_placeholder").remove_on_failure(event.id)
     pcall(function()
-      local logs = require("codetyper.adapters.nvim.ui.logs")
-      logs.add({
+      local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+      logs_add({
         type = "info",
         message = string.format("Event %s: LLM needs more context, opening modal", event.id),
       })
@@ -284,14 +278,14 @@ local function handle_worker_result(event, result)
     local suggested_cmds = detect_suggested_commands(result.response or "")
     if suggested_cmds and #suggested_cmds > 0 then
       -- Open modal and show suggested commands for user approval
-      context_modal.open(result.original_event or event, result.response or "", retry_with_context, suggested_cmds)
+      context_modal_open(result.original_event or event, result.response or "", retry_with_context, suggested_cmds)
       queue.update_status(event.id, "needs_context", { response = result.response })
       return
     end
     if requested and #requested > 0 then
       pcall(function()
-        local logs = require("codetyper.adapters.nvim.ui.logs")
-        logs.add({ type = "info", message = string.format("Auto-attaching %d requested file(s)", #requested) })
+        local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+        logs_add({ type = "info", message = string.format("Auto-attaching %d requested file(s)", #requested) })
       end)
 
       -- Build attached_files entries
@@ -322,7 +316,7 @@ local function handle_worker_result(event, result)
     end
 
     -- If no files parsed, open modal for manual context entry
-    context_modal.open(result.original_event or event, result.response or "", retry_with_context)
+    context_modal_open(result.original_event or event, result.response or "", retry_with_context)
 
     -- Mark original event as needing context (not failed)
     queue.update_status(event.id, "needs_context", { response = result.response })
@@ -335,8 +329,8 @@ local function handle_worker_result(event, result)
     -- Failed - try escalation if this was ollama
     if result.worker_type == "ollama" and event.attempt_count < 2 then
       pcall(function()
-        local logs = require("codetyper.adapters.nvim.ui.logs")
-        logs.add({
+        local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+        logs_add({
           type = "info",
           message = string.format("Escalating event %s to remote provider (ollama failed)", event.id),
         })
@@ -359,8 +353,8 @@ local function handle_worker_result(event, result)
   if needs_escalation and result.worker_type == "ollama" and event.attempt_count < 2 then
     -- Low confidence from ollama - escalate to remote
     pcall(function()
-      local logs = require("codetyper.adapters.nvim.ui.logs")
-      logs.add({
+      local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+      logs_add({
         type = "info",
         message = string.format(
           "Escalating event %s to remote provider (confidence: %.2f < %.2f)",
@@ -381,8 +375,8 @@ local function handle_worker_result(event, result)
   pcall(function()
     local tp = require("codetyper.core.thinking_placeholder")
     tp.update_inline_status(event.id, "Generating patch...")
-    local thinking = require("codetyper.adapters.nvim.ui.thinking")
-    thinking.update_stage("Generating patch...")
+    local thinking_update_stage = require("codetyper.adapters.nvim.ui.thinking.update_stage")
+    thinking_update_stage("Generating patch...")
   end)
   vim.notify("Generating patch...", vim.log.levels.INFO)
 
@@ -396,14 +390,14 @@ local function handle_worker_result(event, result)
   pcall(function()
     local tp = require("codetyper.core.thinking_placeholder")
     tp.update_inline_status(event.id, "Applying code...")
-    local thinking = require("codetyper.adapters.nvim.ui.thinking")
-    thinking.update_stage("Applying code...")
+    local thinking_update_stage = require("codetyper.adapters.nvim.ui.thinking.update_stage")
+    thinking_update_stage("Applying code...")
   end)
   vim.notify("Applying code...", vim.log.levels.INFO)
 
   pcall(function()
-    local logs = require("codetyper.adapters.nvim.ui.logs")
-    logs.add({
+    local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+    logs_add({
       type = "info",
       message = string.format("Code ready. Applying in %.1f seconds...", delay / 1000),
     })
@@ -435,8 +429,8 @@ local function dispatch_next()
   local should_skip, skip_reason = queue.check_precedence(event)
   if should_skip then
     pcall(function()
-      local logs = require("codetyper.adapters.nvim.ui.logs")
-      logs.add({
+      local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+      logs_add({
         type = "warning",
         message = string.format("Event %s skipped: %s", event.id, skip_reason or "conflict"),
       })
@@ -451,13 +445,13 @@ local function dispatch_next()
 
   -- Log dispatch with intent/scope info
   pcall(function()
-    local logs = require("codetyper.adapters.nvim.ui.logs")
+    local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
     local intent_info = event.intent and event.intent.type or "unknown"
     local scope_info = event.scope
         and event.scope.type ~= "file"
         and string.format("%s:%s", event.scope.type, event.scope.name or "anon")
       or "file"
-    logs.add({
+    logs_add({
       type = "info",
       message = string.format(
         "Dispatching %s [intent: %s, scope: %s, provider: %s]",
@@ -470,8 +464,8 @@ local function dispatch_next()
   end)
 
   -- Show thinking indicator: top-right window (always) + in-buffer or 99-style inline
-  local thinking = require("codetyper.adapters.nvim.ui.thinking")
-  thinking.ensure_shown()
+  local thinking_ensure_shown = require("codetyper.adapters.nvim.ui.thinking.ensure_shown")
+  thinking_ensure_shown()
 
   local is_inline = event.target_path
     and not event.target_path:match("%.codetyper%.")
@@ -677,8 +671,8 @@ function M.start(config)
   scheduler_loop()
 
   pcall(function()
-    local logs = require("codetyper.adapters.nvim.ui.logs")
-    logs.add({
+    local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+    logs_add({
       type = "info",
       message = "Scheduler started",
       data = {
@@ -709,8 +703,8 @@ function M.stop()
   end
 
   pcall(function()
-    local logs = require("codetyper.adapters.nvim.ui.logs")
-    logs.add({
+    local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+    logs_add({
       type = "info",
       message = "Scheduler stopped",
     })

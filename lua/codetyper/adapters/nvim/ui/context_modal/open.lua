@@ -109,8 +109,8 @@ function M.open(original_event, llm_response, callback, suggested_commands)
   vim.cmd("startinsert")
 
   pcall(function()
-    local logs = require("codetyper.adapters.nvim.ui.logs")
-    logs.add({
+    local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+    logs_add({
       type = "info",
       message = "Context modal opened - waiting for user input",
     })

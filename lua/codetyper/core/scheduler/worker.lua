@@ -41,8 +41,8 @@ local function notify_stage(event_id, text)
     end
   end)
   pcall(function()
-    local thinking = require("codetyper.adapters.nvim.ui.thinking")
-    thinking.update_stage(text)
+    local thinking_update_stage = require("codetyper.adapters.nvim.ui.thinking.update_stage")
+    thinking_update_stage(text)
   end)
   vim.notify(text, vim.log.levels.INFO)
 end
@@ -751,8 +751,8 @@ function M.create(event, worker_type, callback)
 
   -- Log worker creation
   pcall(function()
-    local logs = require("codetyper.adapters.nvim.ui.logs")
-    logs.add({
+    local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+    logs_add({
       type = "worker",
       message = string.format("Worker %s started (%s)", worker.id, worker_type),
       data = {
@@ -805,8 +805,8 @@ function M.start(worker)
       worker.worker_type = usage_or_metadata.provider
       if usage_or_metadata.pondered then
         pcall(function()
-          local logs = require("codetyper.adapters.nvim.ui.logs")
-          logs.add({
+          local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+          logs_add({
             type = "info",
             message = string.format(
               "Pondering: %s (agreement: %.0f%%)",
@@ -848,8 +848,8 @@ function M.complete(worker, response, error, usage)
     active_workers[worker.id] = nil
 
     pcall(function()
-      local logs = require("codetyper.adapters.nvim.ui.logs")
-      logs.add({
+      local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+      logs_add({
         type = "error",
         message = string.format("Worker %s failed: %s", worker.id, error),
       })
@@ -874,8 +874,8 @@ function M.complete(worker, response, error, usage)
     active_workers[worker.id] = nil
 
     pcall(function()
-      local logs = require("codetyper.adapters.nvim.ui.logs")
-      logs.add({
+      local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+      logs_add({
         type = "info",
         message = string.format("Worker %s: LLM needs more context", worker.id),
       })
@@ -898,8 +898,8 @@ function M.complete(worker, response, error, usage)
 
   -- Log the full raw LLM response (for debugging)
   pcall(function()
-    local logs = require("codetyper.adapters.nvim.ui.logs")
-    logs.add({
+    local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+    logs_add({
       type = "response",
       message = "--- LLM Response ---",
       data = {
@@ -919,8 +919,8 @@ function M.complete(worker, response, error, usage)
   active_workers[worker.id] = nil
 
   pcall(function()
-    local logs = require("codetyper.adapters.nvim.ui.logs")
-    logs.add({
+    local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+    logs_add({
       type = "success",
       message = string.format(
         "Worker %s completed (%.2fs, confidence: %.2f - %s)",
@@ -961,8 +961,8 @@ function M.cancel(worker_id)
   active_workers[worker_id] = nil
 
   pcall(function()
-    local logs = require("codetyper.adapters.nvim.ui.logs")
-    logs.add({
+    local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+    logs_add({
       type = "info",
       message = string.format("Worker %s cancelled", worker_id),
     })

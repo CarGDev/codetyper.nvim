@@ -190,8 +190,8 @@ function M.enqueue(event)
 
   -- Log to agent logs if available
   pcall(function()
-    local logs = require("codetyper.adapters.nvim.ui.logs")
-    logs.add({
+    local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+    logs_add({
       type = "queue",
       message = string.format("Event queued: %s (priority: %d)", event.id, event.priority),
       data = {

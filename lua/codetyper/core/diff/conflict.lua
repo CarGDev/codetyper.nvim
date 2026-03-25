@@ -66,8 +66,8 @@ local function validate_after_accept(bufnr, start_line, end_line, accepted_type)
     -- If errors found and auto-fix is enabled, queue fix automatically
     if result.has_errors and config.auto_fix_lint_errors then
       pcall(function()
-        local logs = require("codetyper.adapters.nvim.ui.logs")
-        logs.add({
+        local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+        logs_add({
           type = "info",
           message = "Auto-queuing fix for lint errors...",
         })
@@ -974,8 +974,8 @@ function M.process(bufnr)
 
     -- Log
     pcall(function()
-      local logs = require("codetyper.adapters.nvim.ui.logs")
-      logs.info(string.format("Found %d conflict(s) - use co/ct/cb/cn to resolve, [x/]x to navigate", #conflicts))
+      local logs_info = require("codetyper.adapters.nvim.ui.logs.info")
+      logs_info(string.format("Found %d conflict(s) - use co/ct/cb/cn to resolve, [x/]x to navigate", #conflicts))
     end)
   else
     -- No conflicts - clean up

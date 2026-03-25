@@ -24,7 +24,7 @@ function M.setup(opts)
     return
   end
 
-  local config = require("codetyper.config.defaults")
+  local config = require("codetyper.constants.defaults")
   M.config = config.setup(opts)
 
   -- Initialize modules

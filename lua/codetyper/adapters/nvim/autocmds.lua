@@ -4,29 +4,14 @@ local M = {}
 
 local utils = require("codetyper.support.utils")
 
---- Autocommand group name
-local AUGROUP = "Codetyper"
-
---- Debounce timer for tree updates
-local tree_update_timer = nil
-local TREE_UPDATE_DEBOUNCE_MS = 1000 -- 1 second debounce
-
---- Track processed prompts to avoid re-processing
----@type table<string, boolean>
-local processed_prompts = {}
-
---- Track if we're currently asking for preferences
-local asking_preference = false
-
---- Track if we're currently processing prompts (busy flag)
-local is_processing = false
-
---- Track the previous mode for visual mode detection
-local previous_mode = "n"
-
---- Debounce timer for prompt processing
-local prompt_process_timer = nil
-local PROMPT_PROCESS_DEBOUNCE_MS = 200 -- Wait 200ms after mode change before processing
+local AUGROUP = require("codetyper.constants.constants").AUGROUP
+local tree_update_timer = require("codetyper.constants.constants").tree_update_timer
+local TREE_UPDATE_DEBOUNCE_MS = require("codetyper.constants.constants").TREE_UPDATE_DEBOUNCE_MS
+local processed_prompts = require("codetyper.constants.constants").processed_prompts
+local is_processing = require("codetyper.constants.constants").is_processing
+local previous_mode = require("codetyper.constants.constants").previous_mode
+local prompt_process_timer = require("codetyper.constants.constants").prompt_process_timer
+local PROMPT_PROCESS_DEBOUNCE_MS = require("codetyper.constants.constants").PROMPT_PROCESS_DEBOUNCE_MS
 
 --- Generate a unique key for a prompt
 ---@param bufnr number Buffer number
@@ -265,8 +250,8 @@ function M.setup()
   })
 
   -- Thinking indicator (throbber) cleanup on exit
-  local thinking = require("codetyper.adapters.nvim.ui.thinking")
-  thinking.setup()
+  local thinking_setup = require("codetyper.adapters.nvim.ui.thinking.setup")
+  thinking_setup()
 end
 
 --- Create extmarks for injection range so position survives user edits (99-style).

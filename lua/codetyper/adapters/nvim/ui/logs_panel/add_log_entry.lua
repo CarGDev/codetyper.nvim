@@ -1,5 +1,5 @@
 local state = require("codetyper.state.state")
-local logs = require("codetyper.adapters.nvim.ui.logs")
+local logs_format_entry = require("codetyper.adapters.nvim.ui.logs.format_entry")
 local constants = require("codetyper.adapters.nvim.ui.logs_panel.constants")
 
 --- Add a log entry to the panel buffer with highlighting
@@ -27,7 +27,7 @@ local function add_log_entry(entry)
 
     vim.bo[state.buf].modifiable = true
 
-    local formatted = logs.format_entry(entry)
+    local formatted = logs_format_entry(entry)
     local formatted_lines = vim.split(formatted, "\n", { plain = true })
     local line_count = vim.api.nvim_buf_line_count(state.buf)
 

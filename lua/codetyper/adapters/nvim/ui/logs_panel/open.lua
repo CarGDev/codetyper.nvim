@@ -1,5 +1,7 @@
 local state = require("codetyper.state.state")
-local logs = require("codetyper.adapters.nvim.ui.logs")
+local logs_clear = require("codetyper.adapters.nvim.ui.logs.clear")
+local logs_add_listener = require("codetyper.adapters.nvim.ui.logs.add_listener")
+local logs_info = require("codetyper.adapters.nvim.ui.logs.info")
 local queue = require("codetyper.core.events.queue")
 local constants = require("codetyper.adapters.nvim.ui.logs_panel.constants")
 local add_log_entry = require("codetyper.adapters.nvim.ui.logs_panel.add_log_entry")
@@ -13,7 +15,7 @@ local function open()
     return
   end
 
-  logs.clear()
+  logs_clear()
 
   state.buf = vim.api.nvim_create_buf(false, true)
   vim.bo[state.buf].buftype = "nofile"
@@ -67,7 +69,7 @@ local function open()
   vim.keymap.set("n", "q", close, queue_keymap_opts)
   vim.keymap.set("n", "<Esc>", close, queue_keymap_opts)
 
-  state.listener_id = logs.add_listener(function(entry)
+  state.listener_id = logs_add_listener(function(entry)
     add_log_entry(entry)
     if entry.level == "response" then
       vim.schedule(update_title)
@@ -84,7 +86,7 @@ local function open()
 
   vim.cmd("wincmd p")
 
-  logs.info("Logs panel opened")
+  logs_info("Logs panel opened")
 end
 
 return open

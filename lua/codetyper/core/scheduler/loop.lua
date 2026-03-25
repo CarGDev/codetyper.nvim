@@ -280,8 +280,8 @@ function M.run(opts)
             local tool_opts = {
               on_log = function(msg)
                 pcall(function()
-                  local logs = require("codetyper.adapters.nvim.ui.logs")
-                  logs.add({ type = "tool", message = msg })
+                  local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+                  logs_add({ type = "tool", message = msg })
                 end)
               end,
               on_complete = function(result, err)

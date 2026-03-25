@@ -7,48 +7,10 @@
 
 local M = {}
 
----@class SuggestionState
----@field current_suggestion string|nil Current suggestion text
----@field suggestions string[] List of available suggestions
----@field current_index number Current suggestion index
----@field extmark_id number|nil Virtual text extmark ID
----@field bufnr number|nil Buffer where suggestion is shown
----@field line number|nil Line where suggestion is shown
----@field col number|nil Column where suggestion starts
----@field timer any|nil Debounce timer
----@field using_copilot boolean Whether currently using copilot
-
-local state = {
-  current_suggestion = nil,
-  suggestions = {},
-  current_index = 0,
-  extmark_id = nil,
-  bufnr = nil,
-  line = nil,
-  col = nil,
-  timer = nil,
-  using_copilot = false,
-}
-
---- Namespace for virtual text
+local state = require("codetyper.state.state")
 local ns = vim.api.nvim_create_namespace("codetyper_suggestion")
-
---- Highlight group for ghost text
-local hl_group = "CmpGhostText"
-
---- Configuration
-local config = {
-  enabled = true,
-  auto_trigger = true,
-  debounce = 150,
-  use_copilot = true, -- Use copilot when available
-  keymap = {
-    accept = "<Tab>",
-    next = "<M-]>",
-    prev = "<M-[>",
-    dismiss = "<C-]>",
-  },
-}
+local hl_group = require("codetyper.constants.constants").hl_group
+local config = require("codetyper.constants.config")
 
 --- Check if copilot is available and enabled
 ---@return boolean, table|nil available, copilot_suggestion module

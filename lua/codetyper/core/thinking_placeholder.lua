@@ -138,8 +138,8 @@ function M.start_inline(event)
     virt_lines = { { { " Implementing", "Comment" } } },
     virt_lines_above = true,
   })
-  local Throbber = require("codetyper.adapters.nvim.ui.throbber")
-  local throb = Throbber.new(function(icon)
+  local throbber_new = require("codetyper.adapters.nvim.ui.throbber.new")
+  local throb = throbber_new(function(icon)
     if not inline_status[event.id] then
       return
     end

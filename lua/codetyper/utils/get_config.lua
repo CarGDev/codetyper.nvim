@@ -8,7 +8,7 @@ function M.get_config()
   if codetyper_loaded and codetyper.get_config then
     return codetyper.get_config() or {}
   end
-  local defaults = require("codetyper.config.defaults")
+  local defaults = require("codetyper.constants.defaults")
   return defaults.get_defaults()
 end
 
@@ -34,6 +34,14 @@ end
 ---@return number
 function M.count_diff_entries()
   return #state.entries
+end
+
+function M.get_ui_dimensions()
+  local ui = vim.api.nvim_list_uis()[1]
+  if ui then
+    return ui.width, ui.height
+  end
+  return vim.o.columns, vim.o.lines
 end
 
 return M

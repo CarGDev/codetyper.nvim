@@ -4,7 +4,8 @@
 
 local M = {}
 local utils = require("codetyper.support.utils")
-local logs = require("codetyper.adapters.nvim.ui.logs")
+local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+local logs_read = require("codetyper.adapters.nvim.ui.logs.read")
 
 ---@class ExecutionResult
 ---@field success boolean Whether the execution succeeded
@@ -104,14 +105,14 @@ function M.handle_read_file(params, callback)
 
   -- Log the read operation in Claude Code style
   local relative_path = vim.fn.fnamemodify(path, ":~:.")
-  logs.read(relative_path)
+  logs_read(relative_path)
 
   local content = utils.read_file(path)
 
   if content then
     -- Log how many lines were read
     local lines = vim.split(content, "\n", { plain = true })
-    logs.add({ type = "result", message = string.format("  ⎿  Read %d lines", #lines) })
+    logs_add({ type = "result", message = string.format("  ⎿  Read %d lines", #lines) })
 
     -- Open the file in a buffer so user can see it
     open_file_in_buffer(path)
@@ -122,7 +123,7 @@ function M.handle_read_file(params, callback)
       requires_approval = false,
     })
   else
-    logs.add({ type = "error", message = "  ⎿  File not found" })
+    logs_add({ type = "error", message = "  ⎿  File not found" })
     callback({
       success = false,
       result = "Could not read file: " .. path,
@@ -139,12 +140,12 @@ function M.handle_edit_file(params, callback)
   local relative_path = vim.fn.fnamemodify(path, ":~:.")
 
   -- Log the edit operation
-  logs.add({ type = "action", message = string.format("Edit(%s)", relative_path) })
+  logs_add({ type = "action", message = string.format("Edit(%s)", relative_path) })
 
   local original = utils.read_file(path)
 
   if not original then
-    logs.add({ type = "error", message = "  ⎿  File not found" })
+    logs_add({ type = "error", message = "  ⎿  File not found" })
     callback({
       success = false,
       result = "File not found: " .. path,
@@ -158,7 +159,7 @@ function M.handle_edit_file(params, callback)
   local new_content, count = original:gsub(escaped_find, params.replace, 1)
 
   if count == 0 then
-    logs.add({ type = "error", message = "  ⎿  Content not found" })
+    logs_add({ type = "error", message = "  ⎿  Content not found" })
     callback({
       success = false,
       result = "Could not find content to replace in: " .. path,
@@ -172,11 +173,11 @@ function M.handle_edit_file(params, callback)
   local new_lines = #vim.split(new_content, "\n", { plain = true })
   local diff = new_lines - original_lines
   if diff > 0 then
-    logs.add({ type = "result", message = string.format("  ⎿  +%d lines (pending approval)", diff) })
+    logs_add({ type = "result", message = string.format("  ⎿  +%d lines (pending approval)", diff) })
   elseif diff < 0 then
-    logs.add({ type = "result", message = string.format("  ⎿  %d lines (pending approval)", diff) })
+    logs_add({ type = "result", message = string.format("  ⎿  %d lines (pending approval)", diff) })
   else
-    logs.add({ type = "result", message = "  ⎿  Modified (pending approval)" })
+    logs_add({ type = "result", message = "  ⎿  Modified (pending approval)" })
   end
 
   -- Requires user approval - show diff
@@ -204,20 +205,20 @@ function M.handle_write_file(params, callback)
 
   -- Log the write operation
   if operation == "create" then
-    logs.add({ type = "action", message = string.format("Write(%s)", relative_path) })
+    logs_add({ type = "action", message = string.format("Write(%s)", relative_path) })
     local new_lines = #vim.split(params.content, "\n", { plain = true })
-    logs.add({ type = "result", message = string.format("  ⎿  New file (%d lines, pending approval)", new_lines) })
+    logs_add({ type = "result", message = string.format("  ⎿  New file (%d lines, pending approval)", new_lines) })
   else
-    logs.add({ type = "action", message = string.format("Update(%s)", relative_path) })
+    logs_add({ type = "action", message = string.format("Update(%s)", relative_path) })
     local original_lines = #vim.split(original, "\n", { plain = true })
     local new_lines = #vim.split(params.content, "\n", { plain = true })
     local diff = new_lines - original_lines
     if diff > 0 then
-      logs.add({ type = "result", message = string.format("  ⎿  +%d lines (pending approval)", diff) })
+      logs_add({ type = "result", message = string.format("  ⎿  +%d lines (pending approval)", diff) })
     elseif diff < 0 then
-      logs.add({ type = "result", message = string.format("  ⎿  %d lines (pending approval)", diff) })
+      logs_add({ type = "result", message = string.format("  ⎿  %d lines (pending approval)", diff) })
     else
-      logs.add({ type = "result", message = "  ⎿  Modified (pending approval)" })
+      logs_add({ type = "result", message = "  ⎿  Modified (pending approval)" })
     end
   end
 
@@ -247,11 +248,11 @@ function M.handle_bash(params, callback)
   local command = params.command
 
   -- Log the bash operation
-  logs.add({
+  logs_add({
     type = "action",
     message = string.format("Bash(%s)", command:sub(1, 50) .. (#command > 50 and "..." or "")),
   })
-  logs.add({ type = "result", message = "  ⎿  Pending approval" })
+  logs_add({ type = "result", message = "  ⎿  Pending approval" })
 
   -- Requires user approval first
   callback({

@@ -1,3 +1,5 @@
+local params = require("codetyper.params.agents.scheduler")
+
 local state = {
   buf = nil,
   win = nil,
@@ -21,6 +23,26 @@ local state = {
   queue_win = nil,
   listener_id = nil,
   queue_listener_id = nil,
+  win_id = nil,
+  buf_id = nil,
+  throbber = nil,
+  timer = nil,
+  stage_text = "Thinking...",
+  current_suggestion = nil,
+  suggestions = {},
+  extmark_id = nil,
+  bufnr = nil,
+  line = nil,
+  col = nil,
+  using_copilot = false,
+  usage = {},
+  all_usage = {},
+  session_start = os.time(),
+  loaded = false,
+  running = false,
+  poll_interval = 100, -- ms
+  paused = false,
+  config = params.config,
 }
 
 return state

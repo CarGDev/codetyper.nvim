@@ -1,5 +1,6 @@
 local state = require("codetyper.state.state")
-local logs = require("codetyper.adapters.nvim.ui.logs")
+local logs_get_token_totals = require("codetyper.adapters.nvim.ui.logs.get_token_totals")
+local logs_get_provider_info = require("codetyper.adapters.nvim.ui.logs.get_provider_info")
 
 --- Update the panel title with token counts and provider info
 local function update_title()
@@ -7,8 +8,8 @@ local function update_title()
     return
   end
 
-  local prompt_tokens, response_tokens = logs.get_token_totals()
-  local provider, _ = logs.get_provider_info()
+  local prompt_tokens, response_tokens = logs_get_token_totals()
+  local provider, _ = logs_get_provider_info()
 
   if provider and state.buf and vim.api.nvim_buf_is_valid(state.buf) then
     vim.bo[state.buf].modifiable = true

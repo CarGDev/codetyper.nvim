@@ -161,8 +161,8 @@ function M.queue_patch(patch)
 
   -- Log patch creation
   pcall(function()
-    local logs = require("codetyper.adapters.nvim.ui.logs")
-    logs.add({
+    local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+    logs_add({
       type = "patch",
       message = string.format("Patch queued: %s (confidence: %.2f)", patch.id, patch.confidence or 0),
       data = {
@@ -230,8 +230,8 @@ function M.create_from_event(event, generated_code, confidence, strategy)
         }
       )
     pcall(function()
-      local logs = require("codetyper.adapters.nvim.ui.logs")
-      logs.add({
+      local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+      logs_add({
         type = "info",
         message = string.format(
           "Using override strategy: %s (%s)",
@@ -244,8 +244,8 @@ function M.create_from_event(event, generated_code, confidence, strategy)
   elseif use_search_replace then
     injection_strategy = "search_replace"
     pcall(function()
-      local logs = require("codetyper.adapters.nvim.ui.logs")
-      logs.add({
+      local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+      logs_add({
         type = "info",
         message = string.format("Using SEARCH/REPLACE mode with %d block(s)", #sr_blocks),
       })
@@ -268,8 +268,8 @@ function M.create_from_event(event, generated_code, confidence, strategy)
     end
     injection_range = { start_line = start_line, end_line = end_line }
     pcall(function()
-      local logs = require("codetyper.adapters.nvim.ui.logs")
-      logs.add({
+      local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+      logs_add({
         type = "info",
         message = string.format("Inline: replace lines %d-%d", start_line, end_line),
       })
@@ -287,8 +287,8 @@ function M.create_from_event(event, generated_code, confidence, strategy)
           end_line = event.range.end_line,
         }
         pcall(function()
-          local logs = require("codetyper.adapters.nvim.ui.logs")
-          logs.add({
+          local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+          logs_add({
             type = "info",
             message = string.format(
               "Inline prompt: will replace tag region (lines %d-%d)",
@@ -308,8 +308,8 @@ function M.create_from_event(event, generated_code, confidence, strategy)
           end_line = event.range.end_line,
         }
         pcall(function()
-          local logs = require("codetyper.adapters.nvim.ui.logs")
-          logs.add({
+          local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+          logs_add({
             type = "warning",
             message = "No scope found, using tag range as fallback",
           })
@@ -562,8 +562,8 @@ function M.apply(patch)
       M.mark_applied(patch.id)
 
       pcall(function()
-        local logs = require("codetyper.adapters.nvim.ui.logs")
-        logs.add({
+        local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+        logs_add({
           type = "success",
           message = string.format(
             "Patch %s applied via SEARCH/REPLACE (%d block(s))",
@@ -600,8 +600,8 @@ function M.apply(patch)
     else
       -- SEARCH/REPLACE failed: use only REPLACE parts for fallback (never inject raw markers)
       pcall(function()
-        local logs = require("codetyper.adapters.nvim.ui.logs")
-        logs.add({
+        local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+        logs_add({
           type = "warning",
           message = string.format(
             "SEARCH/REPLACE failed: %s. Using REPLACE content only for injection.",
@@ -663,8 +663,8 @@ function M.apply(patch)
             start_line = sr + 1
             end_line = er + 1
             pcall(function()
-              local logs = require("codetyper.adapters.nvim.ui.logs")
-              logs.add({
+              local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+              logs_add({
                 type = "info",
                 message = string.format("Applying at extmark range (lines %d-%d)", start_line, end_line),
               })
@@ -746,8 +746,8 @@ function M.apply(patch)
     -- Log inline prompt handling
     if is_inline_prompt then
       pcall(function()
-        local logs = require("codetyper.adapters.nvim.ui.logs")
-        logs.add({
+        local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+        logs_add({
           type = "info",
           message = string.format(
             "Inline prompt: replacing lines %d-%d",
@@ -787,9 +787,9 @@ function M.apply(patch)
 
     -- Log injection details
     pcall(function()
-      local logs = require("codetyper.adapters.nvim.ui.logs")
+      local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
       if inject_result.imports_added > 0 then
-        logs.add({
+        logs_add({
           type = "info",
           message = string.format(
             "%s %d import(s), injected %d body line(s)",
@@ -799,7 +799,7 @@ function M.apply(patch)
           ),
         })
       else
-        logs.add({
+        logs_add({
           type = "info",
           message = string.format("Injected %d line(s) of code", inject_result.body_lines),
         })
@@ -819,8 +819,8 @@ function M.apply(patch)
   M.mark_applied(patch.id)
 
   pcall(function()
-    local logs = require("codetyper.adapters.nvim.ui.logs")
-    logs.add({
+    local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+    logs_add({
       type = "success",
       message = string.format("Patch %s applied successfully", patch.id),
       data = {
@@ -1046,8 +1046,8 @@ function M.apply_with_conflict(patch)
       M.mark_applied(patch.id)
 
       pcall(function()
-        local logs = require("codetyper.adapters.nvim.ui.logs")
-        logs.add({
+        local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+        logs_add({
           type = "success",
           message = string.format("Created %d conflict(s) for review - use co/ct/cb/cn to resolve", applied_count),
         })
@@ -1072,8 +1072,8 @@ function M.apply_with_conflict(patch)
     M.mark_applied(patch.id)
 
     pcall(function()
-      local logs = require("codetyper.adapters.nvim.ui.logs")
-      logs.add({
+      local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+      logs_add({
         type = "success",
         message = "Created conflict for review - use co/ct/cb/cn to resolve",
       })
