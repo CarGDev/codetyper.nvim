@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2] - 2025-03-24
+
+### Changed
+
+- **Major module refactoring** — Migrated monolithic files to one-function-per-file architecture
+  - `parser.lua` — Extracted 11 functions into `parser/` folder; deleted barrel file and 3 unused files (`get_prompt_at_cursor`, `detect_prompt_type`, `has_unclosed_prompts`)
+  - `cmp/init.lua` — Extracted completion getters into individual files; moved shared source methods to `utils/cmp_source.lua`
+  - `context_modal.lua` — Migrated handlers, utils, and state into `context_modal/` folder; deleted barrel file
+  - `diff_review.lua` — Moved diff entry state functions to `utils/get_config.lua`; extracted remaining functions into `diff_review/` folder; deleted barrel file
+  - `logs.lua` — Extracted 26 log functions into `logs/` folder plus 2 utility files (`get_timestamp`, `estimate_tokens`); deleted barrel file
+  - `logs_panel.lua` — Extracted 10 panel functions into `logs_panel/` folder; deleted barrel file
+  - `thinking.lua` — Extracted 10 functions into `thinking/` folder; deleted barrel file
+  - `throbber.lua` — Extracted class, constructor, and methods into `throbber/` folder; deleted barrel file
+  - `commands.lua` — Extracted 14 command functions into `commands/` folder; deleted barrel file
+  - `autocmds.lua` — Extracted 22 functions, 4 data files, and state into `autocmds/` folder; deleted barrel file and 2 unused files (`clear`, `clear_auto_indexed`)
+- All external consumers updated to import functions directly from pure files
+- Renamed single-character and ambiguous variables to descriptive names across all refactored files
+
+### Added
+
+- `SECURITY.md` — Security policy and vulnerability reporting guidelines
+
 ## [1.0.1] - 2026-03-19
 
 ### Added
@@ -261,7 +283,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fixed** — Bug fixes
 - **Security** — Vulnerability fixes
 
-[Unreleased]: https://github.com/cargdev/codetyper.nvim/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/cargdev/codetyper.nvim/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/cargdev/codetyper.nvim/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/cargdev/codetyper.nvim/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/cargdev/codetyper.nvim/compare/v0.6.0...v1.0.0
 [0.6.0]: https://github.com/cargdev/codetyper.nvim/compare/v0.5.0...v0.6.0
