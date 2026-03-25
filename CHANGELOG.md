@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.3] - 2025-03-25
+
+### Fixed
+
+- Fixed `window/init.lua` containing invalid `//` comment syntax causing StyLua parse failure
+- Fixed `check_for_closed_prompt.lua` declaring a global instead of local function
+- Fixed `check_for_closed_prompt.lua` accessing undefined `config` variable — now properly requires `get_config`
+- Fixed `check_for_closed_prompt_with_preference.lua` and `check_all_prompts_with_preference.lua` accessing undefined `auto_process` — now uses `preferences.is_auto_process_enabled()`
+- Fixed `auto_index_file.lua` calling undefined `extract_functions`, `extract_classes`, `extract_imports` — added local implementations
+- Removed unused `comment_block_start` and `comment_block_end` variables in `auto_index_file.lua`
+
 ## [1.0.2] - 2025-03-24
 
 ### Changed
@@ -283,7 +294,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fixed** — Bug fixes
 - **Security** — Vulnerability fixes
 
-[Unreleased]: https://github.com/cargdev/codetyper.nvim/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/cargdev/codetyper.nvim/compare/v1.0.3...HEAD
+[1.0.3]: https://github.com/cargdev/codetyper.nvim/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/cargdev/codetyper.nvim/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/cargdev/codetyper.nvim/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/cargdev/codetyper.nvim/compare/v0.6.0...v1.0.0

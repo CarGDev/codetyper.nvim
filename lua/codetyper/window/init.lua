@@ -1,1 +1,1 @@
-// TODO: Migrate the prompt window here to centralized the logic
+-- TODO: Migrate the prompt window here to centralize the logic

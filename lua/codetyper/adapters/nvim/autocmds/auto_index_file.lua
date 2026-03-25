@@ -3,6 +3,50 @@ local autocmds_state = require("codetyper.adapters.nvim.autocmds.state")
 local is_supported_extension = require("codetyper.adapters.nvim.autocmds.is_supported_extension")
 local should_ignore_for_coder = require("codetyper.adapters.nvim.autocmds.should_ignore_for_coder")
 
+local function extract_functions(content, _ext)
+  local results = {}
+  for line in content:gmatch("[^\n]+") do
+    local name = line:match("^%s*function%s+([%w_:%.]+)%s*%(")
+      or line:match("^%s*local%s+function%s+([%w_]+)%s*%(")
+      or line:match("^%s*def%s+([%w_]+)%s*%(")
+      or line:match("^%s*func%s+([%w_]+)%s*%(")
+      or line:match("^%s*async%s+function%s+([%w_]+)%s*%(")
+      or line:match("^%s*public%s+.*%s+([%w_]+)%s*%(")
+      or line:match("^%s*private%s+.*%s+([%w_]+)%s*%(")
+    if name then
+      table.insert(results, { name = name })
+    end
+  end
+  return results
+end
+
+local function extract_classes(content, _ext)
+  local results = {}
+  for line in content:gmatch("[^\n]+") do
+    local name = line:match("^%s*class%s+([%w_]+)")
+      or line:match("^%s*public%s+class%s+([%w_]+)")
+      or line:match("^%s*interface%s+([%w_]+)")
+      or line:match("^%s*struct%s+([%w_]+)")
+    if name then
+      table.insert(results, { name = name })
+    end
+  end
+  return results
+end
+
+local function extract_imports(content, _ext)
+  local results = {}
+  for line in content:gmatch("[^\n]+") do
+    local imp = line:match("import%s+.*%s+from%s+[\"']([^\"']+)[\"']")
+      or line:match("require%([\"']([^\"']+)[\"']%)")
+      or line:match("from%s+([%w_.]+)%s+import")
+    if imp then
+      table.insert(results, imp)
+    end
+  end
+  return results
+end
+
 --- Auto-index a file by creating/opening its coder companion
 ---@param bufnr number Buffer number
 local function auto_index_file(bufnr)
@@ -54,8 +98,6 @@ local function auto_index_file(bufnr)
     local file_ext = vim.fn.fnamemodify(filepath, ":e")
 
     local comment_prefix = "--"
-    local comment_block_start = "--[["
-    local comment_block_end = "]]"
     if
       file_ext == "ts"
       or file_ext == "tsx"
@@ -69,12 +111,8 @@ local function auto_index_file(bufnr)
       or file_ext == "rs"
     then
       comment_prefix = "//"
-      comment_block_start = "/*"
-      comment_block_end = "*/"
     elseif file_ext == "py" or file_ext == "rb" or file_ext == "yaml" or file_ext == "yml" then
       comment_prefix = "#"
-      comment_block_start = '"""'
-      comment_block_end = '"""'
     end
 
     local content = ""

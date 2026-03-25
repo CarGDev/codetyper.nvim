@@ -4,9 +4,10 @@ local is_processing = require("codetyper.constants.constants").is_processing
 local get_prompt_key = require("codetyper.adapters.nvim.autocmds.get_prompt_key")
 local read_attached_files = require("codetyper.adapters.nvim.autocmds.read_attached_files")
 local create_injection_marks = require("codetyper.adapters.nvim.autocmds.create_injection_marks")
+local get_config = require("codetyper.utils.get_config").get_config
 
 --- Check if the buffer has a newly closed prompt and auto-process
-function check_for_closed_prompt()
+local function check_for_closed_prompt()
   if is_processing then
     return
   end
@@ -36,7 +37,8 @@ function check_for_closed_prompt()
 
   local current_line = lines[1]
 
-  if has_closing_tag(current_line, config.patterns.close_tag) then
+  local cfg = get_config()
+  if has_closing_tag(current_line, cfg.patterns.close_tag) then
     local prompt = get_last_prompt(bufnr)
     if prompt and prompt.content and prompt.content ~= "" then
       local prompt_key = get_prompt_key(bufnr, prompt)
