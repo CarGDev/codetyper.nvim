@@ -36,6 +36,10 @@ local function coder_cmd(args)
       local session = require("codetyper.core.cost.session")
       session.clear()
     end,
+    ["terminal"] = function()
+      local terminal = require("codetyper.window.terminal")
+      terminal.toggle()
+    end,
     ["credentials"] = function()
       local credentials = require("codetyper.config.credentials")
       credentials.show_status()

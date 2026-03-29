@@ -384,19 +384,44 @@ local function handle_worker_result(event, result)
   ))
   flog.debug("scheduler", "response_preview: " .. (result.response and result.response:sub(1, 300):gsub("\n", "\\n") or "nil")) -- TODO: remove after debugging
 
-  -- Check if response contains agent-style multi-file operations
+  -- Check if response contains agent-style operations (FILE: or TOOL: markers)
   local agent_handled = false
   pcall(function()
     local parse_agent = require("codetyper.core.agent.parse_response")
-    local executor = require("codetyper.core.agent.executor")
     local utils = require("codetyper.support.utils")
     local root = utils.get_project_root()
 
-    local ops, is_agent = parse_agent(result.response, root)
-    if is_agent and #ops > 0 then
-      flog.info("scheduler", string.format("agent response: %d file operations", #ops)) -- TODO: remove after debugging
+    local ops, is_agent, tool_calls = parse_agent(result.response, root)
+    if is_agent then
+      flog.info("scheduler", string.format("agent response: %d file ops, %d tool calls", #ops, #tool_calls)) -- TODO: remove after debugging
       require("codetyper.core.thinking_placeholder").clear_inline(event.id)
-      executor.execute(ops)
+
+      if #tool_calls > 0 then
+        -- Has tool calls — start the agent loop (tool → result → LLM → repeat)
+        local agent_loop = require("codetyper.core.agent.loop")
+        agent_loop.start(event, result.response, "", function(final_ops, final_response)
+          flog.info("scheduler", string.format("agent loop complete: %d final ops", #final_ops)) -- TODO: remove after debugging
+
+          -- If the final response has no FILE: ops but has code, route to normal patch flow
+          if #final_ops == 0 and final_response and #final_response > 0 then
+            -- Strip any remaining TOOL: markers from final response
+            local clean_final = final_response:gsub("TOOL:%w+[^\n]*\n?", "")
+            if #clean_final > 10 then
+              flog.info("scheduler", "routing final response to patch flow") -- TODO: remove after debugging
+              local p = patch.create_from_event(event, clean_final, result.confidence)
+              patch.queue_patch(p)
+              vim.defer_fn(function()
+                M.schedule_patch_flush()
+              end, state.config.apply_delay_ms or 500)
+            end
+          end
+        end)
+      else
+        -- Only FILE: ops, no tools — execute directly (no loop needed)
+        local executor = require("codetyper.core.agent.executor")
+        executor.execute(ops)
+      end
+
       queue.complete(event.id)
       agent_handled = true
     end

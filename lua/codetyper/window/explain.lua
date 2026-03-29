@@ -89,4 +89,7 @@ function M.update(content)
   vim.bo[state.buf].modifiable = false
 end
 
+--- Internal state for accumulating tool results
+M._last_content = ""
+
 return M

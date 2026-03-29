@@ -165,4 +165,87 @@ function M.execute(operations)
   return applied, failed, errors
 end
 
+--- Execute tool calls (TOOL:TERMINAL, TOOL:MCP)
+--- Results are shown in the explain window
+---@param tool_calls table[] From parse_response
+---@param callback fun(results: table[]) Called when all tools complete
+function M.execute_tools(tool_calls, callback)
+  if #tool_calls == 0 then
+    callback({})
+    return
+  end
+
+  local results = {}
+  local pending = #tool_calls
+
+  local function on_done()
+    pending = pending - 1
+    if pending <= 0 then
+      callback(results)
+    end
+  end
+
+  for i, call in ipairs(tool_calls) do
+    if call.type == "terminal" then
+      local terminal = require("codetyper.core.agent.terminal")
+      terminal.run(call.command, function(output, err)
+        results[i] = {
+          type = "terminal",
+          command = call.command,
+          output = output or err or "No output",
+          success = err == nil,
+        }
+        flog.info("agent.exec", string.format("terminal done: %s → %d chars", call.command:sub(1, 50), #(output or ""))) -- TODO: remove after debugging
+
+        -- Show result to user
+        vim.schedule(function()
+          local explain = require("codetyper.window.explain")
+          local content = string.format("## Terminal: `%s`\n\n```\n%s\n```", call.command, output or err or "")
+          if explain.is_open() then
+            explain.update(explain._last_content .. "\n\n" .. content)
+            explain._last_content = explain._last_content .. "\n\n" .. content
+          else
+            explain.show("Tool Result", content)
+            explain._last_content = content
+          end
+        end)
+
+        on_done()
+      end)
+
+    elseif call.type == "mcp" then
+      local mcp = require("codetyper.core.agent.mcp")
+      mcp.call_tool(call.server, call.tool, call.args, function(result, err)
+        results[i] = {
+          type = "mcp",
+          server = call.server,
+          tool = call.tool,
+          output = result or err or "No output",
+          success = err == nil,
+        }
+        flog.info("agent.exec", string.format("mcp done: %s/%s → %d chars", call.server, call.tool, #(result or ""))) -- TODO: remove after debugging
+
+        -- Show result to user
+        vim.schedule(function()
+          local explain = require("codetyper.window.explain")
+          local content = string.format("## MCP: %s/%s\n\n```\n%s\n```", call.server, call.tool, result or err or "")
+          if explain.is_open() then
+            explain.update(explain._last_content .. "\n\n" .. content)
+            explain._last_content = explain._last_content .. "\n\n" .. content
+          else
+            explain.show("Tool Result", content)
+            explain._last_content = content
+          end
+        end)
+
+        on_done()
+      end)
+    else
+      results[i] = { type = "unknown", success = false, output = "Unknown tool type" }
+      on_done()
+    end
+  end
+end
+
 return M
+

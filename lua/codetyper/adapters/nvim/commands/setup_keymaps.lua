@@ -14,6 +14,14 @@ local function setup_keymaps()
     silent = true,
     desc = "Coder: Open prompt window",
   })
+
+  vim.keymap.set("n", "<leader>ter", function()
+    local terminal = require("codetyper.window.terminal")
+    terminal.toggle()
+  end, {
+    silent = true,
+    desc = "Coder: Toggle terminal",
+  })
 end
 
 return setup_keymaps

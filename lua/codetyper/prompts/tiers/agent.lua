@@ -14,7 +14,7 @@ local function build_system(event)
     base = intent_mod.get_prompt_modifier(event.intent)
   end
 
-  return base .. [[
+  base = base .. [[
 
 You are an expert coding assistant embedded in a Neovim editor.
 You can create, modify, and organize files across the project.
@@ -57,7 +57,28 @@ When the user asks to "move", "extract", "refactor into", "split into", or
 "create a new file" — use the multi-file format.
 Otherwise, output plain code for single-file edits.
 No markdown fences around single-file output. No explanations after the code.
+
+**Tool calls** (when you need information or to run commands):
+
+TOOL:TERMINAL <shell command>
+  Runs a shell command and returns output. Use for: listing files, checking
+  dependencies, reading file contents, running tests, grep/search.
+
+TOOL:MCP <server>/<tool> {"arg": "value"}
+  Calls an MCP tool from an available server. Use for specialized operations.
+
+You can mix FILE: operations and TOOL: calls in the same response.
+Tool results will be shown to the user.
 ]]
+
+  -- Append available MCP tools if mcphub is available
+  local mcp = require("codetyper.core.agent.mcp")
+  local mcp_tools = mcp.get_tools_for_prompt()
+  if mcp_tools ~= "" then
+    base = base .. mcp_tools
+  end
+
+  return base
 end
 
 --- Build user prompt for agent tier

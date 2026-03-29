@@ -74,19 +74,75 @@ local function strip_fences(body)
   return content
 end
 
---- Parse a structured agent response into file operations
+--- Parse tool calls from agent response
+---@param response string
+---@return table[] tool_calls { type, server, tool, args, command }
+local function parse_tool_calls(response)
+  local calls = {}
+  local cleaned = response:gsub("@thinking.-end thinking\n?", "")
+
+  -- TOOL:TERMINAL command
+  for cmd in cleaned:gmatch("TOOL:TERMINAL%s+([^\n]+)") do
+    table.insert(calls, {
+      type = "terminal",
+      command = cmd:gsub("^%s+", ""):gsub("%s+$", ""),
+    })
+    flog.info("agent.parse", "TOOL:TERMINAL: " .. cmd:sub(1, 80)) -- TODO: remove after debugging
+  end
+
+  -- TOOL:MCP server/tool {json_args}
+  for server_tool, json_args in cleaned:gmatch("TOOL:MCP%s+(%S+)%s*(%b{})") do
+    local server, tool = server_tool:match("^([^/]+)/(.+)$")
+    if server and tool then
+      local ok, args = pcall(vim.json.decode, json_args)
+      if ok then
+        table.insert(calls, {
+          type = "mcp",
+          server = server,
+          tool = tool,
+          args = args,
+        })
+        flog.info("agent.parse", "TOOL:MCP: " .. server .. "/" .. tool) -- TODO: remove after debugging
+      end
+    end
+  end
+
+  -- TOOL:MCP server/tool (no args)
+  for server_tool in cleaned:gmatch("TOOL:MCP%s+(%S+)%s*\n") do
+    if not server_tool:match("^{") then
+      local server, tool = server_tool:match("^([^/]+)/(.+)$")
+      if server and tool then
+        table.insert(calls, {
+          type = "mcp",
+          server = server,
+          tool = tool,
+          args = {},
+        })
+        flog.info("agent.parse", "TOOL:MCP (no args): " .. server .. "/" .. tool) -- TODO: remove after debugging
+      end
+    end
+  end
+
+  return calls
+end
+
+--- Parse a structured agent response into file operations and tool calls
 ---@param response string Raw LLM response
 ---@param project_root string Project root path
 ---@return FileOperation[] operations
 ---@return boolean is_agent_response
+---@return table[] tool_calls
 local function parse_response(response, project_root)
   local ops = {}
 
   -- Strip thinking block
   local cleaned = response:gsub("@thinking.-end thinking\n?", "")
 
-  if not cleaned:match("FILE:") then
-    return ops, false
+  -- Parse tool calls regardless of FILE: markers
+  local tool_calls = parse_tool_calls(response)
+
+  if not cleaned:match("FILE:") and #tool_calls == 0 then
+    return ops, false, tool_calls
   end
 
   flog.info("agent.parse", "detected agent response format") -- TODO: remove after debugging
@@ -145,7 +201,8 @@ local function parse_response(response, project_root)
 
   flog.info("agent.parse", string.format("parsed %d operations", #ops)) -- TODO: remove after debugging
 
-  return ops, #ops > 0
+  local is_agent = #ops > 0 or #tool_calls > 0
+  return ops, is_agent, tool_calls
 end
 
 return parse_response
