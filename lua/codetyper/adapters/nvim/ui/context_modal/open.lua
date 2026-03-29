@@ -11,7 +11,7 @@ local close = require("codetyper.adapters.nvim.ui.context_modal.close")
 ---@param llm_response string LLM's response asking for context
 ---@param callback function(event: table, additional_context: string, attached_files?: table)
 ---@param suggested_commands table[]|nil Optional list of {label,cmd} suggested shell commands
-function open(original_event, llm_response, callback, suggested_commands)
+local function open(original_event, llm_response, callback, suggested_commands)
   close()
 
   state.original_event = original_event

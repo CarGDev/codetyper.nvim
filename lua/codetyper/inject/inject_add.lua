@@ -1,4 +1,5 @@
 local M = {}
+local utils = require("codetyper.support.utils")
 
 --- Inject code for add (append at cursor or end)
 ---@param bufnr number Buffer number

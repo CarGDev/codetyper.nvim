@@ -6,7 +6,7 @@ local logger = require("codetyper.support.logger")
 ---@param open_tag string Opening tag
 ---@param close_tag string Closing tag
 ---@return CoderPrompt[] List of found prompts
-function find_prompts(content, open_tag, close_tag)
+local function find_prompts(content, open_tag, close_tag)
   logger.func_entry("parser", "find_prompts", {
     content_length = #content,
     open_tag = open_tag,

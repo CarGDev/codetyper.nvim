@@ -1,4 +1,5 @@
 local M = {}
+local utils = require("codetyper.support.utils")
 
 --- Inject code for refactor (replace entire file)
 ---@param bufnr number Buffer number
