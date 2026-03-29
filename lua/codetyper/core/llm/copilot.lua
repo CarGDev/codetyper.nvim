@@ -306,10 +306,15 @@ local function make_request(token, body, callback)
 
       if response.choices and response.choices[1] and response.choices[1].message then
         local code = llm.extract_code(response.choices[1].message.content)
+        local copilot_flog = require("codetyper.support.flog") -- TODO: remove after debugging
+        copilot_flog.info("copilot", string.format("response OK: raw_len=%d extracted_len=%d type=%s", #(response.choices[1].message.content or ""), #(code or ""), type(code)))
+        copilot_flog.debug("copilot", "extracted_preview: " .. (code and code:sub(1, 300):gsub("\n", "\\n") or "nil"))
         vim.schedule(function()
           callback(code, nil, usage)
         end)
       else
+        local copilot_flog = require("codetyper.support.flog") -- TODO: remove after debugging
+        copilot_flog.error("copilot", "no choices in response")
         vim.schedule(function()
           callback(nil, "No content in Copilot response", nil)
         end)
@@ -347,6 +352,8 @@ end
 ---@param context table Context information
 ---@param callback fun(response: string|nil, error: string|nil)
 function M.generate(prompt, context, callback)
+  local gen_flog = require("codetyper.support.flog") -- TODO: remove after debugging
+  gen_flog.info("copilot", string.format(">>> generate called: prompt_len=%d context_len=%d", #(prompt or ""), #(context or "")))
   ensure_initialized()
 
   if not M.state.oauth_token then

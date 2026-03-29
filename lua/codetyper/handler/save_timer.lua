@@ -1,4 +1,8 @@
 --- Save all usage to disk (debounced)
+local get_history_path = require("codetyper.utils.get_history_path")
+local utils = require("codetyper.support.utils")
+local state = require("codetyper.state.state")
+
 local save_timer = require("codetyper.constants.constants").save_timer
 local function save_to_disk()
   -- Cancel existing timer

@@ -8,6 +8,7 @@ local M = {}
 
 local params = require("codetyper.params.agents.worker")
 local confidence = require("codetyper.core.llm.confidence")
+local flog = require("codetyper.support.flog") -- TODO: remove after debugging
 
 ---@class WorkerResult
 ---@field success boolean Whether the request succeeded
@@ -738,6 +739,7 @@ end
 ---@param callback function(result: WorkerResult)
 ---@return Worker
 function M.create(event, worker_type, callback)
+  flog.info("worker", string.format(">>> create: event=%s provider=%s", event.id or "nil", worker_type or "nil")) -- TODO: remove after debugging
   local worker = {
     id = generate_id(),
     event = event,
@@ -774,10 +776,13 @@ end
 function M.start(worker)
   worker.status = "running"
   local eid = worker.event and worker.event.id
+  flog.info("worker", string.format(">>> start: id=%s event=%s", worker.id, eid or "nil")) -- TODO: remove after debugging
 
   notify_stage(eid, "Reading context...")
 
   local prompt, context = build_prompt(worker.event)
+  flog.info("worker", string.format("prompt built: len=%d context_len=%d", #(prompt or ""), #(context or ""))) -- TODO: remove after debugging
+  flog.debug("worker", "prompt_preview: " .. (prompt and prompt:sub(1, 300):gsub("\n", "\\n") or "nil")) -- TODO: remove after debugging
 
   -- Check if smart selection is enabled (memory-based provider selection)
   local use_smart_selection = false
@@ -792,7 +797,12 @@ function M.start(worker)
 
   -- Define the response handler
   local function handle_response(response, err, usage_or_metadata)
+    flog.info("worker", string.format( -- TODO: remove after debugging
+      ">>> handle_response: id=%s err=%s response_len=%d response_type=%s",
+      worker.id, tostring(err or "nil"), response and #response or 0, type(response)
+    ))
     if worker.status ~= "running" then
+      flog.warn("worker", "already cancelled, ignoring response") -- TODO: remove after debugging
       return -- Already cancelled
     end
 
@@ -842,6 +852,10 @@ end
 ---@param usage table|nil
 function M.complete(worker, response, error, usage)
   local duration = os.clock() - worker.start_time
+  flog.info("worker", string.format( -- TODO: remove after debugging
+    ">>> complete: id=%s duration=%.2fs error=%s response_type=%s response_len=%d",
+    worker.id, duration, tostring(error or "nil"), type(response), response and #response or 0
+  ))
 
   if error then
     worker.status = "failed"
@@ -911,6 +925,10 @@ function M.complete(worker, response, error, usage)
   -- Clean the response (remove markdown, explanations, etc.)
   local filetype = vim.fn.fnamemodify(worker.event.target_path or "", ":e")
   local cleaned_response = clean_response(response, filetype)
+
+  local flog = require("codetyper.support.flog")
+  flog.info("worker", string.format("raw_response_len=%d cleaned_len=%d type=%s", #(response or ""), #(cleaned_response or ""), type(cleaned_response)))
+  flog.debug("worker", "cleaned_preview: " .. (cleaned_response and cleaned_response:sub(1, 300):gsub("\n", "\\n") or "nil"))
 
   -- Score confidence on cleaned response
   local conf_score, breakdown = confidence.score(cleaned_response, worker.event.prompt_content)

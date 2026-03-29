@@ -3,6 +3,7 @@ local processed_prompts = require("codetyper.constants.constants").processed_pro
 local get_prompt_key = require("codetyper.adapters.nvim.autocmds.get_prompt_key")
 local read_attached_files = require("codetyper.adapters.nvim.autocmds.read_attached_files")
 local create_injection_marks = require("codetyper.adapters.nvim.autocmds.create_injection_marks")
+local flog = require("codetyper.support.flog") -- TODO: remove after debugging
 
 --- Process a single prompt through the scheduler
 ---@param bufnr number Buffer number
@@ -10,27 +11,39 @@ local create_injection_marks = require("codetyper.adapters.nvim.autocmds.create_
 ---@param current_file string Current file path
 ---@param skip_processed_check? boolean Skip the processed check (for manual mode)
 local function process_single_prompt(bufnr, prompt, current_file, skip_processed_check)
+  flog.info("process_single_prompt", ">>> ENTERED") -- TODO: remove after debugging
   local clean_prompt = require("codetyper.parser.clean_prompt")
   local strip_file_references = require("codetyper.parser.strip_file_references")
   local scheduler = require("codetyper.core.scheduler.scheduler")
 
   if not prompt.content or prompt.content == "" then
+    flog.warn("process_single_prompt", "empty prompt, aborting") -- TODO: remove after debugging
     return
   end
 
+  flog.info("process_single_prompt", string.format( -- TODO: remove after debugging
+    "prompt_lines=%d-%d file=%s skip_check=%s",
+    prompt.start_line or 0, prompt.end_line or 0,
+    current_file or "nil", tostring(skip_processed_check)
+  ))
+  flog.debug("process_single_prompt", "content_preview: " .. (prompt.content or ""):sub(1, 100):gsub("\n", "\\n"))
+
   if not scheduler.status().running then
+    flog.info("process_single_prompt", "starting scheduler") -- TODO: remove after debugging
     scheduler.start()
   end
 
   local prompt_key = get_prompt_key(bufnr, prompt)
 
   if not skip_processed_check and processed_prompts[prompt_key] then
+    flog.warn("process_single_prompt", "already processed, skipping") -- TODO: remove after debugging
     return
   end
 
   processed_prompts[prompt_key] = true
 
   vim.schedule(function()
+    flog.info("process_single_prompt", ">>> vim.schedule callback ENTERED") -- TODO: remove after debugging
     local queue = require("codetyper.core.events.queue")
     local patch_mod = require("codetyper.core.diff.patch")
     local intent_mod = require("codetyper.core.intent")
@@ -52,6 +65,11 @@ local function process_single_prompt(bufnr, prompt, current_file, skip_processed
     local attached_files = read_attached_files(prompt.content, current_file)
 
     local cleaned = clean_prompt(strip_file_references(prompt.content))
+
+    flog.info("process_single_prompt", string.format( -- TODO: remove after debugging
+      "target=%s is_coder_file=%s cleaned_len=%d",
+      target_path or "nil", tostring(is_from_coder_file), #cleaned
+    ))
 
     local target_bufnr = vim.fn.bufnr(target_path)
     local scope = nil
@@ -107,6 +125,13 @@ local function process_single_prompt(bufnr, prompt, current_file, skip_processed
       }
     end
 
+    flog.info("process_single_prompt", string.format( -- TODO: remove after debugging
+      "intent: type=%s action=%s scope=%s scope_range=%s",
+      intent.type or "nil", intent.action or "nil",
+      scope and scope.type or "nil",
+      scope_range and (scope_range.start_line .. "-" .. scope_range.end_line) or "nil"
+    ))
+
     local project_context = nil
     if prompt.is_whole_file then
       pcall(function()
@@ -143,6 +168,15 @@ local function process_single_prompt(bufnr, prompt, current_file, skip_processed
     local range_for_marks = scope_range or event_range
     local injection_marks = create_injection_marks(target_bufnr, range_for_marks)
 
+    flog.info("process_single_prompt", string.format( -- TODO: remove after debugging
+      "enqueueing: event_range=%d-%d marks_range=%d-%d has_marks=%s injection_range=%s priority=%d",
+      range_start, range_end,
+      range_for_marks.start_line, range_for_marks.end_line,
+      injection_marks and "yes" or "NO",
+      prompt.injection_range and (prompt.injection_range.start_line .. "-" .. prompt.injection_range.end_line) or "nil",
+      priority
+    ))
+
     queue.enqueue({
       id = queue.generate_id(),
       bufnr = bufnr,
@@ -166,6 +200,8 @@ local function process_single_prompt(bufnr, prompt, current_file, skip_processed
       is_whole_file = prompt.is_whole_file,
       project_context = project_context,
     })
+
+    flog.info("process_single_prompt", ">>> event enqueued successfully") -- TODO: remove after debugging
 
     local scope_info = scope
         and scope.type ~= "file"

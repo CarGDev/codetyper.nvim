@@ -1,10 +1,7 @@
 local utils = require("codetyper.support.utils")
-local AUGROUP = require("codetyper.constants.constants").AUGROUP
-local processed_prompts = require("codetyper.constants.constants").processed_prompts
-local is_processing = require("codetyper.constants.constants").is_processing
-local previous_mode = require("codetyper.constants.constants").previous_mode
-local prompt_process_timer = require("codetyper.constants.constants").prompt_process_timer
-local PROMPT_PROCESS_DEBOUNCE_MS = require("codetyper.constants.constants").PROMPT_PROCESS_DEBOUNCE_MS
+local constants = require("codetyper.constants.constants")
+local AUGROUP = constants.AUGROUP
+local PROMPT_PROCESS_DEBOUNCE_MS = constants.PROMPT_PROCESS_DEBOUNCE_MS
 local schedule_tree_update = require("codetyper.adapters.nvim.autocmds.schedule_tree_update")
 local check_for_closed_prompt_with_preference = require("codetyper.adapters.nvim.autocmds.check_for_closed_prompt_with_preference")
 local check_all_prompts_with_preference = require("codetyper.adapters.nvim.autocmds.check_all_prompts_with_preference")
@@ -40,7 +37,7 @@ local function setup()
     callback = function(ev)
       local old_mode = ev.match:match("^(.-):")
       if old_mode then
-        previous_mode = old_mode
+        constants.previous_mode = old_mode
       end
     end,
     desc = "Track previous mode for visual mode detection",
@@ -55,21 +52,21 @@ local function setup()
         return
       end
 
-      if is_processing then
+      if constants.is_processing then
         return
       end
 
-      if previous_mode == "v" or previous_mode == "V" or previous_mode == "\22" then
+      if constants.previous_mode == "v" or constants.previous_mode == "V" or constants.previous_mode == "\22" then
         return
       end
 
-      if prompt_process_timer then
-        prompt_process_timer:stop()
-        prompt_process_timer = nil
+      if constants.prompt_process_timer then
+        constants.prompt_process_timer:stop()
+        constants.prompt_process_timer = nil
       end
 
-      prompt_process_timer = vim.defer_fn(function()
-        prompt_process_timer = nil
+      constants.prompt_process_timer = vim.defer_fn(function()
+        constants.prompt_process_timer = nil
         local mode = vim.api.nvim_get_mode().mode
         if mode ~= "n" then
           return
@@ -88,7 +85,7 @@ local function setup()
       if buftype ~= "" then
         return
       end
-      if is_processing then
+      if constants.is_processing then
         return
       end
       local mode = vim.api.nvim_get_mode().mode
@@ -113,9 +110,9 @@ local function setup()
     pattern = "*.codetyper/*",
     callback = function(ev)
       local bufnr = ev.buf
-      for key, _ in pairs(processed_prompts) do
+      for key, _ in pairs(constants.processed_prompts) do
         if key:match("^" .. bufnr .. ":") then
-          processed_prompts[key] = nil
+          constants.processed_prompts[key] = nil
         end
       end
       clear_auto_opened(bufnr)
@@ -141,7 +138,7 @@ local function setup()
         indexer.schedule_index_file(filepath)
       end
 
-      local brain_loaded, brain = pcall(require, "codetyper.brain")
+      local brain_loaded, brain = pcall(require, "codetyper.core.memory")
       if brain_loaded and brain.is_initialized and brain.is_initialized() then
         vim.defer_fn(function()
           update_brain_from_file(filepath)
@@ -177,7 +174,7 @@ local function setup()
     group = group,
     pattern = "*",
     callback = function()
-      local brain_loaded, brain = pcall(require, "codetyper.brain")
+      local brain_loaded, brain = pcall(require, "codetyper.core.memory")
       if brain_loaded and brain.is_initialized and brain.is_initialized() then
         brain.shutdown()
       end

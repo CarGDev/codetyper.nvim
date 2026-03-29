@@ -4,7 +4,7 @@
 local function get_brain_completions(prefix)
   local items = {}
 
-  local brain_loaded, brain = pcall(require, "codetyper.brain")
+  local brain_loaded, brain = pcall(require, "codetyper.core.memory")
   if not brain_loaded then
     return items
   end

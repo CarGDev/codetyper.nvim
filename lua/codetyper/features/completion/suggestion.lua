@@ -225,7 +225,7 @@ local function get_suggestions(prefix, context)
   local suggestions = {}
 
   -- Get completions from brain
-  local ok_brain, brain = pcall(require, "codetyper.brain")
+  local ok_brain, brain = pcall(require, "codetyper.core.memory")
   if ok_brain and brain.is_initialized and brain.is_initialized() then
     local result = brain.query({
       query = prefix,

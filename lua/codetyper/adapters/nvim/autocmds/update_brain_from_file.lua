@@ -3,7 +3,7 @@ local utils = require("codetyper.support.utils")
 --- Update brain with patterns from a file
 ---@param filepath string
 local function update_brain_from_file(filepath)
-  local brain_loaded, brain = pcall(require, "codetyper.brain")
+  local brain_loaded, brain = pcall(require, "codetyper.core.memory")
   if not brain_loaded or not brain.is_initialized() then
     return
   end

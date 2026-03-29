@@ -13,6 +13,7 @@ local confidence_mod = require("codetyper.core.llm.confidence")
 local context_modal_setup = require("codetyper.adapters.nvim.ui.context_modal.setup")
 local context_modal_open = require("codetyper.adapters.nvim.ui.context_modal.open")
 local logger = require("codetyper.support.logger")
+local flog = require("codetyper.support.flog") -- TODO: remove after debugging
 
 -- Setup context modal cleanup on exit
 context_modal_setup()
@@ -221,6 +222,11 @@ end
 ---@param event table PromptEvent
 ---@param result table WorkerResult
 local function handle_worker_result(event, result)
+  flog.info("scheduler", string.format( -- TODO: remove after debugging
+    ">>> handle_worker_result: event=%s success=%s needs_context=%s error=%s response_len=%d",
+    event.id or "nil", tostring(result.success), tostring(result.needs_context or false),
+    tostring(result.error or "nil"), result.response and #result.response or 0
+  ))
   -- Clear 99-style inline "Thinking..." virtual text when worker finishes (any outcome)
   require("codetyper.core.thinking_placeholder").clear_inline(event.id)
 
@@ -372,6 +378,11 @@ local function handle_worker_result(event, result)
   end
 
   -- Good enough or final attempt - create patch
+  flog.info("scheduler", string.format( -- TODO: remove after debugging
+    ">>> creating patch: event=%s confidence=%.2f response_len=%d",
+    event.id or "nil", result.confidence or 0, result.response and #result.response or 0
+  ))
+  flog.debug("scheduler", "response_preview: " .. (result.response and result.response:sub(1, 300):gsub("\n", "\\n") or "nil")) -- TODO: remove after debugging
   pcall(function()
     local tp = require("codetyper.core.thinking_placeholder")
     tp.update_inline_status(event.id, "Generating patch...")
@@ -381,6 +392,11 @@ local function handle_worker_result(event, result)
   vim.notify("Generating patch...", vim.log.levels.INFO)
 
   local p = patch.create_from_event(event, result.response, result.confidence)
+  flog.info("scheduler", string.format( -- TODO: remove after debugging
+    "patch created: id=%s strategy=%s range=%s",
+    p.id or "nil", p.injection_strategy or "nil",
+    p.injection_range and (p.injection_range.start_line .. "-" .. p.injection_range.end_line) or "nil"
+  ))
   patch.queue_patch(p)
 
   queue.complete(event.id)
@@ -424,6 +440,11 @@ local function dispatch_next()
   if not event then
     return
   end
+
+  flog.info("scheduler", string.format( -- TODO: remove after debugging
+    ">>> dispatch_next: event=%s intent=%s target=%s",
+    event.id or "nil", event.intent and event.intent.type or "nil", event.target_path or "nil"
+  ))
 
   -- Check for precedence conflicts (multiple tags in same scope)
   local should_skip, skip_reason = queue.check_precedence(event)
@@ -492,9 +513,11 @@ local waiting_to_flush = false
 --- Schedule patch flush after delay (completion safety)
 --- Will keep retrying until safe to inject or no pending patches
 function M.schedule_patch_flush()
+  flog.info("scheduler", ">>> schedule_patch_flush called") -- TODO: remove after debugging
   vim.defer_fn(function()
     -- Check if there are any pending patches
     local pending = patch.get_pending()
+    flog.info("scheduler", string.format("flush: pending=%d", #pending)) -- TODO: remove after debugging
     logger.info("scheduler", string.format("schedule_patch_flush: %d pending", #pending))
     if #pending == 0 then
       waiting_to_flush = false
@@ -502,10 +525,13 @@ function M.schedule_patch_flush()
     end
 
     local safe, reason = M.is_safe_to_inject()
+    flog.info("scheduler", string.format("is_safe=%s reason=%s", tostring(safe), tostring(reason or "ok"))) -- TODO: remove after debugging
     logger.info("scheduler", string.format("is_safe_to_inject=%s (%s)", tostring(safe), tostring(reason or "ok")))
     if safe then
       waiting_to_flush = false
+      flog.info("scheduler", ">>> calling flush_pending_smart") -- TODO: remove after debugging
       local applied, stale = patch.flush_pending_smart()
+      flog.info("scheduler", string.format("flush result: applied=%d stale=%d", applied, stale)) -- TODO: remove after debugging
       if applied > 0 or stale > 0 then
         logger.info("scheduler", string.format("Patches flushed: %d applied, %d stale", applied, stale))
       end

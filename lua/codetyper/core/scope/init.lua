@@ -68,20 +68,10 @@ end
 ---@param col number 0-indexed
 ---@return TSNode|nil
 local function get_node_at_pos(bufnr, row, col)
-  local ok, ts_utils = pcall(require, "nvim-treesitter.ts_utils")
-  if not ok then
-    return nil
-  end
-
-  -- Try to get the node at the cursor position
-  local node = ts_utils.get_node_at_cursor()
-  if node then
-    return node
-  end
-
-  -- Fallback: get root and find node
-  local parser = vim.treesitter.get_parser(bufnr)
-  if not parser then
+  -- Use the passed row/col (0-indexed) to find the node at that position,
+  -- NOT the current cursor position (which may have moved after prompt window closed)
+  local ok, parser = pcall(vim.treesitter.get_parser, bufnr)
+  if not ok or not parser then
     return nil
   end
 
@@ -99,10 +89,12 @@ end
 ---@param node_types table<string, string>
 ---@return TSNode|nil, string|nil scope_type
 local function find_enclosing_scope(node, node_types)
+  local flog = require("codetyper.support.flog") -- TODO: remove after debugging
   local current = node
   while current do
     local node_type = current:type()
     if node_types[node_type] then
+      flog.debug("scope", "find_enclosing_scope matched: " .. node_type) -- TODO: remove after debugging
       return current, node_types[node_type]
     end
     current = current:parent()
@@ -115,19 +107,69 @@ end
 ---@param bufnr number
 ---@return string|nil
 local function get_scope_name(node, bufnr)
-  -- Try to find name child node
-  local name_node = node:field("name")[1]
-  if name_node then
-    return vim.treesitter.get_node_text(name_node, bufnr)
+  local flog = require("codetyper.support.flog") -- TODO: remove after debugging
+  local node_type = node:type()
+
+  -- Log node info for debugging
+  local children_types = {}
+  for child in node:iter_children() do
+    table.insert(children_types, child:type())
+  end
+  flog.debug("scope", string.format( -- TODO: remove after debugging
+    "get_scope_name: node_type=%s children=[%s] parent_type=%s",
+    node_type,
+    table.concat(children_types, ", "),
+    node:parent() and node:parent():type() or "nil"
+  ))
+
+  -- Try to find name child node via field
+  local ok_field, name_nodes = pcall(node.field, node, "name")
+  if ok_field and name_nodes and name_nodes[1] then
+    local text = vim.treesitter.get_node_text(name_nodes[1], bufnr)
+    flog.debug("scope", "found via field('name'): " .. tostring(text)) -- TODO: remove after debugging
+    return text
   end
 
-  -- Try identifier child
+  -- Try direct children
   for child in node:iter_children() do
-    if child:type() == "identifier" or child:type() == "property_identifier" then
+    local ct = child:type()
+    if ct == "identifier" or ct == "property_identifier" then
+      return vim.treesitter.get_node_text(child, bufnr)
+    end
+    -- Lua: function M.foo() — name is a dot_index_expression
+    if ct == "dot_index_expression" or ct == "method_index_expression" then
+      return vim.treesitter.get_node_text(child, bufnr)
+    end
+    -- JS/TS: object.method = function() — name is member_expression
+    if ct == "member_expression" then
       return vim.treesitter.get_node_text(child, bufnr)
     end
   end
 
+  -- Walk up: if parent is assignment or function_declaration wrapper
+  local parent = node:parent()
+  if parent then
+    local pt = parent:type()
+    flog.debug("scope", "trying parent: " .. pt) -- TODO: remove after debugging
+
+    -- Check if parent has a name field (covers function_declaration with name)
+    local ok_pfield, pname_nodes = pcall(parent.field, parent, "name")
+    if ok_pfield and pname_nodes and pname_nodes[1] then
+      local text = vim.treesitter.get_node_text(pname_nodes[1], bufnr)
+      flog.debug("scope", "found via parent field('name'): " .. tostring(text)) -- TODO: remove after debugging
+      return text
+    end
+
+    -- Try parent's direct identifier/dot_index children
+    for child in parent:iter_children() do
+      local ct = child:type()
+      if ct == "identifier" or ct == "dot_index_expression" or ct == "member_expression" then
+        return vim.treesitter.get_node_text(child, bufnr)
+      end
+    end
+  end
+
+  flog.warn("scope", "get_scope_name: no name found for " .. node_type) -- TODO: remove after debugging
   return nil
 end
 

@@ -1,81 +1,19 @@
----@mod codetyper.agent.conflict Git conflict-style diff visualization
----@brief [[
---- Provides interactive conflict resolution for AI-generated code changes.
---- Uses git merge conflict markers (<<<<<<< / ======= / >>>>>>>) with
---- extmark highlighting for visual differentiation.
----
---- Keybindings in conflict buffers:
----   co = accept "ours" (keep original code)
----   ct = accept "theirs" (use AI suggestion)
----   cb = accept "both" (keep both versions)
----   cn = accept "none" (delete both versions)
----   [x = jump to previous conflict
----   ]x = jump to next conflict
----@brief ]]
-
 local M = {}
 
 local params = require("codetyper.params.agents.conflict")
+local detect = require("codetyper.core.diff.detect")
+local resolve = require("codetyper.core.diff.resolve")
+local validate_after_accept = require("codetyper.handler.validate_after_accept")
 
---- Lazy load linter module
-local function get_linter()
-  return require("codetyper.features.agents.linter")
-end
-
---- Configuration
 local config = vim.deepcopy(params.config)
-
---- Namespace for conflict highlighting
-local NAMESPACE = vim.api.nvim_create_namespace("codetyper_conflict")
-
---- Namespace for keybinding hints
-local HINT_NAMESPACE = vim.api.nvim_create_namespace("codetyper_conflict_hints")
-
---- Highlight groups
 local HL_GROUPS = params.hl_groups
-
---- Conflict markers
 local MARKERS = params.markers
+
+local NAMESPACE = vim.api.nvim_create_namespace("codetyper_conflict")
+local HINT_NAMESPACE = vim.api.nvim_create_namespace("codetyper_conflict_hints")
 
 --- Track buffers with active conflicts
 local conflict_buffers = {}
-
---- Run linter validation after accepting code changes
----@param bufnr number Buffer number
----@param start_line number Start line of changed region
----@param end_line number End line of changed region
----@param accepted_type string Type of acceptance ("theirs", "both")
-local function validate_after_accept(bufnr, start_line, end_line, accepted_type)
-  if not config.lint_after_accept then
-    return
-  end
-
-  -- Only validate when accepting AI suggestions
-  if accepted_type ~= "theirs" and accepted_type ~= "both" then
-    return
-  end
-
-  local linter = get_linter()
-
-  -- Validate the changed region
-  linter.validate_after_injection(bufnr, start_line, end_line, function(result)
-    if not result then
-      return
-    end
-
-    -- If errors found and auto-fix is enabled, queue fix automatically
-    if result.has_errors and config.auto_fix_lint_errors then
-      pcall(function()
-        local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
-        logs_add({
-          type = "info",
-          message = "Auto-queuing fix for lint errors...",
-        })
-      end)
-      linter.request_ai_fix(bufnr, result)
-    end
-  end)
-end
 
 --- Configure conflict behavior
 ---@param opts table Configuration options
@@ -93,6 +31,26 @@ function M.get_config()
   return vim.deepcopy(config)
 end
 
+--- Detect conflicts in a buffer
+---@param bufnr number Buffer number
+---@return table[] conflicts List of conflict positions
+function M.detect_conflicts(bufnr)
+  if not vim.api.nvim_buf_is_valid(bufnr) then
+    return {}
+  end
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  return detect.detect_conflicts(lines)
+end
+
+--- Get the conflict at the current cursor position
+---@param bufnr number Buffer number
+---@param cursor_line number Current line (1-indexed)
+---@return table|nil conflict The conflict at cursor, or nil
+function M.get_conflict_at_cursor(bufnr, cursor_line)
+  local conflicts = M.detect_conflicts(bufnr)
+  return detect.get_conflict_at_cursor(conflicts, cursor_line)
+end
+
 --- Auto-show menu for next conflict if enabled and conflicts remain
 ---@param bufnr number Buffer number
 local function auto_show_next_conflict_menu(bufnr)
@@ -107,7 +65,6 @@ local function auto_show_next_conflict_menu(bufnr)
 
     local conflicts = M.detect_conflicts(bufnr)
     if #conflicts > 0 then
-      -- Jump to first remaining conflict and show menu
       local conflict = conflicts[1]
       local win = vim.api.nvim_get_current_win()
       if vim.api.nvim_win_get_buf(win) == bufnr then
@@ -121,7 +78,6 @@ end
 
 --- Setup highlight groups
 local function setup_highlights()
-  -- Current (original) code - green tint
   vim.api.nvim_set_hl(0, HL_GROUPS.current, {
     bg = "#2d4a3e",
     default = true,
@@ -132,8 +88,6 @@ local function setup_highlights()
     bold = true,
     default = true,
   })
-
-  -- Incoming (AI suggestion) code - blue tint
   vim.api.nvim_set_hl(0, HL_GROUPS.incoming, {
     bg = "#2d3a4a",
     default = true,
@@ -144,59 +98,17 @@ local function setup_highlights()
     bold = true,
     default = true,
   })
-
-  -- Separator line
   vim.api.nvim_set_hl(0, HL_GROUPS.separator, {
     fg = "#5c6370",
     bg = "#3e4451",
     bold = true,
     default = true,
   })
-
-  -- Keybinding hints
   vim.api.nvim_set_hl(0, HL_GROUPS.hint, {
     fg = "#5c6370",
     italic = true,
     default = true,
   })
-end
-
---- Parse a buffer and find all conflict regions
----@param bufnr number Buffer number
----@return table[] conflicts List of conflict positions
-function M.detect_conflicts(bufnr)
-  if not vim.api.nvim_buf_is_valid(bufnr) then
-    return {}
-  end
-
-  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-  local conflicts = {}
-  local current_conflict = nil
-
-  for i, line in ipairs(lines) do
-    if line:match("^<<<<<<<") then
-      current_conflict = {
-        start_line = i,
-        current_start = i,
-        current_end = nil,
-        separator = nil,
-        incoming_start = nil,
-        incoming_end = nil,
-        end_line = nil,
-      }
-    elseif line:match("^=======") and current_conflict then
-      current_conflict.current_end = i - 1
-      current_conflict.separator = i
-      current_conflict.incoming_start = i + 1
-    elseif line:match("^>>>>>>>") and current_conflict then
-      current_conflict.incoming_end = i - 1
-      current_conflict.end_line = i
-      table.insert(conflicts, current_conflict)
-      current_conflict = nil
-    end
-  end
-
-  return conflicts
 end
 
 --- Highlight conflicts in buffer using extmarks
@@ -207,12 +119,10 @@ function M.highlight_conflicts(bufnr, conflicts)
     return
   end
 
-  -- Clear existing highlights
   vim.api.nvim_buf_clear_namespace(bufnr, NAMESPACE, 0, -1)
   vim.api.nvim_buf_clear_namespace(bufnr, HINT_NAMESPACE, 0, -1)
 
   for _, conflict in ipairs(conflicts) do
-    -- Highlight <<<<<<< CURRENT line
     vim.api.nvim_buf_set_extmark(bufnr, NAMESPACE, conflict.start_line - 1, 0, {
       end_row = conflict.start_line - 1,
       end_col = 0,
@@ -220,7 +130,6 @@ function M.highlight_conflicts(bufnr, conflicts)
       priority = 100,
     })
 
-    -- Highlight current (original) code section
     if conflict.current_start and conflict.current_end then
       for row = conflict.current_start, conflict.current_end do
         if row <= conflict.current_end then
@@ -234,7 +143,6 @@ function M.highlight_conflicts(bufnr, conflicts)
       end
     end
 
-    -- Highlight ======= separator
     if conflict.separator then
       vim.api.nvim_buf_set_extmark(bufnr, NAMESPACE, conflict.separator - 1, 0, {
         end_row = conflict.separator - 1,
@@ -244,7 +152,6 @@ function M.highlight_conflicts(bufnr, conflicts)
       })
     end
 
-    -- Highlight incoming (AI suggestion) code section
     if conflict.incoming_start and conflict.incoming_end then
       for row = conflict.incoming_start, conflict.incoming_end do
         if row <= conflict.incoming_end then
@@ -258,7 +165,6 @@ function M.highlight_conflicts(bufnr, conflicts)
       end
     end
 
-    -- Highlight >>>>>>> INCOMING line
     if conflict.end_line then
       vim.api.nvim_buf_set_extmark(bufnr, NAMESPACE, conflict.end_line - 1, 0, {
         end_row = conflict.end_line - 1,
@@ -268,7 +174,6 @@ function M.highlight_conflicts(bufnr, conflicts)
       })
     end
 
-    -- Add virtual text hint on the <<<<<<< line
     vim.api.nvim_buf_set_extmark(bufnr, HINT_NAMESPACE, conflict.start_line - 1, 0, {
       virt_text = {
         { "  [co]=ours [ct]=theirs [cb]=both [cn]=none [x/]x=nav", HL_GROUPS.hint },
@@ -277,22 +182,6 @@ function M.highlight_conflicts(bufnr, conflicts)
       priority = 50,
     })
   end
-end
-
---- Get the conflict at the current cursor position
----@param bufnr number Buffer number
----@param cursor_line number Current line (1-indexed)
----@return table|nil conflict The conflict at cursor, or nil
-function M.get_conflict_at_cursor(bufnr, cursor_line)
-  local conflicts = M.detect_conflicts(bufnr)
-
-  for _, conflict in ipairs(conflicts) do
-    if cursor_line >= conflict.start_line and cursor_line <= conflict.end_line then
-      return conflict
-    end
-  end
-
-  return nil
 end
 
 --- Accept "ours" - keep the original code
@@ -307,24 +196,12 @@ function M.accept_ours(bufnr)
   end
 
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local keep_lines = resolve.extract_ours(lines, conflict)
 
-  -- Extract the "current" (original) lines
-  local keep_lines = {}
-  if conflict.current_start and conflict.current_end then
-    for i = conflict.current_start + 1, conflict.current_end do
-      table.insert(keep_lines, lines[i])
-    end
-  end
-
-  -- Replace the entire conflict region with the kept lines
   vim.api.nvim_buf_set_lines(bufnr, conflict.start_line - 1, conflict.end_line, false, keep_lines)
-
-  -- Re-process remaining conflicts
   M.process(bufnr)
 
   vim.notify("Accepted CURRENT (original) code", vim.log.levels.INFO)
-
-  -- Auto-show menu for next conflict if any remain
   auto_show_next_conflict_menu(bufnr)
 end
 
@@ -340,31 +217,16 @@ function M.accept_theirs(bufnr)
   end
 
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local keep_lines = resolve.extract_theirs(lines, conflict)
 
-  -- Extract the "incoming" (AI suggestion) lines
-  local keep_lines = {}
-  if conflict.incoming_start and conflict.incoming_end then
-    for i = conflict.incoming_start, conflict.incoming_end do
-      table.insert(keep_lines, lines[i])
-    end
-  end
-
-  -- Track where the code will be inserted
   local insert_start = conflict.start_line
   local insert_end = insert_start + #keep_lines - 1
 
-  -- Replace the entire conflict region with the kept lines
   vim.api.nvim_buf_set_lines(bufnr, conflict.start_line - 1, conflict.end_line, false, keep_lines)
-
-  -- Re-process remaining conflicts
   M.process(bufnr)
 
   vim.notify("Accepted INCOMING (AI suggestion) code", vim.log.levels.INFO)
-
-  -- Run linter validation on the accepted code
   validate_after_accept(bufnr, insert_start, insert_end, "theirs")
-
-  -- Auto-show menu for next conflict if any remain
   auto_show_next_conflict_menu(bufnr)
 end
 
@@ -380,40 +242,16 @@ function M.accept_both(bufnr)
   end
 
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local keep_lines = resolve.extract_both(lines, conflict)
 
-  -- Extract both "current" and "incoming" lines
-  local keep_lines = {}
-
-  -- Add current lines
-  if conflict.current_start and conflict.current_end then
-    for i = conflict.current_start + 1, conflict.current_end do
-      table.insert(keep_lines, lines[i])
-    end
-  end
-
-  -- Add incoming lines
-  if conflict.incoming_start and conflict.incoming_end then
-    for i = conflict.incoming_start, conflict.incoming_end do
-      table.insert(keep_lines, lines[i])
-    end
-  end
-
-  -- Track where the code will be inserted
   local insert_start = conflict.start_line
   local insert_end = insert_start + #keep_lines - 1
 
-  -- Replace the entire conflict region with the kept lines
   vim.api.nvim_buf_set_lines(bufnr, conflict.start_line - 1, conflict.end_line, false, keep_lines)
-
-  -- Re-process remaining conflicts
   M.process(bufnr)
 
   vim.notify("Accepted BOTH (current + incoming) code", vim.log.levels.INFO)
-
-  -- Run linter validation on the accepted code
   validate_after_accept(bufnr, insert_start, insert_end, "both")
-
-  -- Auto-show menu for next conflict if any remain
   auto_show_next_conflict_menu(bufnr)
 end
 
@@ -428,15 +266,10 @@ function M.accept_none(bufnr)
     return
   end
 
-  -- Replace the entire conflict region with nothing
   vim.api.nvim_buf_set_lines(bufnr, conflict.start_line - 1, conflict.end_line, false, {})
-
-  -- Re-process remaining conflicts
   M.process(bufnr)
 
   vim.notify("Deleted conflict (accepted NONE)", vim.log.levels.INFO)
-
-  -- Auto-show menu for next conflict if any remain
   auto_show_next_conflict_menu(bufnr)
 end
 
@@ -456,7 +289,6 @@ function M.goto_next(bufnr)
     end
   end
 
-  -- Wrap around to first conflict
   if #conflicts > 0 then
     vim.api.nvim_win_set_cursor(0, { conflicts[1].start_line, 0 })
     vim.cmd("normal! zz")
@@ -485,7 +317,6 @@ function M.goto_prev(bufnr)
     end
   end
 
-  -- Wrap around to last conflict
   if #conflicts > 0 then
     vim.api.nvim_win_set_cursor(0, { conflicts[#conflicts].start_line, 0 })
     vim.cmd("normal! zz")
@@ -508,48 +339,19 @@ function M.show_menu(bufnr)
     return
   end
 
-  -- Get preview of both versions
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local current_count, incoming_count = resolve.count_sections(conflict)
 
   local current_preview = ""
   if conflict.current_start and conflict.current_end then
-    local current_lines = {}
-    for i = conflict.current_start + 1, math.min(conflict.current_end, conflict.current_start + 3) do
-      if lines[i] then
-        table.insert(current_lines, "  " .. lines[i]:sub(1, 50))
-      end
-    end
-    if conflict.current_end - conflict.current_start > 3 then
-      table.insert(current_lines, "  ...")
-    end
-    current_preview = table.concat(current_lines, "\n")
+    current_preview = resolve.build_preview(lines, conflict.current_start + 1, conflict.current_end, 3)
   end
 
   local incoming_preview = ""
   if conflict.incoming_start and conflict.incoming_end then
-    local incoming_lines = {}
-    for i = conflict.incoming_start, math.min(conflict.incoming_end, conflict.incoming_start + 2) do
-      if lines[i] then
-        table.insert(incoming_lines, "  " .. lines[i]:sub(1, 50))
-      end
-    end
-    if conflict.incoming_end - conflict.incoming_start > 3 then
-      table.insert(incoming_lines, "  ...")
-    end
-    incoming_preview = table.concat(incoming_lines, "\n")
+    incoming_preview = resolve.build_preview(lines, conflict.incoming_start, conflict.incoming_end, 3)
   end
 
-  -- Count lines in each section
-  local current_count = conflict.current_end
-      and conflict.current_start
-      and (conflict.current_end - conflict.current_start)
-    or 0
-  local incoming_count = conflict.incoming_end
-      and conflict.incoming_start
-      and (conflict.incoming_end - conflict.incoming_start + 1)
-    or 0
-
-  -- Build menu options
   local options = {
     {
       label = string.format("Accept CURRENT (original) - %d lines", current_count),
@@ -603,7 +405,6 @@ function M.show_menu(bufnr)
     },
   }
 
-  -- Build display labels
   local labels = {}
   for _, opt in ipairs(options) do
     if opt.separator then
@@ -613,7 +414,6 @@ function M.show_menu(bufnr)
     end
   end
 
-  -- Show menu using vim.ui.select
   vim.ui.select(labels, {
     prompt = "Resolve Conflict:",
     format_item = function(item)
@@ -642,20 +442,8 @@ function M.show_floating_menu(bufnr)
     return
   end
 
-  -- Get lines for preview
-  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local current_count, incoming_count = resolve.count_sections(conflict)
 
-  -- Count lines
-  local current_count = conflict.current_end
-      and conflict.current_start
-      and (conflict.current_end - conflict.current_start)
-    or 0
-  local incoming_count = conflict.incoming_end
-      and conflict.incoming_start
-      and (conflict.incoming_end - conflict.incoming_start + 1)
-    or 0
-
-  -- Build menu content
   local menu_lines = {
     "╭─────────────────────────────────────────╮",
     "│       Resolve Conflict                  │",
@@ -671,7 +459,6 @@ function M.show_floating_menu(bufnr)
     "╰─────────────────────────────────────────╯",
   }
 
-  -- Create floating window
   local width = 43
   local height = #menu_lines
 
@@ -686,26 +473,21 @@ function M.show_floating_menu(bufnr)
     focusable = true,
   }
 
-  -- Create buffer for menu
   local menu_bufnr = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_lines(menu_bufnr, 0, -1, false, menu_lines)
   vim.bo[menu_bufnr].modifiable = false
   vim.bo[menu_bufnr].bufhidden = "wipe"
 
-  -- Open floating window
   local win = vim.api.nvim_open_win(menu_bufnr, true, float_opts)
 
-  -- Set highlights
   vim.api.nvim_set_hl(0, "CoderConflictMenuBorder", { fg = "#61afef", default = true })
   vim.api.nvim_set_hl(0, "CoderConflictMenuTitle", { fg = "#e5c07b", bold = true, default = true })
   vim.api.nvim_set_hl(0, "CoderConflictMenuKey", { fg = "#98c379", bold = true, default = true })
 
   vim.wo[win].winhl = "Normal:Normal,FloatBorder:CoderConflictMenuBorder"
 
-  -- Add syntax highlighting to menu buffer
   vim.api.nvim_buf_add_highlight(menu_bufnr, -1, "CoderConflictMenuTitle", 1, 0, -1)
   for i = 3, 9 do
-    -- Highlight the key in brackets
     local line = menu_lines[i + 1]
     if line then
       local start_col = line:find("%[")
@@ -716,14 +498,12 @@ function M.show_floating_menu(bufnr)
     end
   end
 
-  -- Setup keymaps for the menu
   local close_menu = function()
     if vim.api.nvim_win_is_valid(win) then
       vim.api.nvim_win_close(win, true)
     end
   end
 
-  -- Use nowait to prevent delay from built-in 'c' command
   local menu_opts = { buffer = menu_bufnr, silent = true, noremap = true, nowait = true }
 
   vim.keymap.set("n", "q", close_menu, menu_opts)
@@ -759,7 +539,6 @@ function M.show_floating_menu(bufnr)
     M.goto_prev(bufnr)
   end, menu_opts)
 
-  -- Also support number keys for quick selection
   vim.keymap.set("n", "1", function()
     close_menu()
     M.accept_ours(bufnr)
@@ -780,7 +559,6 @@ function M.show_floating_menu(bufnr)
     M.accept_none(bufnr)
   end, menu_opts)
 
-  -- Close on focus lost
   vim.api.nvim_create_autocmd("WinLeave", {
     buffer = menu_bufnr,
     once = true,
@@ -791,56 +569,45 @@ end
 --- Setup keybindings for conflict resolution in a buffer
 ---@param bufnr number Buffer number
 function M.setup_keymaps(bufnr)
-  -- Use nowait to prevent delay from built-in 'c' command
   local opts = { buffer = bufnr, silent = true, noremap = true, nowait = true }
 
-  -- Accept ours (original)
   vim.keymap.set("n", "co", function()
     M.accept_ours(bufnr)
   end, vim.tbl_extend("force", opts, { desc = "Accept CURRENT (original) code" }))
 
-  -- Accept theirs (AI suggestion)
   vim.keymap.set("n", "ct", function()
     M.accept_theirs(bufnr)
   end, vim.tbl_extend("force", opts, { desc = "Accept INCOMING (AI suggestion) code" }))
 
-  -- Accept both
   vim.keymap.set("n", "cb", function()
     M.accept_both(bufnr)
   end, vim.tbl_extend("force", opts, { desc = "Accept BOTH versions" }))
 
-  -- Accept none
   vim.keymap.set("n", "cn", function()
     M.accept_none(bufnr)
   end, vim.tbl_extend("force", opts, { desc = "Delete conflict (accept NONE)" }))
 
-  -- Navigate to next conflict
   vim.keymap.set("n", "]x", function()
     M.goto_next(bufnr)
   end, vim.tbl_extend("force", opts, { desc = "Go to next conflict" }))
 
-  -- Navigate to previous conflict
   vim.keymap.set("n", "[x", function()
     M.goto_prev(bufnr)
   end, vim.tbl_extend("force", opts, { desc = "Go to previous conflict" }))
 
-  -- Show menu modal
   vim.keymap.set("n", "cm", function()
     M.show_floating_menu(bufnr)
   end, vim.tbl_extend("force", opts, { desc = "Show conflict resolution menu" }))
 
-  -- Also map <CR> to show menu when on conflict
   vim.keymap.set("n", "<CR>", function()
-    local cursor = vim.api.nvim_win_get_cursor(0)
-    if M.get_conflict_at_cursor(bufnr, cursor[1]) then
+    local cr_cursor = vim.api.nvim_win_get_cursor(0)
+    if M.get_conflict_at_cursor(bufnr, cr_cursor[1]) then
       M.show_floating_menu(bufnr)
     else
-      -- Default <CR> behavior
       vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, false, true), "n", false)
     end
   end, vim.tbl_extend("force", opts, { desc = "Show conflict menu or default action" }))
 
-  -- Mark buffer as having conflict keymaps
   conflict_buffers[bufnr] = {
     keymaps_set = true,
   }
@@ -878,12 +645,10 @@ function M.insert_conflict(bufnr, start_line, end_line, new_lines, label)
 
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 
-  -- Clamp to valid range
   local line_count = #lines
   start_line = math.max(1, math.min(start_line, line_count + 1))
   end_line = math.max(start_line, math.min(end_line, line_count))
 
-  -- Extract current lines
   local current_lines = {}
   for i = start_line, end_line do
     if lines[i] then
@@ -891,41 +656,25 @@ function M.insert_conflict(bufnr, start_line, end_line, new_lines, label)
     end
   end
 
-  -- Build conflict block
-  local conflict_block = {}
-  table.insert(conflict_block, MARKERS.current_start)
-  for _, line in ipairs(current_lines) do
-    table.insert(conflict_block, line)
-  end
-  table.insert(conflict_block, MARKERS.separator)
-  for _, line in ipairs(new_lines) do
-    table.insert(conflict_block, line)
-  end
-  table.insert(conflict_block, label and (">>>>>>> " .. label) or MARKERS.incoming_end)
-
-  -- Replace the range with conflict block
+  local conflict_block = resolve.build_conflict_block(current_lines, new_lines, MARKERS, label)
   vim.api.nvim_buf_set_lines(bufnr, start_line - 1, end_line, false, conflict_block)
 end
 
 --- Process buffer and auto-show menu for first conflict
---- Call this after inserting conflict(s) to set up highlights and show menu
 ---@param bufnr number Buffer number
 function M.process_and_show_menu(bufnr)
   if not vim.api.nvim_buf_is_valid(bufnr) then
     return
   end
 
-  -- Process to set up highlights and keymaps
   local conflict_count = M.process(bufnr)
 
-  -- Auto-show menu if enabled and conflicts exist
   if config.auto_show_menu and conflict_count > 0 then
     vim.schedule(function()
       if not vim.api.nvim_buf_is_valid(bufnr) then
         return
       end
 
-      -- Find window showing this buffer and focus it
       local win = nil
       for _, w in ipairs(vim.api.nvim_list_wins()) do
         if vim.api.nvim_win_get_buf(w) == bufnr then
@@ -936,12 +685,10 @@ function M.process_and_show_menu(bufnr)
 
       if win then
         vim.api.nvim_set_current_win(win)
-        -- Jump to first conflict
         local conflicts = M.detect_conflicts(bufnr)
         if #conflicts > 0 then
           vim.api.nvim_win_set_cursor(win, { conflicts[1].start_line, 0 })
           vim.cmd("normal! zz")
-          -- Show the menu
           M.show_floating_menu(bufnr)
         end
       end
@@ -957,28 +704,22 @@ function M.process(bufnr)
     return 0
   end
 
-  -- Setup highlights if not done
   setup_highlights()
 
-  -- Detect conflicts
   local conflicts = M.detect_conflicts(bufnr)
 
   if #conflicts > 0 then
-    -- Highlight conflicts
     M.highlight_conflicts(bufnr, conflicts)
 
-    -- Setup keymaps if not already done
     if not conflict_buffers[bufnr] then
       M.setup_keymaps(bufnr)
     end
 
-    -- Log
     pcall(function()
       local logs_info = require("codetyper.adapters.nvim.ui.logs.info")
       logs_info(string.format("Found %d conflict(s) - use co/ct/cb/cn to resolve, [x/]x to navigate", #conflicts))
     end)
   else
-    -- No conflicts - clean up
     vim.api.nvim_buf_clear_namespace(bufnr, NAMESPACE, 0, -1)
     vim.api.nvim_buf_clear_namespace(bufnr, HINT_NAMESPACE, 0, -1)
     M.remove_keymaps(bufnr)
@@ -1003,18 +744,15 @@ function M.count_conflicts(bufnr)
   return #conflicts
 end
 
---- Clear all conflicts from a buffer (remove markers but keep current code)
+--- Clear all conflicts from a buffer (remove markers but keep chosen code)
 ---@param bufnr number Buffer number
 ---@param keep "ours"|"theirs"|"both"|"none" Which version to keep
 function M.resolve_all(bufnr, keep)
   local conflicts = M.detect_conflicts(bufnr)
 
-  -- Process in reverse order to maintain line numbers
   for i = #conflicts, 1, -1 do
-    -- Move cursor to conflict
     vim.api.nvim_win_set_cursor(0, { conflicts[i].start_line, 0 })
 
-    -- Accept based on preference
     if keep == "ours" then
       M.accept_ours(bufnr)
     elseif keep == "theirs" then
@@ -1027,7 +765,7 @@ function M.resolve_all(bufnr, keep)
   end
 end
 
---- Add a buffer to conflict tracking (for auto-follow)
+--- Add a buffer to conflict tracking
 ---@param bufnr number Buffer number
 function M.add_tracked_buffer(bufnr)
   if not conflict_buffers[bufnr] then
@@ -1060,7 +798,6 @@ end
 function M.setup()
   setup_highlights()
 
-  -- Auto-clean up when buffers are deleted
   vim.api.nvim_create_autocmd("BufDelete", {
     group = vim.api.nvim_create_augroup("CoderConflict", { clear = true }),
     callback = function(ev)

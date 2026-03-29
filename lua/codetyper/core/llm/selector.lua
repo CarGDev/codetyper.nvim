@@ -41,7 +41,7 @@ local accuracy_cache = {
 --- Get the brain module safely
 ---@return table|nil
 local function get_brain()
-  local ok, brain = pcall(require, "codetyper.brain")
+  local ok, brain = pcall(require, "codetyper.core.memory")
   if ok and brain.is_initialized and brain.is_initialized() then
     return brain
   end

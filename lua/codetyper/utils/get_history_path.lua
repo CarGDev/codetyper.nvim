@@ -1,4 +1,5 @@
 local COST_HISTORY_FILE = require("codetyper.constants.defaults").COST_HISTORY_FILE
+local utils = require("codetyper.support.utils")
 
 --- Get path to cost history file
 ---@return string File path

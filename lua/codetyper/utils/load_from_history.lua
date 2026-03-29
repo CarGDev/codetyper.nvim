@@ -1,5 +1,9 @@
+local state = require("codetyper.state.state")
+local utils = require("codetyper.support.utils")
+local get_history_path = require("codetyper.utils.get_history_path")
+
 --- Load historical usage from disk
-function load_from_history()
+local function load_from_history()
   if state.loaded then
     return
   end

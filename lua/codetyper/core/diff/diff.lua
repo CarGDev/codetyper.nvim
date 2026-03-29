@@ -8,7 +8,11 @@ local M = {}
 ---@param diff_data table { path: string, original: string, modified: string, operation: string }
 ---@param callback fun(approved: boolean) Called with user decision
 function M.show_diff(diff_data, callback)
-  local original_lines = vim.split(diff_data.original, "\n", { plain = true })
+  if not diff_data or type(diff_data) ~= "table" or not diff_data.path or not callback then
+    return
+  end
+
+  local original_lines = vim.split(diff_data.original or "", "\n", { plain = true })
   local modified_lines
 
   -- For delete operations, show a clear message
@@ -21,7 +25,7 @@ function M.show_diff(diff_data, callback)
       "",
     }
   else
-    modified_lines = vim.split(diff_data.modified, "\n", { plain = true })
+    modified_lines = vim.split(diff_data.modified or "", "\n", { plain = true })
   end
 
   -- Calculate window dimensions

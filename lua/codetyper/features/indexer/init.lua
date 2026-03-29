@@ -274,7 +274,7 @@ end
 ---@param files string[] List of file paths
 ---@param root string Project root
 function M.sync_project_to_brain(index, files, root)
-  local ok_brain, brain = pcall(require, "codetyper.brain")
+  local ok_brain, brain = pcall(require, "codetyper.core.memory")
   if not ok_brain or not brain.is_initialized or not brain.is_initialized() then
     return
   end
@@ -411,7 +411,7 @@ end
 ---@param filepath string Full file path
 ---@param file_index FileIndex File analysis
 function M.sync_to_brain(filepath, file_index)
-  local ok_brain, brain = pcall(require, "codetyper.brain")
+  local ok_brain, brain = pcall(require, "codetyper.core.memory")
   if not ok_brain or not brain.is_initialized or not brain.is_initialized() then
     return
   end

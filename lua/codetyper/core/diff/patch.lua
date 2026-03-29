@@ -7,9 +7,10 @@
 
 local M = {}
 
-local inject = require("codetyper.inject.inject")
+local inject_mod = require("codetyper.inject.inject")
 local params = require("codetyper.params.agents.patch")
 local logger = require("codetyper.support.logger")
+local flog = require("codetyper.support.flog")
 
 --- Lazy load search_replace module
 local function get_search_replace_module()
@@ -18,7 +19,7 @@ end
 
 --- Lazy load conflict module
 local function get_conflict_module()
-  return require("codetyper.core.diff.conflict")
+  return require("codetyper.window.conflict")
 end
 
 --- Configuration for patch behavior
@@ -184,6 +185,19 @@ end
 ---@param strategy string|nil Injection strategy (overrides intent-based)
 ---@return PatchCandidate
 function M.create_from_event(event, generated_code, confidence, strategy)
+  flog.info("patch.create", string.format(
+    "event_id=%s target=%s intent=%s override=%s range=%s injection_range=%s code_type=%s code_len=%d",
+    event.id or "nil",
+    event.target_path or "nil",
+    event.intent and event.intent.action or "nil",
+    event.intent_override and event.intent_override.action or "nil",
+    event.range and (event.range.start_line .. "-" .. event.range.end_line) or "nil",
+    event.injection_range and (event.injection_range.start_line .. "-" .. event.injection_range.end_line) or "nil",
+    type(generated_code),
+    generated_code and #generated_code or 0
+  ))
+  flog.debug("patch.create", "code_preview: " .. (generated_code and generated_code:sub(1, 200):gsub("\n", "\\n") or "nil"))
+
   -- Source buffer is where the prompt tags are (could be coder file)
   local source_bufnr = event.bufnr
 
@@ -367,6 +381,8 @@ function M.create_from_event(event, generated_code, confidence, strategy)
     search_replace_blocks = use_search_replace and sr_blocks or nil,
     -- Extmarks for injection range (99-style: apply at current position after user edits)
     injection_marks = event.injection_marks,
+    -- Preserve intent_override so apply() can distinguish transform prompts from tag prompts
+    intent_override = event.intent_override,
   }
 end
 
@@ -471,6 +487,18 @@ end
 ---@return boolean success
 ---@return string|nil error
 function M.apply(patch)
+  flog.info(
+    "patch.apply",
+    string.format(
+      "id=%s strategy=%s range=%s target=%s code_type=%s code_len=%s",
+      patch.id,
+      tostring(patch.injection_strategy),
+      patch.injection_range and (patch.injection_range.start_line .. "-" .. patch.injection_range.end_line) or "nil",
+      tostring(patch.target_path),
+      type(patch.generated_code),
+      patch.generated_code and #patch.generated_code or 0
+    )
+  )
   logger.info(
     "patch",
     string.format(
@@ -488,20 +516,21 @@ function M.apply(patch)
   end
 
   -- Check staleness (skip when we have valid extmarks - 99-style: position tracked across edits)
-  local is_stale, stale_reason = true, nil
+  local has_valid_marks = false
   if patch.injection_marks and patch.injection_marks.start_mark and patch.injection_marks.end_mark then
     local marks_mod = require("codetyper.core.marks")
     if marks_mod.is_valid(patch.injection_marks.start_mark) and marks_mod.is_valid(patch.injection_marks.end_mark) then
-      is_stale = false
+      has_valid_marks = true
     end
   end
-  if is_stale then
-    is_stale, stale_reason = M.is_stale(patch)
-  end
-  if is_stale then
-    M.mark_stale(patch.id, stale_reason)
-    logger.warn("patch", string.format("Patch %s is stale: %s", patch.id, stale_reason or "unknown"))
-    return false, "patch_stale: " .. (stale_reason or "unknown")
+  -- When extmarks are valid, skip staleness — extmarks track the correct position across edits.
+  -- When extmarks are missing, log a warning but still attempt injection at the original range
+  -- rather than silently dropping the patch.
+  if not has_valid_marks then
+    local is_stale, stale_reason = M.is_stale(patch)
+    if is_stale then
+      logger.warn("patch", string.format("Patch %s: snapshot stale (%s), attempting injection anyway", patch.id, stale_reason or "unknown"))
+    end
   end
 
   -- Ensure target buffer is valid
@@ -519,7 +548,18 @@ function M.apply(patch)
 
   -- Prepare code to inject (may be overwritten when SEARCH/REPLACE fails and we use REPLACE parts only)
   local code_to_inject = patch.generated_code
-  local code_lines = vim.split(patch.generated_code, "\n", { plain = true })
+  if not code_to_inject or type(code_to_inject) ~= "string" then
+    flog.error("patch.apply", "generated_code is " .. type(code_to_inject) .. ", rejecting patch")
+    M.mark_rejected(patch.id, "invalid_code_type")
+    return false, "invalid_code_type"
+  end
+  local code_lines = vim.split(code_to_inject, "\n", { plain = true })
+  -- Ensure every element is a string (protect against E5101)
+  for i, line in ipairs(code_lines) do
+    if type(line) ~= "string" then
+      code_lines[i] = tostring(line)
+    end
+  end
 
   -- Replace in-buffer thinking placeholder with actual code (if we inserted one when worker started).
   -- Skip when patch uses SEARCH/REPLACE: that path needs the original buffer content and parses blocks itself.
@@ -729,14 +769,13 @@ function M.apply(patch)
 
       inject_opts.range = { start_line = start_line, end_line = end_line }
     elseif patch.injection_strategy == "insert" and patch.injection_range then
-      -- For inline prompts with "insert" strategy, replace the TAG RANGE
-      -- (the tag itself gets replaced with the new code)
-      if is_inline_prompt and patch.prompt_tag_range then
+      -- For inline tag prompts (/@...@/), replace the tag range with the code.
+      -- For transform prompts (no tags), keep insert strategy at cursor position.
+      if is_inline_prompt and patch.prompt_tag_range and not patch.intent_override then
         inject_opts.range = {
           start_line = patch.prompt_tag_range.start_line,
           end_line = patch.prompt_tag_range.end_line,
         }
-        -- Switch to replace strategy for the tag range
         inject_opts.strategy = "replace"
       else
         inject_opts.range = { start_line = patch.injection_range.start_line }
@@ -760,7 +799,7 @@ function M.apply(patch)
 
     -- Diagnostic: log inject_opts before calling inject (why injection might not run)
     local range_str = inject_opts.range
-        and string.format("%d-%d", inject_opts.range.start_line, inject_opts.range.end_line)
+        and string.format("%s-%s", tostring(inject_opts.range.start_line), tostring(inject_opts.range.end_line or ""))
       or "nil"
     logger.info(
       "patch",
@@ -783,7 +822,7 @@ function M.apply(patch)
     end
 
     -- Use smart injection - handles imports automatically
-    inject_result = inject(target_bufnr, code_to_inject, inject_opts)
+    inject_result = inject_mod.inject(target_bufnr, code_to_inject, inject_opts)
 
     -- Log injection details
     pcall(function()
@@ -808,6 +847,7 @@ function M.apply(patch)
   end)
 
   if not ok then
+    flog.error("patch.apply", string.format("inject pcall FAILED: %s", tostring(err)))
     logger.error("patch", string.format("inject failed: %s", tostring(err)))
     M.mark_rejected(patch.id, err)
     return false, err
@@ -1103,14 +1143,30 @@ end
 ---@return number stale_count
 ---@return number deferred_count
 function M.flush_pending_smart()
+  local has_pending = false
+  for _, p in ipairs(patches) do
+    if p.status == "pending" then
+      has_pending = true
+      break
+    end
+  end
+  if not has_pending then
+    return 0, 0, 0
+  end
+  flog.info("patch", ">>> flush_pending_smart ENTERED") -- TODO: remove after debugging
   local applied = 0
   local stale = 0
   local deferred = 0
 
   for _, p in ipairs(patches) do
     if p.status == "pending" then
+      flog.info("patch", string.format("flush trying: id=%s strategy=%s range=%s", -- TODO: remove after debugging
+        p.id, p.injection_strategy or "nil",
+        p.injection_range and (p.injection_range.start_line .. "-" .. p.injection_range.end_line) or "nil"
+      ))
       logger.info("patch", string.format("flush trying: id=%s", p.id))
       local success, err = M.smart_apply(p)
+      flog.info("patch", string.format("flush result: id=%s success=%s err=%s", p.id, tostring(success), tostring(err or "nil"))) -- TODO: remove after debugging
       if success then
         applied = applied + 1
         logger.info("patch", string.format("flush result: id=%s success", p.id))
@@ -1122,6 +1178,13 @@ function M.flush_pending_smart()
         logger.info("patch", string.format("flush result: id=%s stale (%s)", p.id, tostring(err)))
       end
     end
+  end
+
+  if applied > 0 then
+    vim.notify(string.format("Code injected (%d patch%s applied)", applied, applied > 1 and "es" or ""), vim.log.levels.INFO)
+  end
+  if stale > 0 then
+    vim.notify(string.format("%d patch%s failed to apply", stale, stale > 1 and "es" or ""), vim.log.levels.WARN)
   end
 
   return applied, stale, deferred

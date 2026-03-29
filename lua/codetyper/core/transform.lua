@@ -110,6 +110,8 @@ end
 --- When nothing is selected (e.g. from Normal mode), only the prompt is requested.
 function M.cmd_transform_selection()
   local logger = require("codetyper.support.logger")
+  local flog = require("codetyper.support.flog") -- TODO: remove after debugging
+  flog.info("transform", ">>> cmd_transform_selection ENTERED")
   logger.func_entry("commands", "cmd_transform_selection", {})
   -- Get visual selection (returns table with text, start_line, end_line or nil)
   local selection_data = get_visual_selection()
@@ -120,6 +122,11 @@ function M.cmd_transform_selection()
   local filepath = vim.fn.expand("%:p")
   local line_count = vim.api.nvim_buf_line_count(bufnr)
   line_count = math.max(1, line_count)
+
+  flog.info("transform", string.format( -- TODO: remove after debugging
+    "has_selection=%s sel_len=%d bufnr=%d file=%s",
+    tostring(has_selection), #selection_text, bufnr, filepath
+  ))
 
   -- Range for injection: selection, cursor line when no selection
   local start_line, end_line
@@ -195,6 +202,21 @@ function M.cmd_transform_selection()
   local sel_context = nil
   local is_whole_file = false
 
+  -- Resolve enclosing scope for cursor position (even without selection)
+  local cursor_scope = nil
+  if is_cursor_insert then
+    local scope_ok, cursor_resolved = pcall(scope_mod.resolve_scope, bufnr, start_line, 1)
+    flog.info("transform", string.format( -- TODO: remove after debugging
+      "resolve_scope: ok=%s type=%s name=%s",
+      tostring(scope_ok),
+      scope_ok and cursor_resolved and cursor_resolved.type or "nil",
+      scope_ok and cursor_resolved and cursor_resolved.name or "nil"
+    ))
+    if scope_ok and cursor_resolved and cursor_resolved.type ~= "file" then
+      cursor_scope = cursor_resolved
+    end
+  end
+
   if has_selection and selection_data then
     sel_context = scope_mod.resolve_selection_context(bufnr, start_line, end_line)
     is_whole_file = sel_context.type == "file"
@@ -212,13 +234,16 @@ function M.cmd_transform_selection()
   end
 
   local function submit_prompt()
+    flog.info("transform", ">>> submit_prompt ENTERED") -- TODO: remove after debugging
     if not prompt_buf or not vim.api.nvim_buf_is_valid(prompt_buf) then
+      flog.warn("transform", "prompt_buf invalid, aborting") -- TODO: remove after debugging
       close_prompt()
       return
     end
     submitted = true
     local lines_input = vim.api.nvim_buf_get_lines(prompt_buf, 0, -1, false)
     local input = table.concat(lines_input, "\n"):gsub("^%s+", ""):gsub("%s+$", "")
+    flog.info("transform", "user_input: " .. input:sub(1, 200)) -- TODO: remove after debugging
     close_prompt()
     if input == "" then
       logger.info("commands", "User cancelled prompt input")
@@ -317,6 +342,23 @@ function M.cmd_transform_selection()
       else
         content = input .. "\n\nCode to replace (replace this code):\n" .. selection_text
       end
+    elseif is_cursor_insert and cursor_scope then
+      -- Cursor is inside a function — include function context so the LLM
+      -- knows where the code will be inserted and can match style/variables.
+      local ft = vim.bo[bufnr].filetype or "text"
+      content = string.format(
+        '%s\n\nYou are inside %s "%s" (lines %d-%d). Insert code at line %d.\n\n'
+          .. "Enclosing function:\n```%s\n%s\n```\n\n"
+          .. "Output ONLY the new code to insert. Do NOT repeat the existing function.",
+        input,
+        cursor_scope.type,
+        cursor_scope.name or "anonymous",
+        cursor_scope.range.start_row,
+        cursor_scope.range.end_row,
+        start_line,
+        ft,
+        cursor_scope.text
+      )
     elseif is_cursor_insert then
       content = "Insert at line " .. start_line .. ":\n" .. input
     else
@@ -334,6 +376,17 @@ function M.cmd_transform_selection()
       intent_override = doc_intent_override,
       is_whole_file = is_whole_file,
     }
+
+    local flog = require("codetyper.support.flog")
+    flog.info("transform", string.format(
+      "submit: bufnr=%d file=%s range=%d-%d intent_override=%s is_whole_file=%s has_selection=%s",
+      bufnr, filepath,
+      doc_injection_range.start_line, doc_injection_range.end_line,
+      doc_intent_override and doc_intent_override.action or "nil",
+      tostring(is_whole_file), tostring(has_selection)
+    ))
+    flog.debug("transform", "prompt_content: " .. content:sub(1, 300):gsub("\n", "\\n"))
+
     local process_single_prompt = require("codetyper.adapters.nvim.autocmds.process_single_prompt")
     process_single_prompt(bufnr, prompt, filepath, true)
   end
