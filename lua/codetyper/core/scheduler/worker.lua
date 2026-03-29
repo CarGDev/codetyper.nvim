@@ -442,293 +442,34 @@ local function build_marked_file_content(lines, start_line, end_line, prompt_con
   return table.concat(result, "\n")
 end
 
---- Build prompt for code generation
+--- Build prompt using the tier system
 ---@param event table PromptEvent
+---@param model string|nil Model name for tier selection
 ---@return string prompt
 ---@return table context
-local function build_prompt(event)
-  local intent_mod = require("codetyper.core.intent")
+local function build_prompt(event, model)
   local eid = event and event.id
-
-  notify_stage(eid, "Reading file...")
-
-  local target_content = ""
-  local target_lines = {}
-  if event.target_path then
-    local ok, lines = pcall(function()
-      return vim.fn.readfile(event.target_path)
-    end)
-    if ok and lines then
-      target_lines = lines
-      target_content = table.concat(lines, "\n")
-    end
-  end
-
-  local filetype = vim.fn.fnamemodify(event.target_path or "", ":e")
-
-  notify_stage(eid, "Searching index...")
-
-  local indexed_context = nil
-  local indexed_content = ""
-  pcall(function()
-    local indexer = require("codetyper.features.indexer")
-    indexed_context = indexer.get_context_for({
-      file = event.target_path,
-      intent = event.intent,
-      prompt = event.prompt_content,
-      scope = event.scope_text,
-    })
-    indexed_content = format_indexed_context(indexed_context)
-  end)
-
-  local attached_content = format_attached_files(event.attached_files)
+  local gather_context = require("codetyper.core.llm.shared.build_context")
+  local tier_router = require("codetyper.prompts.tiers")
 
   notify_stage(eid, "Gathering context...")
-
-  local coder_context = get_coder_context(event.target_path)
-
-  notify_stage(eid, "Recalling patterns...")
-
-  local brain_context = ""
-  pcall(function()
-    local brain = require("codetyper.core.memory")
-    if brain.is_initialized() then
-      local query_text = event.prompt_content or ""
-      if event.scope and event.scope.name then
-        query_text = event.scope.name .. " " .. query_text
-      end
-
-      local result = brain.query({
-        query = query_text,
-        file = event.target_path,
-        max_results = 5,
-        types = { "pattern", "correction", "convention" },
-      })
-
-      if result and result.nodes and #result.nodes > 0 then
-        local memories = { "\n\n--- Learned Patterns & Conventions ---" }
-        for _, node in ipairs(result.nodes) do
-          if node.c then
-            local summary = node.c.s or ""
-            local detail = node.c.d or ""
-            if summary ~= "" then
-              table.insert(memories, "• " .. summary)
-              if detail ~= "" and #detail < 200 then
-                table.insert(memories, "  " .. detail)
-              end
-            end
-          end
-        end
-        if #memories > 1 then
-          brain_context = table.concat(memories, "\n")
-        end
-      end
-    end
-  end)
+  local ctx = gather_context(event)
 
   notify_stage(eid, "Building prompt...")
+  local user_prompt, system_prompt = tier_router.build_prompt(model or "copilot", event, ctx)
 
-  -- Include project tree context for whole-file selections
-  local project_context = ""
-  if event.is_whole_file and event.project_context then
-    project_context = "\n\n--- Project Structure ---\n" .. event.project_context
-  end
-
-  -- Combine all context sources: brain memories first, then coder context, attached files, indexed, project
-  local extra_context = brain_context .. coder_context .. attached_content .. indexed_content .. project_context
-
-  -- Build context with scope information
   local context = {
     target_path = event.target_path,
-    target_content = target_content,
-    filetype = filetype,
+    target_content = ctx.target_content,
+    filetype = ctx.filetype,
     scope = event.scope,
     scope_text = event.scope_text,
     scope_range = event.scope_range,
     intent = event.intent,
     attached_files = event.attached_files,
-    indexed_context = indexed_context,
+    system_prompt = system_prompt,
+    formatted_prompt = user_prompt,
   }
-
-  -- Build the actual prompt based on intent and scope
-  local system_prompt = ""
-  local user_prompt = event.prompt_content
-
-  if event.intent then
-    system_prompt = intent_mod.get_prompt_modifier(event.intent)
-  end
-
-  -- Ask the LLM to show its thinking (so we can display it in the buffer)
-  system_prompt = system_prompt
-    .. [[
-
-OUTPUT FORMAT - Show your reasoning first:
-1. Start with exactly this line: @thinking
-2. Then write your reasoning (what you will do and why) on the following lines.
-3. End the reasoning block with exactly this line: end thinking
-4. Then output the code on the following lines.
-
-Example:
-@thinking
-I will add a validation check because the user asked for it. I'll place it at the start of the function.
-end thinking
-<your code here>
-]]
-
-  -- SPECIAL HANDLING: Inline prompts with /@ ... @/ tags
-  -- Output only the code that replaces the tagged region (no SEARCH/REPLACE markers)
-  if is_inline_prompt(event) and event.range and event.range.start_line then
-    local start_line = event.range.start_line
-    local end_line = event.range.end_line or start_line
-
-    -- Full file content for context
-    local file_content = table.concat(target_lines, "\n"):sub(1, 12000)
-
-    user_prompt = string.format(
-      [[You are editing a %s file: %s
-
-TASK: %s
-%s
-FULL FILE:
-```%s
-%s
-```
-
-The user has selected lines %d-%d. Your output will REPLACE those lines exactly.
-Output ONLY the new code for that region (no markers, no explanations, no code fences). Your response replaces the selection. Preserve indentation.]],
-      filetype,
-      vim.fn.fnamemodify(event.target_path or "", ":t"),
-      event.prompt_content,
-      extra_context,
-      filetype,
-      file_content,
-      start_line,
-      end_line
-    )
-
-    context.system_prompt = system_prompt
-    context.formatted_prompt = user_prompt
-    context.is_inline_prompt = true
-
-    return user_prompt, context
-  end
-
-  -- If we have a scope (function/method), include it in the prompt
-  if event.scope_text and event.scope and event.scope.type ~= "file" then
-    local scope_type = event.scope.type
-    local scope_name = event.scope.name or "anonymous"
-
-    -- Special handling for "complete" intent - fill in the function body
-    if event.intent and event.intent.type == "complete" then
-      user_prompt = string.format(
-        [[Complete this %s. Fill in the implementation based on the description.
-
-IMPORTANT:
-- Keep the EXACT same function signature (name, parameters, return type)
-- Only provide the COMPLETE function with implementation
-- Do NOT create a new function or duplicate the signature
-- Do NOT add any text before or after the function
-
-Current %s (incomplete):
-```%s
-%s
-```
-%s
-What it should do: %s
-
-Return ONLY the complete %s with implementation. No explanations, no duplicates.]],
-        scope_type,
-        scope_type,
-        filetype,
-        event.scope_text,
-        extra_context,
-        event.prompt_content,
-        scope_type
-      )
-      -- Remind the LLM not to repeat the original file content; ask for only the new/updated code or a unified diff
-      user_prompt = user_prompt
-        .. [[
-
-IMPORTANT: Do NOT repeat the existing code provided above. Return ONLY the new or modified code (the updated function body). If you modify the file, prefer outputting a unified diff patch using standard diff headers (--- a/<file> / +++ b/<file> and @@ hunks). No explanations, no markdown, no code fences.
-]]
-    -- For other replacement intents, provide the full scope to transform
-    elseif event.intent and intent_mod.is_replacement(event.intent) then
-      user_prompt = string.format(
-        [[Here is a %s named "%s" in a %s file:
-
-```%s
-%s
-```
-%s
-User request: %s
-
-Return the complete transformed %s. Output only code, no explanations.]],
-        scope_type,
-        scope_name,
-        filetype,
-        filetype,
-        event.scope_text,
-        extra_context,
-        event.prompt_content,
-        scope_type
-      )
-    else
-      -- For insertion intents, provide context
-      user_prompt = string.format(
-        [[Context - this code is inside a %s named "%s":
-
-```%s
-%s
-```
-%s
-User request: %s
-
-Output only the code to insert, no explanations.]],
-        scope_type,
-        scope_name,
-        filetype,
-        event.scope_text,
-        extra_context,
-        event.prompt_content
-      )
-
-      -- Remind the LLM not to repeat the full file content; ask for only the new/modified code or unified diff
-      user_prompt = user_prompt
-        .. [[
-
-IMPORTANT: Do NOT repeat the full file content shown above. Return ONLY the new or modified code required to satisfy the request. If you modify the file, prefer outputting a unified diff patch using standard diff headers (--- a/<file> / +++ b/<file> and @@ hunks). No explanations, no markdown, no code fences.
-]]
-
-      -- Remind the LLM not to repeat the original file content; ask for only the inserted code or a unified diff
-      user_prompt = user_prompt
-        .. [[
-
-IMPORTANT: Do NOT repeat the surrounding code provided above. Return ONLY the code to insert (the new snippet). If you modify multiple parts of the file, prefer outputting a unified diff patch using standard diff headers (--- a/<file> / +++ b/<file> and @@ hunks). No explanations, no markdown, no code fences.
-]]
-    end
-  else
-    -- No scope resolved, use full file context
-    user_prompt = string.format(
-      [[File: %s (%s)
-
-```%s
-%s
-```
-%s
-User request: %s
-
-Output only code, no explanations.]],
-      vim.fn.fnamemodify(event.target_path or "", ":t"),
-      filetype,
-      filetype,
-      target_content:sub(1, 4000), -- Limit context size
-      extra_context,
-      event.prompt_content
-    )
-  end
-
-  context.system_prompt = system_prompt
-  context.formatted_prompt = user_prompt
 
   return user_prompt, context
 end
@@ -780,8 +521,18 @@ function M.start(worker)
 
   notify_stage(eid, "Reading context...")
 
-  local prompt, context = build_prompt(worker.event)
-  flog.info("worker", string.format("prompt built: len=%d context_len=%d", #(prompt or ""), #(context or ""))) -- TODO: remove after debugging
+  -- Resolve model name for tier selection
+  local model_name = nil
+  pcall(function()
+    local credentials = require("codetyper.config.credentials")
+    model_name = credentials.get_model(worker.worker_type)
+  end)
+  if not model_name then
+    model_name = worker.worker_type or "copilot"
+  end
+
+  local prompt, context = build_prompt(worker.event, model_name)
+  flog.info("worker", string.format("prompt built: model=%s len=%d", model_name, #(prompt or ""))) -- TODO: remove after debugging
   flog.debug("worker", "prompt_preview: " .. (prompt and prompt:sub(1, 300):gsub("\n", "\\n") or "nil")) -- TODO: remove after debugging
 
   -- Check if smart selection is enabled (memory-based provider selection)

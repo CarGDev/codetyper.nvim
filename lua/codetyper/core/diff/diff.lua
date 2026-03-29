@@ -4,18 +4,55 @@
 
 local M = {}
 
+local api = vim.api
+local fn = vim.fn
+local fmt = string.format
+
+local function is_callable(v)
+  return type(v) == "function"
+end
+
+local function safe_win_valid(win)
+  return type(win) == "number" and pcall(api.nvim_win_get_config, win)
+end
+
+local function create_scratch_buf(lines)
+  local buf = api.nvim_create_buf(false, true)
+  api.nvim_buf_set_lines(buf, 0, -1, false, lines or {})
+  vim.bo[buf].modifiable = false
+  vim.bo[buf].bufhidden = "wipe"
+  return buf
+end
+
+local function open_centered_win(buf, opts)
+  local cols = vim.o.columns
+  local lines = vim.o.lines
+  local width = opts.width
+  local height = opts.height
+  local row = math.floor((lines - height) / 2)
+  local col = math.floor((cols - width) / 2)
+  local win_opts = vim.tbl_extend("force", {
+    relative = "editor",
+    row = row,
+    col = col,
+    style = "minimal",
+    border = "rounded",
+    title_pos = "center",
+  }, opts)
+  return api.nvim_open_win(buf, opts.focus and true or false, win_opts)
+end
+
 --- Show a diff preview for file changes
----@param diff_data table { path: string, original: string, modified: string, operation: string }
+---@param diff_data table { path: string, original: string, modified: string, operation: string, reason: string|nil }
 ---@param callback fun(approved: boolean) Called with user decision
 function M.show_diff(diff_data, callback)
-  if not diff_data or type(diff_data) ~= "table" or not diff_data.path or not callback then
+  if type(diff_data) ~= "table" or not diff_data.path or not is_callable(callback) then
     return
   end
 
   local original_lines = vim.split(diff_data.original or "", "\n", { plain = true })
   local modified_lines
 
-  -- For delete operations, show a clear message
   if diff_data.operation == "delete" then
     modified_lines = {
       "",
@@ -28,152 +65,139 @@ function M.show_diff(diff_data, callback)
     modified_lines = vim.split(diff_data.modified or "", "\n", { plain = true })
   end
 
-  -- Calculate window dimensions
-  local width = math.floor(vim.o.columns * 0.8)
-  local height = math.floor(vim.o.lines * 0.7)
-  local row = math.floor((vim.o.lines - height) / 2)
-  local col = math.floor((vim.o.columns - width) / 2)
+  -- Window dimensions
+  local win_width = math.floor(vim.o.columns * 0.8)
+  local win_height = math.floor(vim.o.lines * 0.7)
+  local half_width = math.floor((win_width - 1) / 2)
+  local content_height = math.max(3, win_height - 2)
 
-  -- Create left buffer (original)
-  local left_buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_lines(left_buf, 0, -1, false, original_lines)
-  vim.bo[left_buf].modifiable = false
-  vim.bo[left_buf].bufhidden = "wipe"
+  -- Buffers
+  local left_buf = create_scratch_buf(original_lines)
+  local right_buf = create_scratch_buf(modified_lines)
 
-  -- Create right buffer (modified)
-  local right_buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_lines(right_buf, 0, -1, false, modified_lines)
-  vim.bo[right_buf].modifiable = false
-  vim.bo[right_buf].bufhidden = "wipe"
-
-  -- Set filetype for syntax highlighting based on file extension
-  local ext = vim.fn.fnamemodify(diff_data.path, ":e")
+  -- Filetype detection
+  local ext = fn.fnamemodify(diff_data.path, ":e")
   if ext and ext ~= "" then
     vim.bo[left_buf].filetype = ext
     vim.bo[right_buf].filetype = ext
   end
 
-  -- Create left window (original)
-  local half_width = math.floor((width - 1) / 2)
-  local left_win = vim.api.nvim_open_win(left_buf, true, {
-    relative = "editor",
+  -- Windows
+  local left_win = open_centered_win(left_buf, {
+    focus = true,
     width = half_width,
-    height = height - 2,
-    row = row,
-    col = col,
-    style = "minimal",
-    border = "rounded",
+    height = content_height,
+    col = math.floor((vim.o.columns - win_width) / 2),
+    row = math.floor((vim.o.lines - win_height) / 2),
     title = " ORIGINAL ",
-    title_pos = "center",
   })
 
-  -- Create right window (modified)
-  local right_win = vim.api.nvim_open_win(right_buf, false, {
-    relative = "editor",
+  local right_win = open_centered_win(right_buf, {
+    focus = false,
     width = half_width,
-    height = height - 2,
-    row = row,
-    col = col + half_width + 1,
-    style = "minimal",
-    border = "rounded",
-    title = diff_data.operation == "delete" and " ⚠️ DELETE " or (" MODIFIED [" .. diff_data.operation .. "] "),
-    title_pos = "center",
+    height = content_height,
+    col = math.floor((vim.o.columns - win_width) / 2) + half_width + 1,
+    row = math.floor((vim.o.lines - win_height) / 2),
+    title = diff_data.operation == "delete" and " ⚠️ DELETE "
+      or fmt(" MODIFIED [%s] ", tostring(diff_data.operation or "modified")),
   })
 
-  -- Enable diff mode in both windows
-  vim.api.nvim_win_call(left_win, function()
-    vim.cmd("diffthis")
+  -- Enable diff mode safely
+  pcall(function()
+    api.nvim_win_call(left_win, function()
+      vim.cmd("diffthis")
+    end)
   end)
-  vim.api.nvim_win_call(right_win, function()
-    vim.cmd("diffthis")
+  pcall(function()
+    api.nvim_win_call(right_win, function()
+      vim.cmd("diffthis")
+    end)
   end)
 
-  -- Sync scrolling
-  vim.wo[left_win].scrollbind = true
-  vim.wo[right_win].scrollbind = true
-  vim.wo[left_win].cursorbind = true
-  vim.wo[right_win].cursorbind = true
+  -- Sync scrolling and cursors
+  if safe_win_valid(left_win) and safe_win_valid(right_win) then
+    vim.wo[left_win].scrollbind = true
+    vim.wo[right_win].scrollbind = true
+    vim.wo[left_win].cursorbind = true
+    vim.wo[right_win].cursorbind = true
+  end
 
-  -- Track if callback was already called
   local callback_called = false
+  local function cleanup_diff()
+    pcall(function()
+      if safe_win_valid(left_win) then
+        api.nvim_win_call(left_win, function()
+          vim.cmd("diffoff")
+        end)
+      end
+    end)
+    pcall(function()
+      if safe_win_valid(right_win) then
+        api.nvim_win_call(right_win, function()
+          vim.cmd("diffoff")
+        end)
+      end
+    end)
+    pcall(api.nvim_win_close, left_win, true)
+    pcall(api.nvim_win_close, right_win, true)
+  end
 
-  -- Close function
   local function close_and_respond(approved)
     if callback_called then
       return
     end
     callback_called = true
-
-    -- Disable diff mode
-    pcall(function()
-      vim.api.nvim_win_call(left_win, function()
-        vim.cmd("diffoff")
-      end)
-    end)
-    pcall(function()
-      vim.api.nvim_win_call(right_win, function()
-        vim.cmd("diffoff")
-      end)
-    end)
-
-    -- Close windows
-    pcall(vim.api.nvim_win_close, left_win, true)
-    pcall(vim.api.nvim_win_close, right_win, true)
-
-    -- Call callback
+    cleanup_diff()
     vim.schedule(function()
       callback(approved)
     end)
   end
 
-  -- Set up keymaps for both buffers
-  local keymap_opts = { noremap = true, silent = true, nowait = true }
-
+  -- Keymaps
+  local base_opts = { noremap = true, silent = true, nowait = true }
   for _, buf in ipairs({ left_buf, right_buf }) do
-    -- Approve
+    local opts = vim.tbl_extend("force", base_opts, { buffer = buf })
+
     vim.keymap.set("n", "y", function()
       close_and_respond(true)
-    end, vim.tbl_extend("force", keymap_opts, { buffer = buf }))
+    end, opts)
     vim.keymap.set("n", "<CR>", function()
       close_and_respond(true)
-    end, vim.tbl_extend("force", keymap_opts, { buffer = buf }))
+    end, opts)
 
-    -- Reject
     vim.keymap.set("n", "n", function()
       close_and_respond(false)
-    end, vim.tbl_extend("force", keymap_opts, { buffer = buf }))
+    end, opts)
     vim.keymap.set("n", "q", function()
       close_and_respond(false)
-    end, vim.tbl_extend("force", keymap_opts, { buffer = buf }))
+    end, opts)
     vim.keymap.set("n", "<Esc>", function()
       close_and_respond(false)
-    end, vim.tbl_extend("force", keymap_opts, { buffer = buf }))
+    end, opts)
 
-    -- Switch between windows
     vim.keymap.set("n", "<Tab>", function()
-      local current = vim.api.nvim_get_current_win()
-      if current == left_win then
-        vim.api.nvim_set_current_win(right_win)
-      else
-        vim.api.nvim_set_current_win(left_win)
+      local current = api.nvim_get_current_win()
+      if current == left_win and safe_win_valid(right_win) then
+        api.nvim_set_current_win(right_win)
+      elseif safe_win_valid(left_win) then
+        api.nvim_set_current_win(left_win)
       end
-    end, vim.tbl_extend("force", keymap_opts, { buffer = buf }))
+    end, opts)
   end
 
-  -- Show help message
-  local help_msg = require("codetyper.prompts.agents.diff").diff_help
-
-  -- Iterate to replace {path} variable
+  -- Help message (with path substitution)
+  local help_msg = require("codetyper.prompts.agents.diff").diff_help or {}
   local final_help = {}
   for _, item in ipairs(help_msg) do
-    if item[1] == "{path}" then
+    if type(item) == "table" and item[1] == "{path}" then
       table.insert(final_help, { diff_data.path, item[2] })
     else
       table.insert(final_help, item)
     end
   end
-
-  vim.api.nvim_echo(final_help, false, {})
+  if #final_help > 0 then
+    api.nvim_echo(final_help, false, {})
+  end
 end
 
 ---@alias BashApprovalResult {approved: boolean, permission_level: string|nil}
@@ -182,10 +206,13 @@ end
 ---@param command string The bash command to approve
 ---@param callback fun(result: BashApprovalResult) Called with user decision
 function M.show_bash_approval(command, callback)
-  local permissions = require("codetyper.features.agents.permissions")
+  if type(command) ~= "string" or not is_callable(callback) then
+    return
+  end
 
-  -- Check if command is auto-approved
+  local permissions = require("codetyper.features.agents.permissions")
   local perm_result = permissions.check_bash_permission(command)
+
   if perm_result.auto and perm_result.allowed then
     vim.schedule(function()
       callback({ approved = true, permission_level = "auto" })
@@ -193,9 +220,18 @@ function M.show_bash_approval(command, callback)
     return
   end
 
-  -- Create approval dialog with options
   local approval_prompts = require("codetyper.prompts.agents.diff").bash_approval
-  local lines = {
+  approval_prompts = approval_prompts
+    or {
+      title = "Approve command",
+      divider = "----------------",
+      command_label = "Command:",
+      warning_prefix = "Warning: ",
+      options = { "  [y] Allow once", "  [s] Allow this session", "  [a] Add to allow list", "  [n] Deny" },
+      cancel_hint = "Press q or <Esc> to cancel",
+    }
+
+  local buf_lines = {
     "",
     approval_prompts.title,
     approval_prompts.divider,
@@ -205,31 +241,26 @@ function M.show_bash_approval(command, callback)
     "",
   }
 
-  -- Add warning for dangerous commands
-  if not perm_result.allowed and perm_result.reason ~= "Requires approval" then
-    table.insert(lines, approval_prompts.warning_prefix .. perm_result.reason)
-    table.insert(lines, "")
+  if not perm_result.allowed and perm_result.reason and perm_result.reason ~= "Requires approval" then
+    table.insert(buf_lines, approval_prompts.warning_prefix .. perm_result.reason)
+    table.insert(buf_lines, "")
   end
 
-  table.insert(lines, approval_prompts.divider)
-  table.insert(lines, "")
-  for _, opt in ipairs(approval_prompts.options) do
-    table.insert(lines, opt)
+  table.insert(buf_lines, approval_prompts.divider)
+  table.insert(buf_lines, "")
+  for _, opt in ipairs(approval_prompts.options or {}) do
+    table.insert(buf_lines, opt)
   end
-  table.insert(lines, "")
-  table.insert(lines, approval_prompts.divider)
-  table.insert(lines, approval_prompts.cancel_hint)
-  table.insert(lines, "")
+  table.insert(buf_lines, "")
+  table.insert(buf_lines, approval_prompts.divider)
+  table.insert(buf_lines, approval_prompts.cancel_hint)
+  table.insert(buf_lines, "")
 
   local width = math.max(65, #command + 15)
-  local height = #lines
+  local buf = create_scratch_buf(buf_lines)
+  local height = #buf_lines
 
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  vim.bo[buf].modifiable = false
-  vim.bo[buf].bufhidden = "wipe"
-
-  local win = vim.api.nvim_open_win(buf, true, {
+  local win = api.nvim_open_win(buf, true, {
     relative = "editor",
     width = width,
     height = height,
@@ -241,40 +272,35 @@ function M.show_bash_approval(command, callback)
     title_pos = "center",
   })
 
-  -- Apply highlighting
-  vim.api.nvim_buf_add_highlight(buf, -1, "Title", 1, 0, -1)
-  vim.api.nvim_buf_add_highlight(buf, -1, "String", 5, 0, -1)
+  pcall(api.nvim_buf_add_highlight, buf, -1, "Title", 1, 0, -1)
+  pcall(api.nvim_buf_add_highlight, buf, -1, "String", 5, 0, -1)
 
-  -- Highlight options
-  for i, line in ipairs(lines) do
-    if line:match("^%s+%[y%]") then
-      vim.api.nvim_buf_add_highlight(buf, -1, "DiagnosticOk", i - 1, 0, -1)
-    elseif line:match("^%s+%[s%]") then
-      vim.api.nvim_buf_add_highlight(buf, -1, "DiagnosticInfo", i - 1, 0, -1)
-    elseif line:match("^%s+%[a%]") then
-      vim.api.nvim_buf_add_highlight(buf, -1, "DiagnosticHint", i - 1, 0, -1)
-    elseif line:match("^%s+%[n%]") then
-      vim.api.nvim_buf_add_highlight(buf, -1, "DiagnosticError", i - 1, 0, -1)
+  for i, line in ipairs(buf_lines) do
+    if line:match("^%s*%[y%]") then
+      api.nvim_buf_add_highlight(buf, -1, "DiagnosticOk", i - 1, 0, -1)
+    elseif line:match("^%s*%[s%]") then
+      api.nvim_buf_add_highlight(buf, -1, "DiagnosticInfo", i - 1, 0, -1)
+    elseif line:match("^%s*%[a%]") then
+      api.nvim_buf_add_highlight(buf, -1, "DiagnosticHint", i - 1, 0, -1)
+    elseif line:match("^%s*%[n%]") then
+      api.nvim_buf_add_highlight(buf, -1, "DiagnosticError", i - 1, 0, -1)
     elseif line:match("⚠️") then
-      vim.api.nvim_buf_add_highlight(buf, -1, "DiagnosticWarn", i - 1, 0, -1)
+      api.nvim_buf_add_highlight(buf, -1, "DiagnosticWarn", i - 1, 0, -1)
     end
   end
 
   local callback_called = false
-
   local function close_and_respond(approved, permission_level)
     if callback_called then
       return
     end
     callback_called = true
 
-    -- Grant permission if approved with session or list level
     if approved and permission_level then
       permissions.grant_permission(command, permission_level)
     end
 
-    pcall(vim.api.nvim_win_close, win, true)
-
+    pcall(api.nvim_win_close, win, true)
     vim.schedule(function()
       callback({ approved = approved, permission_level = permission_level })
     end)
@@ -282,34 +308,21 @@ function M.show_bash_approval(command, callback)
 
   local keymap_opts = { buffer = buf, noremap = true, silent = true, nowait = true }
 
-  -- Allow once
-  vim.keymap.set("n", "y", function()
-    close_and_respond(true, "allow")
-  end, keymap_opts)
-  vim.keymap.set("n", "<CR>", function()
-    close_and_respond(true, "allow")
-  end, keymap_opts)
+  local mappings = {
+    { "y", true, "allow" },
+    { "<CR>", true, "allow" },
+    { "s", true, "allow_session" },
+    { "a", true, "allow_list" },
+    { "n", false, nil },
+    { "q", false, nil },
+    { "<Esc>", false, nil },
+  }
 
-  -- Allow this session
-  vim.keymap.set("n", "s", function()
-    close_and_respond(true, "allow_session")
-  end, keymap_opts)
-
-  -- Add to allow list
-  vim.keymap.set("n", "a", function()
-    close_and_respond(true, "allow_list")
-  end, keymap_opts)
-
-  -- Reject
-  vim.keymap.set("n", "n", function()
-    close_and_respond(false, nil)
-  end, keymap_opts)
-  vim.keymap.set("n", "q", function()
-    close_and_respond(false, nil)
-  end, keymap_opts)
-  vim.keymap.set("n", "<Esc>", function()
-    close_and_respond(false, nil)
-  end, keymap_opts)
+  for _, m in ipairs(mappings) do
+    vim.keymap.set("n", m[1], function()
+      close_and_respond(m[2], m[3])
+    end, keymap_opts)
+  end
 end
 
 --- Show approval dialog for bash commands (simple version for backward compatibility)
@@ -317,7 +330,7 @@ end
 ---@param callback fun(approved: boolean) Called with user decision
 function M.show_bash_approval_simple(command, callback)
   M.show_bash_approval(command, function(result)
-    callback(result.approved)
+    callback(result and result.approved)
   end)
 end
 

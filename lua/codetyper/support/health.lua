@@ -41,7 +41,7 @@ function M.check()
       health.info("Ollama model: " .. config.llm.ollama.model)
 
       -- Try to check Ollama connectivity
-      local ollama = require("codetyper.core.llm.ollama")
+      local ollama = require("codetyper.core.llm.providers.ollama")
       ollama.health_check(function(is_ok, err)
         if is_ok then
           vim.schedule(function()

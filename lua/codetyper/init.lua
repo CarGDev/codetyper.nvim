@@ -67,6 +67,21 @@ function M.setup(opts)
     suggestion.setup(M.config.suggestion)
   end
 
+  -- Fetch available Copilot models in background (auto-detect tiers from capabilities)
+  if M.config.llm and M.config.llm.provider == "copilot" then
+    vim.defer_fn(function()
+      pcall(function()
+        local copilot_models = require("codetyper.core.llm.providers.copilot.models")
+        copilot_models.get(function(models)
+          if models then
+            local model_tiers = require("codetyper.constants.model_tiers")
+            model_tiers.update_from_api(models)
+          end
+        end)
+      end)
+    end, 2000) -- 2s delay to not block startup
+  end
+
   M._initialized = true
 end
 

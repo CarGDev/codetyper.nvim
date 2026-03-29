@@ -60,44 +60,32 @@ end
 ---@return table|nil { text: string, start_line: number, end_line: number }
 local function get_visual_selection()
   local mode = vim.api.nvim_get_mode().mode
-  -- Check if in visual mode
   local is_visual = mode == "v" or mode == "V" or mode == "\22"
-  if not is_visual then
-    return nil
+
+  -- Exit visual mode first so '< '> marks are set, then read the marks
+  if is_visual then
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "x", false)
   end
-  -- Get selection range BEFORE any mode changes
+
+  -- Read visual marks (set when leaving visual mode)
   local start_line = vim.fn.line("'<")
   local end_line = vim.fn.line("'>")
-  -- Check if marks are valid (might be 0 if not in visual mode)
+
+  -- Marks are 0 if never set (no prior visual selection)
   if start_line <= 0 or end_line <= 0 then
     return nil
   end
-  -- Third argument must be a Vim dictionary; empty Lua table can be treated as list
-  local opts = { type = mode }
-  -- Protect against invalid column numbers returned by getpos (can happen with virtual/long multibyte lines)
-  local ok, selection = pcall(function()
-    local s_pos = vim.fn.getpos("'<")
-    local e_pos = vim.fn.getpos("'>")
-    local bufnr = vim.api.nvim_get_current_buf()
-    -- clamp columns to the actual line length + 1 to avoid E964
-    local function clamp_pos(pos)
-      local lnum = pos[2]
-      local col = pos[3]
-      local line = (vim.api.nvim_buf_get_lines(bufnr, lnum - 1, lnum, false) or { "" })[1] or ""
-      local maxcol = #line + 1
-      pos[3] = math.max(1, math.min(col, maxcol))
-      return pos
-    end
-    s_pos = clamp_pos(s_pos)
-    e_pos = clamp_pos(e_pos)
-    return vim.fn.getregion(s_pos, e_pos, opts)
-  end)
-  if not ok then
-    -- Fallback: grab whole lines between start_line and end_line
-    local lines = vim.api.nvim_buf_get_lines(0, start_line - 1, end_line, false)
-    selection = lines
+
+  -- Only use marks if we were just in visual mode or marks look intentional
+  -- (avoid stale marks from a previous unrelated selection)
+  if not is_visual then
+    return nil
   end
-  local text = type(selection) == "table" and table.concat(selection, "\n") or tostring(selection or "")
+
+  local bufnr = vim.api.nvim_get_current_buf()
+  local lines = vim.api.nvim_buf_get_lines(bufnr, start_line - 1, end_line, false)
+  local text = table.concat(lines, "\n")
+
   return {
     text = text,
     start_line = start_line,
@@ -168,6 +156,18 @@ function M.cmd_transform_selection()
   vim.bo[prompt_buf].swapfile = false
   vim.api.nvim_buf_set_name(prompt_buf, "codetyper-prompt")
 
+  -- Pre-fill prompt buffer with selected code context so user sees what they're editing
+  local prefill_lines = {}
+  if has_selection then
+    table.insert(prefill_lines, "")
+    table.insert(prefill_lines, string.format("[selected code lines %d-%d]", start_line, end_line))
+    local sel_lines = vim.split(selection_text, "\n", { plain = true })
+    for _, sl in ipairs(sel_lines) do
+      table.insert(prefill_lines, sl)
+    end
+    table.insert(prefill_lines, "[/selected code]")
+  end
+
   local win_opts = create_centered_window()
   local prompt_win = vim.api.nvim_open_win(prompt_buf, true, {
     relative = "editor",
@@ -177,11 +177,19 @@ function M.cmd_transform_selection()
     height = win_opts.height,
     style = "minimal",
     border = win_opts.border,
-    title = has_selection and " Enter prompt for selection " or " Enter prompt ",
+    title = has_selection
+        and string.format(" Prompt for lines %d-%d ", start_line, end_line)
+      or " Enter prompt ",
     title_pos = "center",
   })
   vim.wo[prompt_win].wrap = true
   vim.api.nvim_set_current_win(prompt_win)
+
+  -- Set prefilled content (cursor starts at line 1 for the user to type their prompt)
+  if #prefill_lines > 0 then
+    vim.api.nvim_buf_set_lines(prompt_buf, 0, -1, false, prefill_lines)
+    vim.api.nvim_win_set_cursor(prompt_win, { 1, 0 })
+  end
 
   local function close_prompt()
     if prompt_win and vim.api.nvim_win_is_valid(prompt_win) then
@@ -242,7 +250,15 @@ function M.cmd_transform_selection()
     end
     submitted = true
     local lines_input = vim.api.nvim_buf_get_lines(prompt_buf, 0, -1, false)
-    local input = table.concat(lines_input, "\n"):gsub("^%s+", ""):gsub("%s+$", "")
+    -- Extract only the user's prompt (before the [selected code] block)
+    local user_lines = {}
+    for _, l in ipairs(lines_input) do
+      if l:match("^%[selected code") then
+        break
+      end
+      table.insert(user_lines, l)
+    end
+    local input = table.concat(user_lines, "\n"):gsub("^%s+", ""):gsub("%s+$", "")
     flog.info("transform", "user_input: " .. input:sub(1, 200)) -- TODO: remove after debugging
     close_prompt()
     if input == "" then
@@ -252,9 +268,70 @@ function M.cmd_transform_selection()
 
     local is_explain = is_explain_intent(input)
 
-    -- Explain intent requires a selection — notify and bail if none
-    if is_explain and not has_selection then
-      vim.notify("Nothing selected to explain — select code first", vim.log.levels.WARN)
+    -- Explain intent: show explanation in right-side panel (not injected into code)
+    if is_explain then
+      local ft = vim.bo[bufnr].filetype or "text"
+      local code_to_explain = ""
+      local context_block = ""
+
+      if has_selection then
+        code_to_explain = selection_text
+        if sel_context and sel_context.type == "partial_function" and #sel_context.scopes > 0 then
+          local scope = sel_context.scopes[1]
+          context_block = string.format(
+            '\n\nThis code is inside %s "%s":\n```%s\n%s\n```',
+            scope.type, scope.name or "anonymous", ft, scope.text
+          )
+        end
+      elseif cursor_scope then
+        -- No selection but cursor inside a function — explain the function
+        code_to_explain = cursor_scope.text or ""
+        context_block = string.format(
+          '\nThis is %s "%s" (lines %d-%d)',
+          cursor_scope.type, cursor_scope.name or "anonymous",
+          cursor_scope.range.start_row, cursor_scope.range.end_row
+        )
+      else
+        -- No selection, no scope — explain the whole file
+        code_to_explain = table.concat(
+          vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n"
+        ):sub(1, 8000)
+      end
+
+      local explain_prompt = string.format(
+        "%s\n\nExplain the following %s code in markdown format. "
+          .. "Include: what it does, how it works, parameters, return values, "
+          .. "usage examples if applicable, and any important details.%s"
+          .. "\n\n```%s\n%s\n```",
+        input, ft, context_block, ft, code_to_explain
+      )
+
+      flog.info("transform", "explain mode — sending to LLM") -- TODO: remove after debugging
+
+      -- Send directly to LLM and show in explain window (bypass injection pipeline)
+      local llm = require("codetyper.core.llm")
+      local explain_window = require("codetyper.window.explain")
+
+      explain_window.show("Thinking...", "Loading explanation...", ft)
+
+      llm.generate(explain_prompt, {
+        prompt_type = "ask",
+        file_path = filepath,
+        language = ft,
+      }, function(response, err)
+        vim.schedule(function()
+          if err then
+            explain_window.update("# Error\n\n" .. tostring(err))
+          elseif response then
+            local title = has_selection
+                and string.format("Explanation (lines %d-%d)", start_line, end_line)
+              or (cursor_scope and cursor_scope.name or filepath)
+            explain_window.update("# " .. title .. "\n\n" .. response)
+          else
+            explain_window.update("# No Response\n\nThe LLM returned an empty response.")
+          end
+        end)
+      end)
       return
     end
 
@@ -263,40 +340,7 @@ function M.cmd_transform_selection()
     local doc_intent_override = has_selection and { action = "replace" }
       or (is_cursor_insert and { action = "insert" } or nil)
 
-    if is_explain and has_selection and sel_context then
-      -- Build a prompt that asks the LLM to generate documentation comments only
-      local ft = vim.bo[bufnr].filetype or "text"
-      local context_block = ""
-      if sel_context.type == "partial_function" and #sel_context.scopes > 0 then
-        local scope = sel_context.scopes[1]
-        context_block =
-          string.format('\n\nEnclosing %s "%s":\n```%s\n%s\n```', scope.type, scope.name or "anonymous", ft, scope.text)
-      elseif sel_context.type == "multi_function" and #sel_context.scopes > 0 then
-        local parts = {}
-        for _, s in ipairs(sel_context.scopes) do
-          table.insert(parts, string.format('-- %s "%s":\n%s', s.type, s.name or "anonymous", s.text))
-        end
-        context_block = "\n\nRelated scopes:\n```" .. ft .. "\n" .. table.concat(parts, "\n\n") .. "\n```"
-      elseif sel_context.type == "indent_block" and #sel_context.scopes > 0 then
-        context_block = string.format("\n\nEnclosing block:\n```%s\n%s\n```", ft, sel_context.scopes[1].text)
-      end
-
-      content = string.format(
-        "%s\n\nGenerate documentation comments for the following %s code. "
-          .. "Output ONLY the comment block using the correct comment syntax for %s. "
-          .. "Do NOT include the code itself.%s\n\nCode to document:\n```%s\n%s\n```",
-        input,
-        ft,
-        ft,
-        context_block,
-        ft,
-        selection_text
-      )
-
-      -- Insert above the selection instead of replacing it
-      doc_injection_range = { start_line = start_line, end_line = start_line }
-      doc_intent_override = { action = "insert", type = "explain" }
-    elseif has_selection and sel_context then
+    if has_selection and sel_context then
       if sel_context.type == "partial_function" and #sel_context.scopes > 0 then
         local scope = sel_context.scopes[1]
         content = string.format(
