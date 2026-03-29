@@ -6,7 +6,6 @@ local utils = require("codetyper.support.utils")
 
 --- Patterns to add to .gitignore
 local IGNORE_PATTERNS = {
-  "*.codetyper/*",
   ".codetyper/",
 }
 
@@ -127,24 +126,23 @@ function M.ensure_ignored(auto_gitignore)
     return false -- Not a git project, skip
   end
 
-  if not auto_gitignore then
-    return true
-  end
-
-  if M.is_ignored() then
-    return true
-  end
-
-  -- Default to true if not specified
+  -- Default to config value if not explicitly passed
   if auto_gitignore == nil then
-    -- Try to get from config if available
     local ok, codetyper = pcall(require, "codetyper")
     if ok and codetyper.is_initialized and codetyper.is_initialized() then
       local config = codetyper.get_config()
       auto_gitignore = config and config.auto_gitignore
     else
-      auto_gitignore = true -- Default to true
+      auto_gitignore = true
     end
+  end
+
+  if auto_gitignore == false then
+    return true
+  end
+
+  if M.is_ignored() then
+    return true
   end
 
   -- Silently add to gitignore (no notifications unless there's an error)

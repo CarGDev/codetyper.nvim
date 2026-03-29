@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-03-29
+
+### Fixed
+
+- **Gitignore injection bug** — `ensure_ignored()` was never writing `.codetyper/` to `.gitignore` because `nil` argument was treated as `false`, causing the function to bail out before adding patterns. This leaked `.codetyper/` data in user projects.
+- Removed redundant `*.codetyper/*` pattern from ignore list (`.codetyper/` alone is sufficient)
+
 ## [1.1.0] - 2026-03-29
 
 ### Added
