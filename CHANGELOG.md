@@ -7,6 +7,133 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-03-29
+
+### Added
+
+- **Model-Tier Prompt System** — Three prompt strategies based on model capabilities
+  - `agent` tier (Claude, GPT-4o, o3): SEARCH/REPLACE blocks, FILE: operations, TOOL: calls, reasoning
+  - `chat` tier (GPT-4o-mini, Copilot default): strict output format, explicit line boundaries, guard rails
+  - `basic` tier (codellama, small Ollama): minimal fill-in-the-middle, no system prompt overhead
+  - Tier auto-detected from Copilot `/models` API (`tool_calls` capability) or hardcoded fallback
+  - `constants/model_tiers.lua` — tier lookup table
+  - `prompts/tiers/{init,agent,chat,basic}.lua` — tier-specific prompt builders
+
+- **Model Capabilities Registry** — `constants/model_caps.lua`
+  - Context sizes, tool support, vision, and Copilot request multipliers for 30+ models
+  - Prompt context limits auto-scaled per model (272K input → 870K char limit vs 64K → 204K)
+
+- **Copilot Models API** — `providers/copilot/models.lua`
+  - Fetches available models from `GET /models` endpoint at startup
+  - Caches to `.codetyper/models_cache.json` for offline use
+  - Auto-updates tier detection from live `tool_calls` capability
+
+- **Agent System** — Multi-file operations and tool execution
+  - `core/agent/parse_response.lua` — parses `FILE:CREATE`, `FILE:MODIFY`, `FILE:DELETE` markers
+  - `core/agent/executor.lua` — creates files (opens in vsplit), modifies via search/replace, deletes
+  - `core/agent/loop.lua` — multi-turn agent loop: LLM → tool calls → results → LLM → final code (max 5 iterations)
+  - `core/agent/mcp.lua` — bridge to mcphub.nvim for MCP tool listing and execution
+  - `core/agent/terminal.lua` — safe shell command execution with blocked patterns and timeout
+
+- **Explain Window** — `window/explain.lua`
+  - Right-side markdown panel for code explanations (not injected into buffer)
+  - Animated loading indicator (Thinking. → Thinking.. → Thinking...)
+  - Triggered by explain-intent prompts: "explain", "how this", "what does", "describe", etc.
+  - Three modes: selection explanation, cursor-in-function explanation, whole-file explanation
+
+- **Queue Window** — `window/queue.lua`
+  - Right-side panel showing pending/processing prompt events
+  - Keymaps: `q` close, `r` refresh, `a` toggle autotrigger, `p` process tags, `c` clear
+  - Auto-refreshes every 2 seconds
+  - `:Coder queue` to toggle
+
+- **Terminal Window** — `window/terminal.lua`
+  - Bottom split terminal panel (30% height)
+  - `<leader>ter` or `:Coder terminal` to toggle
+  - Reuses buffer across toggles
+
+- **Prompt Window Improvements**
+  - Visual selection now shown in prompt window as `[selected code lines X-Y]` block
+  - `@` in insert mode opens file picker to attach project files
+  - File picker excludes node_modules, .git, .codetyper, dist, build
+  - Prompt extraction strips `[selected code]` blocks before submission
+
+- **Brain & Learning Improvements**
+  - `core/agent/style_analyzer.lua` — extracts coding conventions from saved files (module pattern, import style, error handling, guards, documentation, indent, line length)
+  - `core/agent/architecture.lua` — reads tree.log and maps directories to purposes (handler/ → side-effect handlers, utils/ → pure functions, etc.)
+  - Architecture context included in every LLM prompt
+  - Targeted brain queries: file conventions, intent-specific patterns, scope context (instead of dumping everything)
+  - Better learning on successful injection: summary, detail, detected conventions, line count
+  - Filters out low-quality old patterns from prompt context
+
+- **Autotrigger Toggle** — `/@ @/` tag auto-processing control
+  - Default OFF — tags only process via `:CoderProcess` or queue window
+  - `:CoderAutotrigger` or `:Coder autotrigger` to toggle
+  - `:CoderProcess` or `:Coder process` for manual tag processing
+
+- **Sequential Tag Processing** — `/@ @/` tags with multiple tags in one file
+  - Processes bottom-to-top to avoid line shifts
+  - Waits for each tag to complete before starting next
+  - Re-reads buffer between tags to get fresh line positions
+  - Strips other `/@ @/` tags from file content sent to LLM (prevents cross-contamination)
+
+### Changed
+
+- **Provider Architecture** — Split monolithic files into one-concern-per-file
+  - `core/llm/copilot.lua` (398 lines) → `providers/copilot/{auth,request,response,init}.lua`
+  - `core/llm/ollama.lua` (197 lines) → `providers/ollama/{config,request,response,init}.lua`
+  - `core/llm/selector.lua` (502 lines) → `selector/{select,ponder,accuracy,init}.lua`
+  - `core/llm/shared/{http,extract_code,build_system_prompt,build_context}.lua` — shared modules
+  - Old monolithic files deleted
+
+- **Worker Prompt Building** — Replaced 290-line monolithic `build_prompt()` with tier router
+  - Context gathering extracted to `shared/build_context.lua`
+  - Prompt formatting delegated to `prompts/tiers/{agent,chat,basic}.lua`
+
+- **Cost Module** — Fully refactored to pure-function architecture
+  - `core/cost/{calc,aggregate,format,view,stats,session}.lua` — pure functions
+  - `window/cost.lua` — UI separated from logic
+  - `handler/{record_usage,save_timer}.lua` — side-effect handlers
+  - Old `core/cost/init.lua` facade deleted; consumers import directly
+
+- **Diff/Conflict Module** — Refactored
+  - `core/diff/detect.lua` — pure conflict parser (no vim deps)
+  - `core/diff/resolve.lua` — pure resolution logic (extract_ours/theirs/both, build_conflict_block)
+  - `window/conflict.lua` — all UI (highlights, keymaps, menus)
+  - `handler/validate_after_accept.lua` — linter validation
+  - Old `core/diff/conflict.lua` deleted; `patch.lua` imports `window/conflict` directly
+
+- **Scope Resolution** — Fixed treesitter integration
+  - `get_node_at_pos` now uses passed row/col (not cursor position)
+  - `get_scope_name` handles Lua `function M.foo()` (dot_index_expression), method_index_expression, member_expression, and parent assignment patterns
+
+- **Brain Module Path** — Fixed `require("codetyper.brain")` → `require("codetyper.core.memory")` in 8 files
+
+- **Autocmd State** — Fixed stale boolean copies from constants; now uses `constants.is_processing` etc.
+
+- **Apply Delay** — Reduced from 5000ms to 500ms for faster injection
+
+- **Explain Intent** — No longer injects code; opens explain window instead
+  - Expanded detection patterns: "how this", "being used", "describe", "overview", "where is", etc.
+
+### Fixed
+
+- **Critical: `inject()` call** — `patch.lua` was calling module table as function (`inject(...)` instead of `inject_mod.inject(...)`) — every injection silently failed
+- **E5101 "Cannot convert given Lua type"** — Added type guards in inject.lua and patch.lua
+- **Insert strategy flipping to replace** — `patch.apply()` no longer switches insert→replace for transform prompts
+- **Staleness rejecting all patches** — Staleness check is now warning-only; extmarks track correct position
+- **`string.format` crash** — Fixed `%.100s` (invalid Lua format) and nil `end_line` in format calls
+- **Visual selection capture** — `get_visual_selection()` now exits visual mode first to set marks
+- **`save_timer.lua` missing requires** — Added `get_history_path`, `utils`, `state`
+- **`get_history_path.lua` missing requires** — Added `utils`
+- **`load_from_history.lua` missing requires** — Added `state`, `utils`, `get_history_path`
+- **`is_free_model.lua` missing requires** — Added `normalize_model`, `free_models`
+- **`find_prompts.lua` global function** — Changed to `local function`
+- **`context_modal/open.lua` global function** — Changed to `local function`
+- **`inject_add/document/generic/refactor.lua` undefined `utils`** — Added missing requires
+- **Flush spam** — `flush_pending_smart` no longer logs when no pending patches
+- **Tag prompt using agent path** — Tag-originated prompts now route through normal patch pipeline (correct line range)
+
 ## [1.0.4] - 2025-03-25
 
 ### Fixed
@@ -302,7 +429,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fixed** — Bug fixes
 - **Security** — Vulnerability fixes
 
-[Unreleased]: https://github.com/cargdev/codetyper.nvim/compare/v1.0.4...HEAD
+[Unreleased]: https://github.com/cargdev/codetyper.nvim/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/cargdev/codetyper.nvim/compare/v1.0.4...v1.1.0
 [1.0.4]: https://github.com/cargdev/codetyper.nvim/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/cargdev/codetyper.nvim/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/cargdev/codetyper.nvim/compare/v1.0.1...v1.0.2

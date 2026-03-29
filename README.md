@@ -8,17 +8,21 @@
 ## Features
 
 - **Inline Transform**: Select code, describe changes, and get instant modifications
+- **Explain Window**: Ask questions about code — answers shown in a right-side markdown panel
+- **Model-Tier Prompts**: Agent/chat/basic prompt strategies auto-selected per model capability
+- **Agent Mode**: Multi-file refactoring — create files, move functions, add imports automatically
+- **MCP Integration**: Connect to MCP servers (via mcphub.nvim) for extended tool access
 - **Smart Scope Resolution**: Tree-sitter + indentation analysis for context-aware generation
 - **Intent Detection**: Understands refactor, fix, add, explain, document, complete, and more
-- **Explain-to-Document**: Ask "explain this" and get documentation comments inserted above
-- **Real-Time Status**: Granular notifications — "Reading context...", "Sending to Copilot...", etc.
-- **LLM Providers**: GitHub Copilot and Ollama (local)
-- **SEARCH/REPLACE Blocks**: Reliable code editing with fuzzy matching
-- **Conflict Resolution**: Git-style diff visualization with interactive resolution
+- **Brain System**: Learns your coding style, project conventions, and architecture patterns
+- **Prompt Queue**: Sequential tag processing with a visual queue window
+- **LLM Providers**: GitHub Copilot and Ollama (local) — split into clean per-file modules
+- **`/@` `@/` Tags**: Inline prompt tags with manual/auto trigger control
+- **`@` File Picker**: Type `@` in prompt window to attach project files
 - **Event-Driven Scheduler**: Queue-based processing with confidence scoring
 - **Cost Tracking**: Persistent LLM cost estimation with session and all-time stats
+- **Terminal Window**: Integrated terminal panel (`<leader>ter`)
 - **Project Indexing**: Context-aware code generation with project-wide understanding
-- **Brain System**: Knowledge graph that learns from your coding patterns
 - **Git Integration**: Automatically adds generated files to `.gitignore`
 - **Project Tree Logging**: Maintains a `tree.log` tracking your project structure
 
@@ -140,7 +144,7 @@ require("codetyper").setup({
     escalation_threshold = 0.7,
     max_concurrent = 2,
     completion_delay_ms = 100,
-    apply_delay_ms = 5000,
+    apply_delay_ms = 500,
   },
 })
 ```
@@ -205,6 +209,10 @@ llm = {
 | `:Coder llm-reset-stats` | Reset LLM accuracy stats |
 | `:Coder cost` | Toggle cost window |
 | `:Coder cost-clear` | Clear cost session |
+| `:Coder terminal` | Toggle terminal panel |
+| `:Coder queue` | Toggle prompt queue window |
+| `:Coder autotrigger` | Toggle /@ @/ auto-processing |
+| `:Coder process` | Manually process /@ @/ tags |
 | `:Coder credentials` | Show credentials status |
 | `:Coder switch-provider` | Switch provider |
 | `:Coder model` | Quick switch Copilot model |
@@ -249,6 +257,7 @@ llm = {
 |-----|------|-------------|
 | `<leader>ctt` | Normal | Open prompt window at cursor |
 | `<leader>ctt` | Visual | Open prompt window for selection |
+| `<leader>ter` | Normal | Toggle terminal panel |
 
 ### Conflict Resolution Keymaps
 
@@ -313,9 +322,9 @@ The plugin classifies your prompt to decide how code should be applied:
 | document | document, comment, jsdoc, annotate | replace |
 | test | test, spec, unit test | append |
 | optimize | optimize, performance, faster | replace |
-| explain | explain, tell me, what does, question | insert |
+| explain | explain, how this, what does, describe, overview | explain window |
 
-**Explain intent** is special: it generates documentation comments and inserts them above the selected code rather than replacing it. If nothing is selected, a notification is shown.
+**Explain intent** opens a right-side markdown panel with the explanation — it does not inject code into the buffer. Works with selection, cursor-in-function, or whole file.
 
 ---
 
