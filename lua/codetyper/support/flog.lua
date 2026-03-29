@@ -1,13 +1,19 @@
---- TODO: remove after debugging — File-only logger for /tmp/codetyper.tmp.log
+--- File-only logger for /tmp/codetyper.tmp.log
 local LOG_PATH = "/tmp/codetyper.tmp.log"
+local MAX_SIZE_BYTES = 512 * 1024 -- 512KB
 
 ---@param level string
 ---@param module string
 ---@param message string
 local function write(level, module, message)
+  -- Check file size and rotate if too large
+  local stat = vim.loop.fs_stat(LOG_PATH)
+  if stat and stat.size > MAX_SIZE_BYTES then
+    os.remove(LOG_PATH)
+  end
+
   local f = io.open(LOG_PATH, "a")
   if not f then
-    -- fallback: try creating it
     f = io.open(LOG_PATH, "w")
   end
   if f then
