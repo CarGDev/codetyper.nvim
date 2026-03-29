@@ -7,10 +7,43 @@ local flog = require("codetyper.support.flog") -- TODO: remove after debugging
 local state = {
   buf = nil,
   win = nil,
+  loading_timer = nil,
+  loading_dots = 0,
 }
+
+--- Stop the loading animation
+local function stop_loading()
+  if state.loading_timer then
+    state.loading_timer:stop()
+    state.loading_timer = nil
+  end
+end
+
+--- Start the loading animation (. → .. → ... → .)
+local function start_loading()
+  stop_loading()
+  state.loading_dots = 0
+  state.loading_timer = vim.loop.new_timer()
+  state.loading_timer:start(0, 400, vim.schedule_wrap(function()
+    if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then
+      stop_loading()
+      return
+    end
+    state.loading_dots = (state.loading_dots % 3) + 1
+    local dots = string.rep(".", state.loading_dots)
+    vim.bo[state.buf].modifiable = true
+    vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, {
+      "# Thinking" .. dots,
+      "",
+      "Loading" .. dots,
+    })
+    vim.bo[state.buf].modifiable = false
+  end))
+end
 
 --- Close the explain window
 function M.close()
+  stop_loading()
   if state.win and vim.api.nvim_win_is_valid(state.win) then
     vim.api.nvim_win_close(state.win, true)
   end
@@ -35,10 +68,17 @@ function M.show(title, content, filetype)
   vim.bo[state.buf].swapfile = false
   vim.bo[state.buf].filetype = "markdown"
 
-  -- Set content
-  local lines = vim.split(content, "\n", { plain = true })
-  vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, lines)
-  vim.bo[state.buf].modifiable = false
+  -- Set initial content — start loading animation if content is a placeholder
+  local is_loading = content:match("^Loading") or content:match("^Thinking")
+  if is_loading then
+    vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, { "# Thinking.", "", "Loading." })
+    vim.bo[state.buf].modifiable = false
+    start_loading()
+  else
+    local lines = vim.split(content, "\n", { plain = true })
+    vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, lines)
+    vim.bo[state.buf].modifiable = false
+  end
 
   -- Open as right vertical split (40% width)
   local width = math.max(40, math.floor(vim.o.columns * 0.4))
@@ -80,6 +120,7 @@ end
 --- Update content of an open explain window
 ---@param content string New markdown content
 function M.update(content)
+  stop_loading()
   if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then
     return
   end
