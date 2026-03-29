@@ -48,6 +48,8 @@ local defaults = {
   },
 }
 
+M.COST_HISTORY_FILE = "/.codetyper/cost_history.json"
+
 --- Deep merge two tables
 ---@param t1 table Base table
 ---@param t2 table Table to merge into base

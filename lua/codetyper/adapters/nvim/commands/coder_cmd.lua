@@ -29,12 +29,12 @@ local function coder_cmd(args)
     ["llm-stats"] = cmd_llm_stats,
     ["llm-reset-stats"] = cmd_llm_reset_stats,
     ["cost"] = function()
-      local cost = require("codetyper.core.cost")
-      cost.toggle()
+      local cost_window = require("codetyper.window.cost")
+      cost_window.toggle()
     end,
     ["cost-clear"] = function()
-      local cost = require("codetyper.core.cost")
-      cost.clear()
+      local session = require("codetyper.core.cost.session")
+      session.clear()
     end,
     ["credentials"] = function()
       local credentials = require("codetyper.config.credentials")

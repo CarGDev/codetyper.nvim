@@ -58,8 +58,8 @@ local function setup()
   -- TODO: re-enable CoderBrain when brain management UI is reworked
 
   vim.api.nvim_create_user_command("CoderCost", function()
-    local cost = require("codetyper.core.cost")
-    cost.toggle()
+    local cost_window = require("codetyper.window.cost")
+    cost_window.toggle()
   end, { desc = "Show LLM cost estimation window" })
 
   -- TODO: re-enable CoderAddApiKey when multi-provider support returns

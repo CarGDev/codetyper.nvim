@@ -295,8 +295,8 @@ local function make_request(token, body, callback)
 
       -- Record usage for cost tracking
       if usage.prompt_tokens or usage.completion_tokens then
-        local cost = require("codetyper.core.cost")
-        cost.record_usage(
+        local record_usage = require("codetyper.handler.record_usage")
+        record_usage(
           get_model(),
           usage.prompt_tokens or 0,
           usage.completion_tokens or 0,
