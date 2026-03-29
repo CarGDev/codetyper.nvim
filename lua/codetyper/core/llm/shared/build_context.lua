@@ -118,41 +118,94 @@ local function gather(event)
     end
   end)
 
-  -- Brain memories
+  -- Brain memories — targeted queries based on what the LLM needs to know
   local brain_content = ""
   pcall(function()
     local brain = require("codetyper.core.memory")
-    if brain.is_initialized() then
-      local query_text = event.prompt_content or ""
-      if event.scope and event.scope.name then
-        query_text = event.scope.name .. " " .. query_text
+    if not brain.is_initialized() then
+      return
+    end
+
+    local memories = {}
+    local intent_type = event.intent and event.intent.type or ""
+    local filename = vim.fn.fnamemodify(event.target_path or "", ":t")
+
+    -- Query 1: File-specific conventions (how code is written in THIS file)
+    local file_result = brain.query({
+      query = filename,
+      file = event.target_path,
+      max_results = 2,
+      types = { "file_indexed", "pattern" },
+    })
+    if file_result and file_result.nodes then
+      for _, node in ipairs(file_result.nodes) do
+        if node.c then
+          local detail = node.c.d or ""
+          -- Only include style/convention info, not raw code
+          if detail:match("Style:") or detail:match("conventions:") or detail:match("functions:") then
+            table.insert(memories, "• " .. (node.c.s or filename) .. ": " .. detail:sub(1, 200))
+          end
+        end
       end
+    end
 
-      local result = brain.query({
-        query = query_text,
+    -- Query 2: Intent-specific patterns (how this type of edit was done before)
+    if intent_type ~= "" then
+      local intent_result = brain.query({
+        query = intent_type .. " " .. (event.scope and event.scope.name or ""),
         file = event.target_path,
-        max_results = 5,
-        types = { "pattern", "correction", "convention" },
+        max_results = 2,
+        types = { "code_completion", "correction" },
       })
-
-      if result and result.nodes and #result.nodes > 0 then
-        local memories = { "\n\n--- Learned Patterns & Conventions ---" }
-        for _, node in ipairs(result.nodes) do
+      if intent_result and intent_result.nodes then
+        for _, node in ipairs(intent_result.nodes) do
           if node.c then
             local summary = node.c.s or ""
             local detail = node.c.d or ""
-            if summary ~= "" then
+            -- Skip old generic patterns
+            if summary:match("^Code pattern:") then
+              goto skip
+            end
+            -- Only include if detail has useful info (conventions, strategy)
+            if detail:match("Conventions:") or detail:match("Strategy:") or detail:match("Prompt:") then
+              table.insert(memories, "• Previous " .. intent_type .. ": " .. detail:sub(1, 200))
+            elseif summary ~= "" and #summary < 100 then
               table.insert(memories, "• " .. summary)
-              if detail ~= "" and #detail < 200 then
-                table.insert(memories, "  " .. detail)
-              end
             end
           end
-        end
-        if #memories > 1 then
-          brain_content = table.concat(memories, "\n")
+          ::skip::
         end
       end
+    end
+
+    -- Query 3: Scope-specific (if inside a function, what patterns exist for it)
+    if event.scope and event.scope.name and event.scope.name ~= "" then
+      local scope_result = brain.query({
+        query = event.scope.name,
+        max_results = 1,
+        types = { "file_indexed" },
+      })
+      if scope_result and scope_result.nodes and #scope_result.nodes > 0 then
+        local node = scope_result.nodes[1]
+        if node.c and node.c.d and node.c.d:match("Style:") then
+          table.insert(memories, "• Scope context: " .. (node.c.d or ""):sub(1, 150))
+        end
+      end
+    end
+
+    if #memories > 0 then
+      -- Deduplicate
+      local seen = {}
+      local unique = {}
+      for _, m in ipairs(memories) do
+        if not seen[m] then
+          seen[m] = true
+          table.insert(unique, m)
+        end
+      end
+
+      brain_content = "\n\n--- Project Conventions (from memory) ---\n" .. table.concat(unique, "\n")
+      flog.info("build_context", string.format("brain: %d targeted memories", #unique)) -- TODO: remove after debugging
     end
   end)
 
@@ -162,8 +215,15 @@ local function gather(event)
     project_content = "\n\n--- Project Structure ---\n" .. event.project_context
   end
 
+  -- Architecture conventions (always include — helps LLM know where code goes)
+  local arch_content = ""
+  pcall(function()
+    local architecture = require("codetyper.core.agent.architecture")
+    arch_content = architecture.get_architecture_context()
+  end)
+
   -- Combined extra context string
-  local extra = brain_content .. coder_content .. attached_content .. indexed_content .. project_content
+  local extra = brain_content .. arch_content .. coder_content .. attached_content .. indexed_content .. project_content
 
   flog.info("build_context", string.format( -- TODO: remove after debugging
     "brain=%d coder=%d indexed=%d attached=%d project=%d total_extra=%d",

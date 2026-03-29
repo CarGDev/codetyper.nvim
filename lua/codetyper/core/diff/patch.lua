@@ -870,39 +870,83 @@ function M.apply(patch)
     })
   end)
 
-  -- Learn from successful code generation - this builds neural pathways
-  -- The more code is successfully applied, the better the brain becomes
+  -- Learn from successful code generation
   pcall(function()
     local brain = require("codetyper.core.memory")
-    if brain.is_initialized() then
-      -- Learn the successful pattern
-      local intent_type = patch.intent and patch.intent.type or "unknown"
-      local scope_type = patch.scope and patch.scope.type or "file"
-      local scope_name = patch.scope and patch.scope.name or ""
-
-      -- Create a meaningful summary for this learning
-      local summary = string.format(
-        "Generated %s: %s %s in %s",
-        intent_type,
-        scope_type,
-        scope_name ~= "" and scope_name or "",
-        vim.fn.fnamemodify(patch.target_path or "", ":t")
-      )
-
-      brain.learn({
-        type = "code_completion",
-        file = patch.target_path,
-        timestamp = os.time(),
-        data = {
-          intent = intent_type,
-          code = patch.generated_code:sub(1, 500), -- Store first 500 chars
-          language = vim.fn.fnamemodify(patch.target_path or "", ":e"),
-          function_name = scope_name,
-          prompt = patch.prompt_content,
-          confidence = patch.confidence or 0.5,
-        },
-      })
+    if not brain.is_initialized() then
+      return
     end
+
+    local intent_type = patch.intent and patch.intent.type or "unknown"
+    local scope_type = patch.scope and patch.scope.type or "file"
+    local scope_name = patch.scope and patch.scope.name or ""
+    local filename = vim.fn.fnamemodify(patch.target_path or "", ":t")
+    local lang = vim.fn.fnamemodify(patch.target_path or "", ":e")
+
+    -- Extract meaningful patterns from the generated code
+    local code = patch.generated_code or ""
+    local code_lines = vim.split(code, "\n", { plain = true })
+    local line_count = #code_lines
+
+    -- Detect conventions used in the generated code
+    local conventions = {}
+    if code:match("pcall%(") then
+      table.insert(conventions, "uses pcall for error safety")
+    end
+    if code:match("vim%.schedule%(") then
+      table.insert(conventions, "defers to vim.schedule for async safety")
+    end
+    if code:match("local function") then
+      table.insert(conventions, "prefers local functions")
+    end
+    if code:match("%-%-%-@") then
+      table.insert(conventions, "includes LuaDoc annotations")
+    end
+    if code:match("if not .+ then%s+return") then
+      table.insert(conventions, "uses early return guards")
+    end
+    if code:match("require%(") then
+      table.insert(conventions, "uses lazy require")
+    end
+
+    -- Build a useful summary (not just "Code pattern: fix")
+    local summary = string.format(
+      "%s %s%s in %s (%d lines, %s)",
+      intent_type,
+      scope_type ~= "file" and (scope_type .. " ") or "",
+      scope_name ~= "" and scope_name or filename,
+      filename, line_count, lang
+    )
+
+    -- Build a useful detail (what was asked + what conventions were applied)
+    local prompt_preview = (patch.prompt_content or ""):sub(1, 150):gsub("\n", " ")
+    local conv_text = #conventions > 0
+      and ("\nConventions: " .. table.concat(conventions, ", "))
+      or ""
+    local detail = string.format(
+      "Prompt: %s\nStrategy: %s, %d lines injected%s",
+      prompt_preview,
+      patch.injection_strategy or "unknown",
+      line_count,
+      conv_text
+    )
+
+    brain.learn({
+      type = "code_completion",
+      file = patch.target_path,
+      timestamp = os.time(),
+      data = {
+        intent = intent_type,
+        summary = summary,
+        detail = detail,
+        code = code:sub(1, 300),
+        language = lang,
+        function_name = scope_name,
+        conventions = conventions,
+        confidence = patch.confidence or 0.5,
+        line_count = line_count,
+      },
+    })
   end)
 
   return true, nil
