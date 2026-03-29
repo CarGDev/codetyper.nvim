@@ -1,8 +1,6 @@
 local check_for_closed_prompt = require("codetyper.adapters.nvim.autocmds.check_for_closed_prompt")
-local preferences = require("codetyper.config.preferences")
 
---- Check for closed prompt with preference check
---- If auto_process is enabled, process; otherwise do nothing (manual mode)
+--- Check for closed prompt and process it
 local function check_for_closed_prompt_with_preference()
   local find_prompts_in_buffer = require("codetyper.parser.find_prompts_in_buffer")
 
@@ -12,9 +10,7 @@ local function check_for_closed_prompt_with_preference()
     return
   end
 
-  if preferences.is_auto_process_enabled() then
-    check_for_closed_prompt()
-  end
+  check_for_closed_prompt()
 end
 
 return check_for_closed_prompt_with_preference

@@ -1,10 +1,8 @@
 local processed_prompts = require("codetyper.constants.constants").processed_prompts
 local get_prompt_key = require("codetyper.adapters.nvim.autocmds.get_prompt_key")
 local check_all_prompts = require("codetyper.adapters.nvim.autocmds.check_all_prompts")
-local preferences = require("codetyper.config.preferences")
 
---- Check all prompts with preference check
---- Only processes if there are unprocessed prompts and auto_process is enabled
+--- Check all prompts and process any unprocessed ones
 local function check_all_prompts_with_preference()
   local find_prompts_in_buffer = require("codetyper.parser.find_prompts_in_buffer")
 
@@ -27,9 +25,7 @@ local function check_all_prompts_with_preference()
     return
   end
 
-  if preferences.is_auto_process_enabled() then
-    check_all_prompts()
-  end
+  check_all_prompts()
 end
 
 return check_all_prompts_with_preference

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.4] - 2025-03-25
+
+### Fixed
+
+- Restored `ask_auto_process_preference` floating window UI in `preferences.lua` — was deleted during module refactoring
+- Restored full preference-asking flow in `check_for_closed_prompt_with_preference` and `check_all_prompts_with_preference` — the `auto_process` variable and nil-state asking logic were lost during extraction to individual files
+- Shared `asking_preference` flag now properly references `constants` table to maintain state across both wrapper modules
+
 ## [1.0.3] - 2025-03-25
 
 ### Fixed
@@ -294,7 +302,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fixed** — Bug fixes
 - **Security** — Vulnerability fixes
 
-[Unreleased]: https://github.com/cargdev/codetyper.nvim/compare/v1.0.3...HEAD
+[Unreleased]: https://github.com/cargdev/codetyper.nvim/compare/v1.0.4...HEAD
+[1.0.4]: https://github.com/cargdev/codetyper.nvim/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/cargdev/codetyper.nvim/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/cargdev/codetyper.nvim/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/cargdev/codetyper.nvim/compare/v1.0.0...v1.0.1

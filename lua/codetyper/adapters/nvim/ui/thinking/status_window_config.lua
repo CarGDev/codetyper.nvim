@@ -1,4 +1,4 @@
-local get_ui_dimensions = require("codetyper.utils.get_config")
+local get_ui_dimensions = require("codetyper.utils.get_config").get_ui_dimensions
 
 --- Build the floating window config for the top-right status indicator
 ---@return table

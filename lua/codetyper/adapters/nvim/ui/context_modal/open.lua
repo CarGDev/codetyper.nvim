@@ -4,13 +4,14 @@ local attach_requested_files = require("codetyper.adapters.nvim.ui.context_modal
 local run_project_inspect = require("codetyper.adapters.nvim.ui.context_modal.run_project_inspect")
 local run_suggested_command = require("codetyper.adapters.nvim.ui.context_modal.run_suggested_command")
 local run_all_suggested_commands = require("codetyper.adapters.nvim.ui.context_modal.run_all_suggested_commands")
+local close = require("codetyper.adapters.nvim.ui.context_modal.close")
 
 --- Open the context modal
 ---@param original_event table Original prompt event
 ---@param llm_response string LLM's response asking for context
 ---@param callback function(event: table, additional_context: string, attached_files?: table)
 ---@param suggested_commands table[]|nil Optional list of {label,cmd} suggested shell commands
-function M.open(original_event, llm_response, callback, suggested_commands)
+function open(original_event, llm_response, callback, suggested_commands)
   close()
 
   state.original_event = original_event
@@ -116,3 +117,5 @@ function M.open(original_event, llm_response, callback, suggested_commands)
     })
   end)
 end
+
+return open
