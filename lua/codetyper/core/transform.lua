@@ -156,8 +156,32 @@ function M.cmd_transform_selection()
   vim.bo[prompt_buf].swapfile = false
   vim.api.nvim_buf_set_name(prompt_buf, "codetyper-prompt")
 
-  -- Pre-fill prompt buffer with selected code context so user sees what they're editing
+  -- Notify about pending /@ @/ tags (don't auto-enqueue — avoids buffer state conflicts)
+  pcall(function()
+    local find_prompts_in_buffer = require("codetyper.parser.find_prompts_in_buffer")
+    local constants_mod = require("codetyper.constants.constants")
+    local get_prompt_key = require("codetyper.adapters.nvim.autocmds.get_prompt_key")
+    local found = find_prompts_in_buffer(bufnr)
+    local pending = 0
+    for _, p in ipairs(found) do
+      local key = get_prompt_key(bufnr, p)
+      if not constants_mod.processed_prompts[key] then
+        pending = pending + 1
+      end
+    end
+    if pending > 0 then
+      flog.info("transform", string.format("found %d pending /@ @/ tags (use :CoderProcess to run)", pending)) -- TODO: remove after debugging
+      vim.notify(
+        string.format("%d /@ @/ tag(s) in buffer — use :CoderProcess to run them", pending),
+        vim.log.levels.INFO
+      )
+    end
+  end)
+
+  -- Pre-fill prompt buffer with context
   local prefill_lines = {}
+
+  -- Show selected code context
   if has_selection then
     table.insert(prefill_lines, "")
     table.insert(prefill_lines, string.format("[selected code lines %d-%d]", start_line, end_line))
@@ -250,7 +274,7 @@ function M.cmd_transform_selection()
     end
     submitted = true
     local lines_input = vim.api.nvim_buf_get_lines(prompt_buf, 0, -1, false)
-    -- Extract only the user's prompt (before the [selected code] block)
+    -- Extract only the user's prompt (before the [selected code] or [pending] blocks)
     local user_lines = {}
     for _, l in ipairs(lines_input) do
       if l:match("^%[selected code") then
@@ -261,6 +285,7 @@ function M.cmd_transform_selection()
     local input = table.concat(user_lines, "\n"):gsub("^%s+", ""):gsub("%s+$", "")
     flog.info("transform", "user_input: " .. input:sub(1, 200)) -- TODO: remove after debugging
     close_prompt()
+
     if input == "" then
       logger.info("commands", "User cancelled prompt input")
       return

@@ -40,6 +40,23 @@ local function coder_cmd(args)
       local terminal = require("codetyper.window.terminal")
       terminal.toggle()
     end,
+    ["queue"] = function()
+      local queue_window = require("codetyper.window.queue")
+      queue_window.toggle()
+    end,
+    ["autotrigger"] = function()
+      local constants = require("codetyper.constants.constants")
+      constants.autotrigger = not constants.autotrigger
+      vim.notify(
+        "Coder autotrigger: " .. (constants.autotrigger and "ON (auto)" or "OFF (manual)"),
+        vim.log.levels.INFO
+      )
+    end,
+    ["process"] = function()
+      -- Manual trigger: process all /@ @/ tags in current buffer
+      local check_all = require("codetyper.adapters.nvim.autocmds.check_all_prompts")
+      check_all()
+    end,
     ["credentials"] = function()
       local credentials = require("codetyper.config.credentials")
       credentials.show_status()

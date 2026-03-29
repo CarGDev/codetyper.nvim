@@ -385,27 +385,31 @@ local function handle_worker_result(event, result)
   flog.debug("scheduler", "response_preview: " .. (result.response and result.response:sub(1, 300):gsub("\n", "\\n") or "nil")) -- TODO: remove after debugging
 
   -- Check if response contains agent-style operations (FILE: or TOOL: markers)
+  -- Only use agent executor for transform prompts (intent_override present).
+  -- Tag-originated prompts (no intent_override) go through normal patch pipeline
+  -- so the tag region gets replaced correctly.
   local agent_handled = false
+  local is_transform_prompt = event.intent_override ~= nil
   pcall(function()
     local parse_agent = require("codetyper.core.agent.parse_response")
     local utils = require("codetyper.support.utils")
     local root = utils.get_project_root()
 
     local ops, is_agent, tool_calls = parse_agent(result.response, root)
-    if is_agent then
-      flog.info("scheduler", string.format("agent response: %d file ops, %d tool calls", #ops, #tool_calls)) -- TODO: remove after debugging
+    if is_agent and (is_transform_prompt or #tool_calls > 0) then
+      flog.info("scheduler", string.format("agent response: %d file ops, %d tool calls, transform=%s", #ops, #tool_calls, tostring(is_transform_prompt))) -- TODO: remove after debugging
       require("codetyper.core.thinking_placeholder").clear_inline(event.id)
 
       if #tool_calls > 0 then
-        -- Has tool calls — start the agent loop (tool → result → LLM → repeat)
+        -- Has tool calls — start the agent loop
         local agent_loop = require("codetyper.core.agent.loop")
         agent_loop.start(event, result.response, "", function(final_ops, final_response)
           flog.info("scheduler", string.format("agent loop complete: %d final ops", #final_ops)) -- TODO: remove after debugging
 
-          -- If the final response has no FILE: ops but has code, route to normal patch flow
           if #final_ops == 0 and final_response and #final_response > 0 then
-            -- Strip any remaining TOOL: markers from final response
             local clean_final = final_response:gsub("TOOL:%w+[^\n]*\n?", "")
+            clean_final = clean_final:gsub("FILE:%w+[^\n]*\n", "")
+            clean_final = clean_final:gsub("<<<<<<< SEARCH.->>>>>>> REPLACE\n?", "")
             if #clean_final > 10 then
               flog.info("scheduler", "routing final response to patch flow") -- TODO: remove after debugging
               local p = patch.create_from_event(event, clean_final, result.confidence)
@@ -416,14 +420,36 @@ local function handle_worker_result(event, result)
             end
           end
         end)
-      else
-        -- Only FILE: ops, no tools — execute directly (no loop needed)
+      elseif is_transform_prompt then
+        -- Only FILE: ops from transform prompt — execute via agent
         local executor = require("codetyper.core.agent.executor")
         executor.execute(ops)
       end
 
       queue.complete(event.id)
       agent_handled = true
+
+    elseif is_agent and not is_transform_prompt then
+      -- Tag prompt got FILE: markers — strip them and extract just the code
+      -- so the normal patch pipeline replaces the tag region correctly
+      flog.info("scheduler", "tag prompt got FILE: response, stripping markers for patch flow") -- TODO: remove after debugging
+      local clean = result.response
+      clean = clean:gsub("@thinking.-end thinking\n?", "")
+
+      -- Extract code from FILE:MODIFY REPLACE block
+      local replace_code = clean:match("=======\n(.-)\n>>>>>>> REPLACE")
+      -- Or from FILE:CREATE content
+      if not replace_code then
+        replace_code = clean:match("FILE:CREATE[^\n]*\n```[^\n]*\n(.-)\n```")
+      end
+      if not replace_code then
+        replace_code = clean:match("FILE:CREATE[^\n]*\n(.-)\nFILE:")
+      end
+      if replace_code and #replace_code > 0 then
+        result.response = replace_code
+        flog.info("scheduler", "extracted code from agent markers: " .. #replace_code .. " chars") -- TODO: remove after debugging
+      end
+      -- Fall through to normal patch flow below
     end
   end)
 

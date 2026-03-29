@@ -20,5 +20,6 @@ M.throb_icons = {
   { "⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷" },
 }
 M.save_timer = nil
+M.autotrigger = false -- /@ @/ tags auto-process on InsertLeave/CursorHold (off by default)
 
 return M

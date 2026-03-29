@@ -62,6 +62,20 @@ local function setup()
     cost_window.toggle()
   end, { desc = "Show LLM cost estimation window" })
 
+  vim.api.nvim_create_user_command("CoderAutotrigger", function()
+    local ct_constants = require("codetyper.constants.constants")
+    ct_constants.autotrigger = not ct_constants.autotrigger
+    vim.notify(
+      "Coder autotrigger: " .. (ct_constants.autotrigger and "ON (auto)" or "OFF (manual)"),
+      vim.log.levels.INFO
+    )
+  end, { desc = "Toggle /@ @/ auto-trigger (auto/manual)" })
+
+  vim.api.nvim_create_user_command("CoderProcess", function()
+    local check_all = require("codetyper.adapters.nvim.autocmds.check_all_prompts")
+    check_all()
+  end, { desc = "Manually process /@ @/ tags in current buffer" })
+
   -- TODO: re-enable CoderAddApiKey when multi-provider support returns
 
   vim.api.nvim_create_user_command("CoderCredentials", function()

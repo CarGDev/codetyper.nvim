@@ -110,14 +110,26 @@ local function build_user(event, ctx)
     ))
   end
 
-  -- Selection range
+  -- Selection/tag range
   if event.range then
+    local start_l = event.range.start_line
+    local end_l = event.range.end_line or start_l
     local action = event.intent and event.intent.action or "modify"
-    table.insert(parts, string.format(
-      "Selected lines %d-%d. Action: %s.",
-      event.range.start_line, event.range.end_line or event.range.start_line,
-      action
-    ))
+
+    -- Tag-originated prompt (no intent_override): the tag lines will be replaced
+    if not event.intent_override then
+      table.insert(parts, string.format(
+        "Lines %d-%d contain a /@ @/ prompt tag. Your output will REPLACE those exact lines.",
+        start_l, end_l
+      ))
+      table.insert(parts, "Output ONLY the code to insert at that location. Do NOT use FILE:MODIFY for this.")
+      table.insert(parts, "Do NOT output the /@ @/ tags themselves.")
+    else
+      table.insert(parts, string.format(
+        "Selected lines %d-%d. Action: %s.",
+        start_l, end_l, action
+      ))
+    end
   end
 
   table.insert(parts, "")

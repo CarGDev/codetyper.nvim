@@ -1,5 +1,49 @@
 local flog = require("codetyper.support.flog") -- TODO: remove after debugging
 
+--- Strip /@ @/ tag blocks from file lines, except the one at current_range
+---@param lines string[] File lines
+---@param current_range table|nil { start_line, end_line } Range to keep (1-based)
+---@return string[] cleaned lines with other tags replaced by a placeholder comment
+local function strip_other_tags(lines, current_range)
+  local result = {}
+  local in_tag = false
+  local tag_start = 0
+
+  for i, line in ipairs(lines) do
+    if line:match("^/?@") or line:match("^%s*/?@") then
+      -- Opening /@ tag
+      if not in_tag then
+        in_tag = true
+        tag_start = i
+      end
+    end
+
+    if in_tag then
+      -- Check if this is the current tag we're processing — keep it
+      local is_current = current_range
+        and i >= current_range.start_line
+        and i <= current_range.end_line
+      if is_current then
+        table.insert(result, line)
+      end
+      -- Skip other tag lines (don't add to result)
+
+      -- Check for closing @/ tag
+      if line:match("@/$") or line:match("@/%s*$") then
+        if not is_current and tag_start > 0 then
+          table.insert(result, "-- [other prompt tag removed]")
+        end
+        in_tag = false
+        tag_start = 0
+      end
+    else
+      table.insert(result, line)
+    end
+  end
+
+  return result
+end
+
 --- Gather all context sources for a prompt event
 ---@param event table PromptEvent
 ---@return table context { target_content, target_lines, filetype, brain, coder, indexed, attached, project, extra }
@@ -14,8 +58,10 @@ local function gather(event)
       return vim.fn.readfile(event.target_path)
     end)
     if ok and lines then
-      target_lines = lines
-      target_content = table.concat(lines, "\n")
+      -- Strip other /@ @/ tags so the LLM only sees the current one
+      local cleaned = strip_other_tags(lines, event.range)
+      target_lines = cleaned
+      target_content = table.concat(cleaned, "\n")
     end
   end
 
