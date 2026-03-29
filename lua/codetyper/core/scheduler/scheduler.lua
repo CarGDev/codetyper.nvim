@@ -377,12 +377,35 @@ local function handle_worker_result(event, result)
     return
   end
 
-  -- Good enough or final attempt - create patch
+  -- Good enough or final attempt - check for agent operations first
   flog.info("scheduler", string.format( -- TODO: remove after debugging
     ">>> creating patch: event=%s confidence=%.2f response_len=%d",
     event.id or "nil", result.confidence or 0, result.response and #result.response or 0
   ))
   flog.debug("scheduler", "response_preview: " .. (result.response and result.response:sub(1, 300):gsub("\n", "\\n") or "nil")) -- TODO: remove after debugging
+
+  -- Check if response contains agent-style multi-file operations
+  local agent_handled = false
+  pcall(function()
+    local parse_agent = require("codetyper.core.agent.parse_response")
+    local executor = require("codetyper.core.agent.executor")
+    local utils = require("codetyper.support.utils")
+    local root = utils.get_project_root()
+
+    local ops, is_agent = parse_agent(result.response, root)
+    if is_agent and #ops > 0 then
+      flog.info("scheduler", string.format("agent response: %d file operations", #ops)) -- TODO: remove after debugging
+      require("codetyper.core.thinking_placeholder").clear_inline(event.id)
+      executor.execute(ops)
+      queue.complete(event.id)
+      agent_handled = true
+    end
+  end)
+
+  if agent_handled then
+    return
+  end
+
   pcall(function()
     local tp = require("codetyper.core.thinking_placeholder")
     tp.update_inline_status(event.id, "Generating patch...")

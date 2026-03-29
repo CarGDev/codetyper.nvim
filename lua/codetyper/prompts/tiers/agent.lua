@@ -1,5 +1,5 @@
 --- Agent-tier prompt builder — for tool-capable models (Claude, GPT-4o, o3)
---- Allows reasoning, SEARCH/REPLACE blocks, richer context
+--- Supports multi-file operations: create files, move functions, add imports
 local M = {}
 
 local flog = require("codetyper.support.flog") -- TODO: remove after debugging
@@ -17,19 +17,46 @@ local function build_system(event)
   return base .. [[
 
 You are an expert coding assistant embedded in a Neovim editor.
+You can create, modify, and organize files across the project.
 
 REASONING: Think through the task carefully before producing code.
 Start with @thinking, reason about the approach, then end thinking.
 
-OUTPUT FORMAT: You may use SEARCH/REPLACE blocks for precise edits:
+OUTPUT FORMAT — choose based on what the task requires:
+
+**Single-file edit** (default): Output plain code that replaces/inserts at the selection.
+
+**Multi-file operations** (refactor to new file, move function, reorganize):
+Use these markers to specify file operations:
+
+FILE:CREATE path/to/new/file.lua
+```lua
+<full new file content>
+```
+
+FILE:MODIFY path/to/existing/file.lua
 <<<<<<< SEARCH
-exact code to find
+<exact existing code to find>
 =======
-replacement code
+<replacement code>
 >>>>>>> REPLACE
 
-Or output plain code if replacing/inserting a region.
-No markdown fences. No explanations after the code.
+FILE:DELETE path/to/file.lua
+
+RULES for multi-file:
+- FILE:CREATE writes a complete new file. Include all necessary requires/imports.
+- FILE:MODIFY uses SEARCH/REPLACE. The SEARCH block must match EXACTLY.
+- When moving a function to a new file, also FILE:MODIFY the original to:
+  1. Add the require/import for the new module.
+  2. Remove the moved function.
+  3. Replace calls to the local function with the imported one.
+- Use relative paths from the project root.
+- You can chain multiple FILE: operations in one response.
+
+When the user asks to "move", "extract", "refactor into", "split into", or
+"create a new file" — use the multi-file format.
+Otherwise, output plain code for single-file edits.
+No markdown fences around single-file output. No explanations after the code.
 ]]
 end
 
@@ -39,9 +66,10 @@ end
 ---@return string
 local function build_user(event, ctx)
   local filename = vim.fn.fnamemodify(event.target_path or "", ":t")
+  local rel_path = vim.fn.fnamemodify(event.target_path or "", ":~:.")
   local parts = {}
 
-  table.insert(parts, string.format("File: %s (%s)", filename, ctx.filetype))
+  table.insert(parts, string.format("File: %s (path: %s)", filename, rel_path))
   table.insert(parts, "")
 
   -- Full file for context (use model's context limit)
@@ -72,6 +100,22 @@ local function build_user(event, ctx)
   end
 
   table.insert(parts, "")
+
+  -- Project structure for context (helps the LLM choose good file paths)
+  pcall(function()
+    local utils = require("codetyper.support.utils")
+    local root = utils.get_project_root()
+    local tree_path = root .. "/.codetyper/tree.log"
+    if vim.fn.filereadable(tree_path) == 1 then
+      local tree_lines = vim.fn.readfile(tree_path)
+      if tree_lines and #tree_lines > 0 then
+        local tree_text = table.concat(tree_lines, "\n"):sub(1, 2000)
+        table.insert(parts, "Project structure:")
+        table.insert(parts, tree_text)
+        table.insert(parts, "")
+      end
+    end
+  end)
 
   -- Extra context (brain, index, etc.)
   if ctx.extra and #ctx.extra > 0 then

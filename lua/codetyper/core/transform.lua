@@ -449,11 +449,17 @@ function M.cmd_transform_selection()
     end,
   })
 
+  -- Track when file picker is open (allow BufLeave during picker)
+  local picker_open = false
+
   -- Keep focus in prompt window (prevent leaving to other buffers)
   vim.api.nvim_create_autocmd("BufLeave", {
     group = augroup,
     buffer = prompt_buf,
     callback = function()
+      if picker_open then
+        return
+      end
       if prompt_win and vim.api.nvim_win_is_valid(prompt_win) then
         vim.api.nvim_set_current_win(prompt_win)
       end
@@ -484,6 +490,100 @@ function M.cmd_transform_selection()
   -- Close/cancel: Esc (in normal), q, or :q
   vim.keymap.set("n", "<Esc>", close_prompt, map_opts)
   vim.keymap.set("n", "q", close_prompt, map_opts)
+
+  -- @ in insert mode: open file picker to attach a file reference
+  vim.keymap.set("i", "@", function()
+    -- Check if cursor is right after another @ (avoid @@)
+    local cursor = vim.api.nvim_win_get_cursor(prompt_win)
+    local row = cursor[1]
+    local col = cursor[2]
+    if col > 0 then
+      local line = vim.api.nvim_buf_get_lines(prompt_buf, row - 1, row, false)[1] or ""
+      if line:sub(col, col) == "@" then
+        -- Already an @ before cursor, just type a literal @
+        vim.api.nvim_feedkeys("@", "n", false)
+        return
+      end
+    end
+
+    -- Insert @ first so it stays if user presses Esc
+    vim.api.nvim_feedkeys("@", "n", false)
+
+    -- Open file picker after a tick (let the @ be inserted first)
+    vim.schedule(function()
+      picker_open = true
+
+      -- Use vim.ui.select with project files
+      local project_root = vim.fn.getcwd()
+      local ok_files, files = pcall(function()
+        local raw = vim.fn.systemlist("find " .. vim.fn.shellescape(project_root)
+          .. " -type f"
+          .. " -not -path '*/node_modules/*'"
+          .. " -not -path '*/.git/*'"
+          .. " -not -path '*/.codetyper/*'"
+          .. " -not -path '*/dist/*'"
+          .. " -not -path '*/build/*'"
+          .. " 2>/dev/null | head -200")
+        local rel = {}
+        for _, f in ipairs(raw) do
+          local relative = f:sub(#project_root + 2)
+          if relative ~= "" then
+            table.insert(rel, relative)
+          end
+        end
+        table.sort(rel)
+        return rel
+      end)
+
+      if not ok_files or not files or #files == 0 then
+        picker_open = false
+        return
+      end
+
+      vim.ui.select(files, {
+        prompt = "Attach file (@):",
+        format_item = function(item)
+          return item
+        end,
+      }, function(choice)
+        picker_open = false
+
+        if not prompt_buf or not vim.api.nvim_buf_is_valid(prompt_buf) then
+          return
+        end
+
+        -- Focus back to prompt window
+        if prompt_win and vim.api.nvim_win_is_valid(prompt_win) then
+          vim.api.nvim_set_current_win(prompt_win)
+        end
+
+        if not choice then
+          -- User pressed Esc — @ stays in the buffer, no file selected
+          return
+        end
+
+        -- Replace the @ we inserted with @filepath
+        local cur = vim.api.nvim_win_get_cursor(prompt_win)
+        local cur_row = cur[1]
+        local cur_line = vim.api.nvim_buf_get_lines(prompt_buf, cur_row - 1, cur_row, false)[1] or ""
+
+        -- Find the last @ in the current line and replace it with @filepath
+        local at_pos = cur_line:find("@[^@]*$")
+        if at_pos then
+          local before = cur_line:sub(1, at_pos - 1)
+          local after = cur_line:sub(at_pos + 1) -- skip the @
+          -- Remove any partial text after @ that might have been typed
+          after = after:gsub("^%S*", "")
+          local new_line = before .. "@" .. choice .. " " .. after
+          vim.api.nvim_buf_set_lines(prompt_buf, cur_row - 1, cur_row, false, { new_line })
+          -- Position cursor after the inserted path
+          vim.api.nvim_win_set_cursor(prompt_win, { cur_row, #before + #choice + 2 })
+        end
+
+        vim.cmd("startinsert")
+      end)
+    end)
+  end, map_opts)
 
   vim.cmd("startinsert")
 end
