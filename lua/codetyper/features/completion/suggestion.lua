@@ -107,6 +107,7 @@ local function display_suggestion(suggestion)
     virt_text = virt_text,
     virt_text_pos = "overlay",
     hl_mode = "combine",
+    right_gravity = false,
   }
 
   if #virt_lines > 0 then
@@ -137,13 +138,16 @@ function M.accept()
   end
 
   local suggestion = state.current_suggestion
-  local bufnr = state.bufnr
-  local line = state.line
-  local col = state.col
 
   M.dismiss()
 
-  if suggestion and bufnr and line ~= nil and col ~= nil then
+  if suggestion then
+    -- Use current cursor position, not stale state.col
+    local bufnr = vim.api.nvim_get_current_buf()
+    local cursor = vim.api.nvim_win_get_cursor(0)
+    local line = cursor[1] - 1
+    local col = cursor[2]
+
     -- Get current line content
     local current_line = vim.api.nvim_buf_get_lines(bufnr, line, line + 1, false)[1] or ""
 
@@ -154,7 +158,6 @@ function M.accept()
       -- Single line - insert at cursor
       local new_line = current_line:sub(1, col) .. suggestion .. current_line:sub(col + 1)
       vim.api.nvim_buf_set_lines(bufnr, line, line + 1, false, { new_line })
-      -- Move cursor to end of inserted text
       vim.api.nvim_win_set_cursor(0, { line + 1, col + #suggestion })
     else
       -- Multi-line - insert at cursor
@@ -168,7 +171,6 @@ function M.accept()
       table.insert(new_lines, last_line)
 
       vim.api.nvim_buf_set_lines(bufnr, line, line + 1, false, new_lines)
-      -- Move cursor to end of last line
       vim.api.nvim_win_set_cursor(0, { line + #new_lines, #suggestion_lines[#suggestion_lines] })
     end
 
@@ -285,18 +287,21 @@ function M.trigger()
     return
   end
 
-  -- If copilot is available and has a suggestion, don't show codetyper's
-  local copilot_ok, copilot_suggestion = get_copilot()
-  if copilot_ok and copilot_suggestion.is_visible() then
-    -- Copilot is handling suggestions
-    state.using_copilot = true
-    return
-  end
+  -- Always dismiss immediately to avoid stale overlay extmarks
+  -- interfering with typing (cursor jump-back bug)
+  M.dismiss()
 
   -- Cancel existing timer
   if state.timer then
     state.timer:stop()
     state.timer = nil
+  end
+
+  -- If copilot is available and has a suggestion, don't show codetyper's
+  local copilot_ok, copilot_suggestion = get_copilot()
+  if copilot_ok and copilot_suggestion.is_visible() then
+    state.using_copilot = true
+    return
   end
 
   -- Get current context
@@ -309,7 +314,6 @@ function M.trigger()
   local prefix = before_cursor:match("[%a_][%w_]*$") or ""
 
   if #prefix < 2 then
-    M.dismiss()
     return
   end
 
