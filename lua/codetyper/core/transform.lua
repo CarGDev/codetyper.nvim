@@ -342,12 +342,18 @@ function M.cmd_transform_selection()
         ):sub(1, 8000)
       end
 
+      -- Resolve file dependencies for context
+      local resolve_deps = require("codetyper.core.llm.shared.resolve_deps")
+      local deps = resolve_deps.resolve(filepath, nil, ft)
+      local deps_context = resolve_deps.format_context(deps)
+
       local explain_prompt = string.format(
         "%s\n\nExplain the following %s code in markdown format. "
           .. "Include: what it does, how it works, parameters, return values, "
           .. "usage examples if applicable, and any important details.%s"
+          .. "\n\n%s"
           .. "\n\n```%s\n%s\n```",
-        input, ft, context_block, ft, code_to_explain
+        input, ft, context_block, deps_context, ft, code_to_explain
       )
 
       flog.info("transform", "explain mode — sending to LLM") -- TODO: remove after debugging
@@ -356,13 +362,18 @@ function M.cmd_transform_selection()
       local llm = require("codetyper.core.llm")
       local explain_window = require("codetyper.window.explain")
 
-      explain_window.show("Thinking...", "Loading explanation...", ft)
-
-      llm.generate(explain_prompt, {
+      local ask_context = {
         prompt_type = "ask",
         file_path = filepath,
         language = ft,
-      }, function(response, err)
+        source_code = code_to_explain,
+        source_lines = has_selection and { start_line, end_line } or nil,
+        deps_context = deps_context,
+      }
+
+      explain_window.show("Thinking...", "Loading explanation...", ft, ask_context)
+
+      llm.generate(explain_prompt, ask_context, function(response, err)
         vim.schedule(function()
           if err then
             explain_window.update("# Error\n\n" .. tostring(err))

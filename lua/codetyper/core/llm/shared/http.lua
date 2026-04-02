@@ -9,6 +9,16 @@ local M = {}
 ---@param body string JSON-encoded body
 ---@param callback fun(parsed: table|nil, error: string|nil)
 function M.post(url, headers, body, callback)
+  -- Write body to temp file to avoid shell argument limits with large prompts
+  local tmp = os.tmpname()
+  local f = io.open(tmp, "w")
+  if not f then
+    callback(nil, "Failed to create temp file for request body")
+    return
+  end
+  f:write(body)
+  f:close()
+
   local cmd = { "curl", "-s", "-X", "POST", url }
 
   for _, header in ipairs(headers) do
@@ -17,13 +27,15 @@ function M.post(url, headers, body, callback)
   end
 
   table.insert(cmd, "-d")
-  table.insert(cmd, body)
+  table.insert(cmd, "@" .. tmp)
 
   flog.debug("http", "POST " .. url .. " body_len=" .. #body) -- TODO: remove after debugging
 
+  local done = false
   vim.fn.jobstart(cmd, {
     stdout_buffered = true,
     on_stdout = function(_, data)
+      if done then return end
       if not data or #data == 0 or (data[1] == "" and #data == 1) then
         return
       end
@@ -40,27 +52,35 @@ function M.post(url, headers, body, callback)
         if response_text:match("<!DOCTYPE") or response_text:match("<html") then
           error_msg = "API returned HTML error page. Service may be unavailable."
         end
+        done = true
         vim.schedule(function()
           callback(nil, error_msg)
         end)
         return
       end
 
+      done = true
       vim.schedule(function()
         callback(parsed, nil)
       end)
     end,
     on_stderr = function(_, data)
+      if done then return end
       if data and #data > 0 and data[1] ~= "" then
+        done = true
         vim.schedule(function()
           callback(nil, "HTTP request failed: " .. table.concat(data, "\n"))
         end)
       end
     end,
     on_exit = function(_, code)
+      -- Clean up temp file
+      os.remove(tmp)
+      if done then return end
       if code ~= 0 then
+        done = true
         vim.schedule(function()
-          callback(nil, "curl exited with code: " .. code)
+          callback(nil, "curl exited with code: " .. code .. ", check the /tmp/codetyper.tmp.log")
         end)
       end
     end,

@@ -8,8 +8,20 @@ local utils = require("codetyper.support.utils")
 local flog = require("codetyper.support.flog") -- TODO: remove after debugging
 
 --- Get model from stored credentials or config
+---@param context table|nil Request context (used to pick ask_model for question calls)
 ---@return string Model name
-local function get_model()
+local function get_model(context)
+  -- For ask/explain calls, use the cheaper ask_model when configured
+  if context and context.prompt_type == "ask" then
+    local ok_ct, codetyper = pcall(require, "codetyper")
+    if ok_ct then
+      local config = codetyper.get_config()
+      if config and config.llm and config.llm.copilot and config.llm.copilot.ask_model then
+        return config.llm.copilot.ask_model
+      end
+    end
+  end
+
   local ok_cred, credentials = pcall(require, "codetyper.config.credentials")
   if ok_cred then
     local stored = credentials.get_model("copilot")
@@ -69,7 +81,7 @@ end
 ---@param context table Context information
 ---@param callback fun(response: string|nil, error: string|nil, usage: table|nil)
 function M.generate(prompt, context, callback)
-  flog.info("copilot", string.format(">>> generate: prompt_len=%d", #(prompt or ""))) -- TODO: remove after debugging
+  flog.info("copilot", string.format(">>> generate: model=%s prompt_len=%d", get_model(context), #(prompt or ""))) -- TODO: remove after debugging
 
   auth.get_valid_token(function(token, err)
     if err then
@@ -86,7 +98,8 @@ function M.generate(prompt, context, callback)
       system_prompt = build_sys(context or {})
     end
 
-    local body = request.build_body(get_model(), system_prompt, prompt)
+    local model = get_model(context)
+    local body = request.build_body(model, system_prompt, prompt)
     utils.notify("Sending request to Copilot...", vim.log.levels.INFO)
 
     request.send(token, body, function(parsed, http_err)
@@ -106,7 +119,7 @@ function M.generate(prompt, context, callback)
         pcall(function()
           local record_usage = require("codetyper.handler.record_usage")
           record_usage(
-            get_model(),
+            model,
             result.usage.prompt_tokens or 0,
             result.usage.completion_tokens or 0,
             result.usage.cached_tokens or 0

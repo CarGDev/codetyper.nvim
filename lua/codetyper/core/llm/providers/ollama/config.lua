@@ -24,8 +24,20 @@ function M.get_host()
 end
 
 --- Get Ollama model name
+---@param context table|nil Request context (used to pick ask_model for question calls)
 ---@return string Model name
-function M.get_model()
+function M.get_model(context)
+  -- For ask/explain calls, use the cheaper ask_model when configured
+  if context and context.prompt_type == "ask" then
+    local ok_ct, codetyper = pcall(require, "codetyper")
+    if ok_ct then
+      local config = codetyper.get_config()
+      if config and config.llm and config.llm.ollama and config.llm.ollama.ask_model then
+        return config.llm.ollama.ask_model
+      end
+    end
+  end
+
   local ok_cred, credentials = pcall(require, "codetyper.config.credentials")
   if ok_cred then
     local stored_model = credentials.get_model("ollama")

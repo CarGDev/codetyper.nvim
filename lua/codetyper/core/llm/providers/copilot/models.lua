@@ -1,14 +1,15 @@
 --- Fetch available models from Copilot API and auto-detect capabilities
 local auth = require("codetyper.core.llm.providers.copilot.auth")
 local http = require("codetyper.core.llm.shared.http")
-local flog = require("codetyper.support.flog") -- TODO: remove after debugging
+local flog = require("codetyper.support.flog")
+local model_constants = require("codetyper.constants.models")
 
 local M = {}
 
---- Cached models (refreshed once per session)
+--- Cached models (refreshed per TTL)
 local models_cache = nil
 local cache_time = 0
-local CACHE_TTL = 3600 -- 1 hour
+local CACHE_TTL = 300 -- 5 minutes (same as CLI)
 
 --- Fetch models from Copilot API
 ---@param callback fun(models: table[]|nil, error: string|nil)
@@ -30,31 +31,45 @@ function M.fetch(callback)
     local headers = {
       "Authorization: Bearer " .. token.token,
       "Accept: application/json",
-      "User-Agent: GitHubCopilotChat/0.26.7",
-      "Editor-Version: vscode/1.105.1",
-      "Editor-Plugin-Version: copilot-chat/0.26.7",
+      "User-Agent: GitHubCopilotChat/0.30.0",
+      "Editor-Version: vscode/1.100.0",
+      "Editor-Plugin-Version: copilot-chat/0.30.0",
       "Copilot-Integration-Id: vscode-chat",
     }
 
     http.get(endpoint, headers, function(parsed, http_err)
       if http_err then
-        flog.warn("copilot.models", "fetch failed: " .. http_err) -- TODO: remove after debugging
-        callback(nil, http_err)
+        flog.warn("copilot.models", "fetch failed: " .. http_err)
+        -- Fall back to constants
+        local fallback = model_constants.fallback_models
+        callback(fallback, nil)
         return
       end
 
       if not parsed or not parsed.data then
-        callback(nil, "Invalid models response")
+        callback(model_constants.fallback_models, nil)
         return
       end
 
-      -- Filter to chat-capable models only
+      -- Filter to chat-capable, picker-enabled models
       local models = {}
       for _, model in ipairs(parsed.data) do
         local caps = model.capabilities or {}
-        if caps.type == "chat" then
-          local supports = caps.supports or {}
-          local limits = caps.limits or {}
+        local supports = caps.supports or {}
+        local limits = caps.limits or {}
+        local billing = model.billing or {}
+
+        if caps.type == "chat" and model.model_picker_enabled then
+          -- Resolve cost multiplier: API billing > hardcoded fallback > 1.0
+          local cost = billing.multiplier
+          if cost == nil then
+            cost = model_constants.cost_multipliers[model.id] or 1.0
+          end
+
+          local is_unlimited = (billing.is_premium == false)
+            or (cost == 0)
+            or (model_constants.unlimited_models[model.id] == true)
+
           table.insert(models, {
             id = model.id,
             name = model.name or model.id,
@@ -63,13 +78,22 @@ function M.fetch(callback)
             max_input_tokens = limits.max_prompt_tokens,
             max_output_tokens = limits.max_output_tokens,
             supports_streaming = supports.streaming == true,
+            supports_vision = supports.vision == true,
             enabled = model.policy and model.policy.state == "enabled",
-            picker_enabled = model.model_picker_enabled,
+            picker_enabled = true,
+            cost_multiplier = cost,
+            is_unlimited = is_unlimited,
+            is_premium = billing.is_premium or false,
           })
         end
       end
 
-      flog.info("copilot.models", string.format("fetched %d chat models", #models)) -- TODO: remove after debugging
+      flog.info("copilot.models", string.format("fetched %d chat models", #models))
+
+      -- If API returned zero models after filtering, use fallback
+      if #models == 0 then
+        models = model_constants.fallback_models
+      end
 
       models_cache = models
       cache_time = os.time()
@@ -80,6 +104,25 @@ function M.fetch(callback)
       callback(models, nil)
     end)
   end)
+end
+
+--- Get context size for a model (API data > hardcoded > default)
+---@param model_id string
+---@return table { input: number, output: number }
+function M.get_context_size(model_id)
+  -- Check cached models first (most accurate from API)
+  if models_cache then
+    for _, m in ipairs(models_cache) do
+      if m.id == model_id and m.max_input_tokens then
+        return {
+          input = m.max_input_tokens,
+          output = m.max_output_tokens or model_constants.default_context_size.output,
+        }
+      end
+    end
+  end
+  -- Fallback to hardcoded constants
+  return model_constants.context_sizes[model_id] or model_constants.default_context_size
 end
 
 --- Determine tier from model capabilities (auto-detected from API)
@@ -145,7 +188,7 @@ function M.load_from_disk()
   return nil
 end
 
---- Get models (cache → disk → API)
+--- Get models (cache → disk → API → fallback)
 ---@param callback fun(models: table[]|nil, error: string|nil)
 function M.get(callback)
   if models_cache then
@@ -165,6 +208,21 @@ function M.get(callback)
 
   -- Fetch from API
   M.fetch(callback)
+end
+
+--- Find a model by id from cache
+---@param model_id string
+---@return table|nil
+function M.find(model_id)
+  if not models_cache then
+    return nil
+  end
+  for _, m in ipairs(models_cache) do
+    if m.id == model_id then
+      return m
+    end
+  end
+  return nil
 end
 
 --- Invalidate cache

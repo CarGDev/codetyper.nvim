@@ -13,7 +13,7 @@ local flog = require("codetyper.support.flog") -- TODO: remove after debugging
 ---@param callback fun(response: string|nil, error: string|nil, usage: table|nil)
 function M.generate(prompt, context, callback)
   local host = ollama_config.get_host()
-  local model = ollama_config.get_model()
+  local model = ollama_config.get_model(context)
 
   flog.info("ollama", string.format(">>> generate: model=%s prompt_len=%d", model, #(prompt or ""))) -- TODO: remove after debugging
 

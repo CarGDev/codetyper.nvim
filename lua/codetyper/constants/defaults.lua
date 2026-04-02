@@ -9,9 +9,11 @@ local defaults = {
     ollama = {
       host = "http://localhost:11434",
       model = "deepseek-coder:6.7b",
+      ask_model = nil, -- Optional: cheaper model for question/explain calls
     },
     copilot = {
       model = "claude-sonnet-4", -- Uses GitHub Copilot authentication
+      ask_model = "gpt-5-mini", -- Cheaper model for question/explain calls
     },
   },
   auto_gitignore = true,

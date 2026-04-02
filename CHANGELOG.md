@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-04-01
+
+### Added
+
+- **Interactive explain window** — The ask/explain panel now supports follow-up questions with a dedicated input pane that appears after the initial response
+  - `@` file picker to attach project files to follow-up questions
+  - Conversation history preserved across follow-ups (last 5 Q&A pairs)
+  - Submit with `<CR>` (normal) or `<C-CR>` (insert), `q` to close, `i` to jump to input from chat
+- **Ask model override** — New `ask_model` config for both Copilot and Ollama providers to use a cheaper model for question/explain calls (defaults to `gpt-5-mini` for Copilot)
+- **File dependency context** — Ask prompts now include which files import/require the current file and what the file imports, enabling the model to answer "who uses this?" questions accurately
+- **Dependency resolver** — New `resolve_deps.lua` module that greps the project to find importers and parses the file's own imports (Lua, JS/TS, Python, Go)
+- **Mermaid diagrams in ask mode** — Updated system prompt instructs the model to produce mermaid flow diagrams when explaining file relationships, architecture, and data flow
+
+### Changed
+
+- **Dynamic model list** — `:Coder model` now shows models fetched from the GitHub Copilot API with real cost multipliers, falling back to hardcoded defaults when offline
+- **Models API improvements** — `copilot/models.lua` now extracts `billing.multiplier`, `billing.is_premium`, and filters by `model_picker_enabled` (matching the CLI project)
+- **Model constants updated** — `constants/models.lua` now includes cost multipliers, unlimited flags, context sizes, and fallback model objects for all known Copilot models
+- **Cache TTL** — Model cache reduced from 1 hour to 5 minutes to stay in sync with API changes
+- **Copilot log line** — Now includes the model name (`model=gpt-5-mini`) for easier debugging
+
+### Fixed
+
+- **curl body overflow** — HTTP POST body is now written to a temp file (`curl -d @file`) instead of passed as a command-line argument, fixing crashes with large follow-up prompts containing source code and conversation history
+- **Double callback guard** — HTTP client now prevents `on_exit` from firing an error after `on_stdout` already delivered a valid response
+
 ## [1.1.1] - 2026-03-29
 
 ### Fixed
@@ -436,7 +462,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fixed** — Bug fixes
 - **Security** — Vulnerability fixes
 
-[Unreleased]: https://github.com/cargdev/codetyper.nvim/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/cargdev/codetyper.nvim/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/cargdev/codetyper.nvim/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/cargdev/codetyper.nvim/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/cargdev/codetyper.nvim/compare/v1.0.4...v1.1.0
 [1.0.4]: https://github.com/cargdev/codetyper.nvim/compare/v1.0.3...v1.0.4

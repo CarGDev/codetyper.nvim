@@ -215,40 +215,80 @@ M.default_models = {
   ollama = "deepseek-coder:6.7b",
 }
 
---- Available models for Copilot (GitHub Copilot Chat API)
---- Models with cost multipliers: 0x = free, 0.33x = discount, 1x = standard, 3x = premium
-M.copilot_models = {
-  -- Free tier (0x)
+--- Hardcoded fallback models (used before API models are fetched)
+M.copilot_models_fallback = {
   { name = "gpt-4.1", cost = "0x" },
   { name = "gpt-4o", cost = "0x" },
   { name = "gpt-5-mini", cost = "0x" },
-  { name = "grok-code-fast-1", cost = "0x" },
-  { name = "raptor-mini", cost = "0x" },
-  -- Discount tier (0.33x)
   { name = "claude-haiku-4.5", cost = "0.33x" },
-  { name = "gemini-3-flash", cost = "0.33x" },
-  { name = "gpt-5.1-codex-mini", cost = "0.33x" },
-  -- Standard tier (1x)
   { name = "claude-sonnet-4", cost = "1x" },
   { name = "claude-sonnet-4.5", cost = "1x" },
-  { name = "gemini-2.5-pro", cost = "1x" },
-  { name = "gemini-3-pro", cost = "1x" },
-  { name = "gpt-5", cost = "1x" },
-  { name = "gpt-5-codex", cost = "1x" },
-  { name = "gpt-5.1", cost = "1x" },
-  { name = "gpt-5.1-codex", cost = "1x" },
-  { name = "gpt-5.1-codex-max", cost = "1x" },
-  { name = "gpt-5.2", cost = "1x" },
-  { name = "gpt-5.2-codex", cost = "1x" },
-  -- Premium tier (3x)
   { name = "claude-opus-4.5", cost = "3x" },
+  { name = "gemini-2.5-pro", cost = "1x" },
+  { name = "grok-code-fast-1", cost = "0.25x" },
 }
+
+--- Get the live model list (API-fetched when available, fallback otherwise)
+---@return table[] List of { name, cost } tables
+function M.get_copilot_models()
+  local ok, copilot_models = pcall(require, "codetyper.core.llm.providers.copilot.models")
+  if not ok then
+    return M.copilot_models_fallback
+  end
+
+  -- Try to get cached models synchronously (no API call)
+  local cached = copilot_models.find and copilot_models.load_from_disk()
+  if not cached then
+    -- Try in-memory cache via find on a known model
+    local test = copilot_models.find("gpt-4o")
+    if not test then
+      return M.copilot_models_fallback
+    end
+  end
+
+  -- Build list from cached API models
+  local models_data = cached
+  if not models_data then
+    -- In-memory cache exists, get all via get() with immediate callback
+    local result = nil
+    copilot_models.get(function(m) result = m end)
+    models_data = result
+  end
+
+  if not models_data or #models_data == 0 then
+    return M.copilot_models_fallback
+  end
+
+  local list = {}
+  for _, m in ipairs(models_data) do
+    local cost_str
+    if m.cost_multiplier == 0 or m.is_unlimited then
+      cost_str = "Unlimited"
+    else
+      cost_str = string.format("%.2gx", m.cost_multiplier)
+    end
+    table.insert(list, { name = m.id, cost = cost_str })
+  end
+
+  -- Sort: unlimited first, then by cost ascending
+  table.sort(list, function(a, b)
+    if a.cost == "Unlimited" and b.cost ~= "Unlimited" then return true end
+    if a.cost ~= "Unlimited" and b.cost == "Unlimited" then return false end
+    return a.name < b.name
+  end)
+
+  return list
+end
+
+-- Keep backward-compatible property (populated lazily)
+M.copilot_models = M.copilot_models_fallback
 
 --- Get list of copilot model names (for completion)
 ---@return string[]
 function M.get_copilot_model_names()
+  local models = M.get_copilot_models()
   local names = {}
-  for _, model in ipairs(M.copilot_models) do
+  for _, model in ipairs(models) do
     table.insert(names, model.name)
   end
   return names
@@ -258,7 +298,8 @@ end
 ---@param model_name string
 ---@return string|nil
 function M.get_copilot_model_cost(model_name)
-  for _, model in ipairs(M.copilot_models) do
+  local models = M.get_copilot_models()
+  for _, model in ipairs(models) do
     if model.name == model_name then
       return model.cost
     end
@@ -306,7 +347,7 @@ function M.interactive_copilot_config(silent)
   local current_cost = M.get_copilot_model_cost(current_model) or "?"
 
   -- Build model options with "Custom..." option
-  local model_options = vim.deepcopy(M.copilot_models)
+  local model_options = vim.deepcopy(M.get_copilot_models())
   table.insert(model_options, { name = "Custom...", cost = "" })
 
   vim.ui.select(model_options, {
