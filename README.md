@@ -16,6 +16,7 @@
 - **Intent Detection**: Understands refactor, fix, add, explain, document, complete, and more
 - **Brain System**: Learns your coding style, project conventions, and architecture patterns
 - **Prompt Queue**: Sequential tag processing with a visual queue window
+- **Smart Provider Selection**: Tries Ollama (free, local) first, escalates to Copilot on failure or low confidence
 - **LLM Providers**: GitHub Copilot and Ollama (local) — split into clean per-file modules
 - **`/@` `@/` Tags**: Inline prompt tags with manual/auto trigger control
 - **`@` File Picker**: Type `@` in prompt window to attach project files
@@ -23,8 +24,6 @@
 - **Cost Tracking**: Persistent LLM cost estimation with session and all-time stats
 - **Terminal Window**: Integrated terminal panel (`<leader>ter`)
 - **Project Indexing**: Context-aware code generation with project-wide understanding
-- **Git Integration**: Automatically adds generated files to `.gitignore`
-- **Project Tree Logging**: Maintains a `tree.log` tracking your project structure
 
 ---
 
@@ -123,28 +122,18 @@ add error handling and input validation
 ```lua
 require("codetyper").setup({
   llm = {
-    provider = "copilot", -- "copilot" or "ollama"
+    provider = "copilot", -- Fallback when smart_selection is off: "copilot" or "ollama"
+    smart_selection = true, -- Try Ollama first (free), escalate to Copilot on failure/low confidence
 
     copilot = {
       model = "claude-sonnet-4",
+      ask_model = "gpt-5-mini", -- Cheaper model for explain/question calls
     },
 
     ollama = {
       host = "http://localhost:11434",
       model = "deepseek-coder:6.7b",
     },
-  },
-
-  auto_gitignore = true,
-  auto_index = false,
-
-  scheduler = {
-    enabled = true,
-    ollama_scout = true,
-    escalation_threshold = 0.7,
-    max_concurrent = 2,
-    completion_delay_ms = 100,
-    apply_delay_ms = 500,
   },
 })
 ```
@@ -198,10 +187,8 @@ llm = {
 
 | Command | Description |
 |---------|-------------|
-| `:Coder tree` | Refresh tree.log |
-| `:Coder tree-view` | View tree.log in split |
+| `:Coder version` | Show plugin version |
 | `:Coder reset` | Reset processed prompts |
-| `:Coder gitignore` | Force update .gitignore |
 | `:Coder transform-selection` | Open transform prompt |
 | `:Coder index-project` | Index the entire project |
 | `:Coder index-status` | Show index status |
@@ -221,8 +208,6 @@ llm = {
 
 | Command | Description |
 |---------|-------------|
-| `:CoderTree` | Refresh tree.log |
-| `:CoderTreeView` | View tree.log in split |
 | `:CoderTransformSelection` | Transform prompt for selection |
 | `:CoderIndexProject` | Index entire project |
 | `:CoderIndexStatus` | Show index status |

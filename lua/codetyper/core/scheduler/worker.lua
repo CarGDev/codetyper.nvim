@@ -12,8 +12,9 @@ local flog = require("codetyper.support.flog") -- TODO: remove after debugging
 
 ---@class WorkerResult
 ---@field success boolean Whether the request succeeded
----@field response string|nil The generated code
+---@field response string|nil The generated code or explanation text
 ---@field error string|nil Error message if failed
+---@field is_explanation boolean|nil True if response is thinking-only (show, don't inject)
 ---@field confidence number Confidence score (0.0-1.0)
 ---@field confidence_breakdown table Detailed confidence breakdown
 ---@field duration number Time taken in seconds
@@ -45,7 +46,6 @@ local function notify_stage(event_id, text)
     local thinking_update_stage = require("codetyper.adapters.nvim.ui.thinking.update_stage")
     thinking_update_stage(text)
   end)
-  vim.notify(text, vim.log.levels.INFO)
 end
 
 --- Patterns that indicate LLM needs more context (must be near start of response)
@@ -112,6 +112,20 @@ end
 ---@param response string Raw LLM response
 ---@param filetype string|nil File type for language detection
 ---@return string Cleaned code
+--- Extract the content inside @thinking ... end thinking block.
+---@param text string Raw response
+---@return string|nil Thinking content or nil if no block
+local function extract_thinking_content(text)
+  if not text or text == "" then
+    return nil
+  end
+  local thinking = text:match("^%s*@thinking%s*\n(.-)\nend thinking")
+  if thinking then
+    return thinking:match("^%s*(.-)%s*$") or thinking
+  end
+  return nil
+end
+
 --- Strip @thinking ... end thinking block; return only the code part for injection.
 ---@param text string Raw response that may start with @thinking ... end thinking
 ---@return string Text with thinking block removed (or original if no block)
@@ -229,6 +243,27 @@ end
 ---@type table<string, Worker>
 local active_workers = {}
 
+--- Max age in seconds before a stale worker is pruned
+local WORKER_MAX_AGE = 300
+
+--- Prune stale workers that have been running longer than WORKER_MAX_AGE
+local function prune_stale()
+  local now = os.clock()
+  for id, worker in pairs(active_workers) do
+    if now - worker.start_time > WORKER_MAX_AGE then
+      worker.status = "timeout"
+      active_workers[id] = nil
+      pcall(function()
+        local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+        logs_add({
+          type = "warn",
+          message = string.format("Worker %s pruned (stale after %ds)", id, WORKER_MAX_AGE),
+        })
+      end)
+    end
+  end
+end
+
 --- Generate worker ID
 ---@return string
 local function generate_id()
@@ -241,7 +276,7 @@ end
 ---@return table|nil client
 ---@return string|nil error
 local function get_client(worker_type)
-  local ok, client = pcall(require, "codetyper.llm." .. worker_type)
+  local ok, client = pcall(require, "codetyper.core.llm.providers." .. worker_type)
   if ok and client then
     return client, nil
   end
@@ -481,6 +516,7 @@ end
 ---@return Worker
 function M.create(event, worker_type, callback)
   flog.info("worker", string.format(">>> create: event=%s provider=%s", event.id or "nil", worker_type or "nil")) -- TODO: remove after debugging
+  prune_stale()
   local worker = {
     id = generate_id(),
     event = event,
@@ -673,12 +709,24 @@ function M.complete(worker, response, error, usage)
     })
   end)
 
+  -- Detect thinking-only responses: if the entire response is just a @thinking block
+  -- with no code after it, treat it as an explanation (an "ask" answer, not code to inject)
+  local thinking_content = extract_thinking_content(response)
+  local is_explanation = false
+
   -- Clean the response (remove markdown, explanations, etc.)
   local filetype = vim.fn.fnamemodify(worker.event.target_path or "", ":e")
   local cleaned_response = clean_response(response, filetype)
 
+  -- If cleaned response is empty/trivial but there was thinking content,
+  -- this is an explanation — show it as-is instead of injecting
+  if thinking_content and #thinking_content > 10 and (#cleaned_response < 10 or cleaned_response:match("^%s*$")) then
+    is_explanation = true
+    cleaned_response = thinking_content
+  end
+
   local flog = require("codetyper.support.flog")
-  flog.info("worker", string.format("raw_response_len=%d cleaned_len=%d type=%s", #(response or ""), #(cleaned_response or ""), type(cleaned_response)))
+  flog.info("worker", string.format("raw_response_len=%d cleaned_len=%d is_explanation=%s type=%s", #(response or ""), #(cleaned_response or ""), tostring(is_explanation), type(cleaned_response)))
   flog.debug("worker", "cleaned_preview: " .. (cleaned_response and cleaned_response:sub(1, 300):gsub("\n", "\\n") or "nil"))
 
   -- Score confidence on cleaned response
@@ -709,6 +757,7 @@ function M.complete(worker, response, error, usage)
     success = true,
     response = cleaned_response,
     error = nil,
+    is_explanation = is_explanation,
     confidence = conf_score,
     confidence_breakdown = breakdown,
     duration = duration,

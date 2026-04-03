@@ -9,7 +9,8 @@ local function extract_file_references(content)
 
   local files = {}
   for file in content:gmatch("@([%w%._%-][%w%._%-/]*)") do
-    if file ~= "" then
+    -- Reject path traversal attempts (../) and absolute-looking paths
+    if file ~= "" and not file:match("%.%.") then
       table.insert(files, file)
       logger.debug("parser", "extract_file_references: found file reference: " .. file)
     end

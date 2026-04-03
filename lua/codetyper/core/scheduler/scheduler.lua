@@ -96,21 +96,51 @@ local function get_remote_provider()
   return "copilot"
 end
 
---- Get the primary provider (ollama if scout enabled, else configured)
+--- Cached Ollama health status (avoid checking on every dispatch)
+local ollama_healthy = nil -- nil = unknown, true = reachable, false = offline
+local ollama_last_check = 0
+local OLLAMA_CHECK_INTERVAL = 60 -- Re-check every 60 seconds
+
+--- Check Ollama availability (async, caches result)
+local function check_ollama_health()
+  local now = os.time()
+  if now - ollama_last_check < OLLAMA_CHECK_INTERVAL then
+    return
+  end
+  ollama_last_check = now
+  pcall(function()
+    local ollama = require("codetyper.core.llm.providers.ollama")
+    ollama.health_check(function(ok)
+      ollama_healthy = ok
+    end)
+  end)
+end
+
+--- Get the primary provider (prefers Ollama if healthy, else Copilot)
 ---@return string
 local function get_primary_provider()
-  if state.config.ollama_scout then
-    return "ollama"
-  end
+  -- Kick off async health check if stale
+  check_ollama_health()
 
   local ok, codetyper = pcall(require, "codetyper")
   if ok then
     local config = codetyper.get_config()
-    if config and config.llm and config.llm.provider then
-      return config.llm.provider
+    if config and config.llm then
+      -- If smart_selection is on, let the selector decide (it handles fallback)
+      if config.llm.smart_selection then
+        -- If we know Ollama is offline, skip straight to Copilot
+        if ollama_healthy == false then
+          return "copilot"
+        end
+        return "ollama"
+      end
+      -- No smart selection — use configured provider directly
+      if config.llm.provider then
+        return config.llm.provider
+      end
     end
   end
-  return "ollama"
+  return "copilot"
 end
 
 --- Retry event with additional context
@@ -377,6 +407,28 @@ local function handle_worker_result(event, result)
     return
   end
 
+  -- If the LLM response is an explanation (thinking-only, no code),
+  -- show it in the explain window instead of injecting as code
+  if result.is_explanation then
+    flog.info("scheduler", string.format("explanation response for event=%s, showing in explain window", event.id or "nil"))
+    require("codetyper.core.thinking_placeholder").remove_on_failure(event.id)
+    require("codetyper.core.thinking_placeholder").clear_inline(event.id)
+    queue.complete(event.id)
+
+    vim.schedule(function()
+      local explain = require("codetyper.window.explain")
+      local title = "Response"
+      if event.prompt_content then
+        title = event.prompt_content:sub(1, 60):gsub("\n", " ")
+      end
+      explain.show(title, result.response, "markdown", {
+        target_path = event.target_path,
+        prompt_content = event.prompt_content,
+      })
+    end)
+    return
+  end
+
   -- Good enough or final attempt - check for agent operations first
   flog.info("scheduler", string.format( -- TODO: remove after debugging
     ">>> creating patch: event=%s confidence=%.2f response_len=%d",
@@ -463,7 +515,6 @@ local function handle_worker_result(event, result)
     local thinking_update_stage = require("codetyper.adapters.nvim.ui.thinking.update_stage")
     thinking_update_stage("Generating patch...")
   end)
-  vim.notify("Generating patch...", vim.log.levels.INFO)
 
   local p = patch.create_from_event(event, result.response, result.confidence)
   flog.info("scheduler", string.format( -- TODO: remove after debugging
@@ -483,7 +534,6 @@ local function handle_worker_result(event, result)
     local thinking_update_stage = require("codetyper.adapters.nvim.ui.thinking.update_stage")
     thinking_update_stage("Applying code...")
   end)
-  vim.notify("Applying code...", vim.log.levels.INFO)
 
   pcall(function()
     local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
@@ -574,48 +624,63 @@ local function dispatch_next()
   end
 
   -- Create worker
+  local event_id = event.id
   worker.create(event, provider, function(result)
     vim.schedule(function()
+      -- Guard: if event was already completed/cancelled between callback and schedule, skip
+      local queued_event = queue.get(event_id)
+      local current_status = queued_event and queued_event.status
+      if current_status == "completed" or current_status == "failed" or current_status == "cancelled" then
+        flog.info("scheduler", string.format("skipping stale callback for event=%s (status=%s)", event_id or "nil", current_status or "nil"))
+        return
+      end
       handle_worker_result(event, result)
     end)
   end)
 end
 
---- Track if we're already waiting to flush (avoid spam logs)
-local waiting_to_flush = false
+--- Track flush retry state (single timer, bounded retries)
+local flush_timer = nil
+local flush_retries = 0
+local MAX_FLUSH_RETRIES = 60 -- At ~500ms delay = 30s max wait
 
 --- Schedule patch flush after delay (completion safety)
---- Will keep retrying until safe to inject or no pending patches
+--- Uses a single timer with bounded retries instead of recursive calls.
 function M.schedule_patch_flush()
-  flog.info("scheduler", ">>> schedule_patch_flush called") -- TODO: remove after debugging
-  vim.defer_fn(function()
+  -- Cancel any existing flush timer to avoid stacking
+  if flush_timer then
+    pcall(function() flush_timer:stop() end)
+    flush_timer = nil
+  end
+
+  local delay = (state.config and state.config.completion_delay_ms) or 500
+
+  flush_timer = vim.defer_fn(function()
+    flush_timer = nil
+
     -- Check if there are any pending patches
     local pending = patch.get_pending()
-    flog.info("scheduler", string.format("flush: pending=%d", #pending)) -- TODO: remove after debugging
-    logger.info("scheduler", string.format("schedule_patch_flush: %d pending", #pending))
     if #pending == 0 then
-      waiting_to_flush = false
-      return -- Nothing to apply
+      flush_retries = 0
+      return
     end
 
     local safe, reason = M.is_safe_to_inject()
-    flog.info("scheduler", string.format("is_safe=%s reason=%s", tostring(safe), tostring(reason or "ok"))) -- TODO: remove after debugging
-    logger.info("scheduler", string.format("is_safe_to_inject=%s (%s)", tostring(safe), tostring(reason or "ok")))
     if safe then
-      waiting_to_flush = false
-      flog.info("scheduler", ">>> calling flush_pending_smart") -- TODO: remove after debugging
+      flush_retries = 0
       local applied, stale = patch.flush_pending_smart()
-      flog.info("scheduler", string.format("flush result: applied=%d stale=%d", applied, stale)) -- TODO: remove after debugging
       if applied > 0 or stale > 0 then
         logger.info("scheduler", string.format("Patches flushed: %d applied, %d stale", applied, stale))
       end
     else
-      -- Not safe yet (user is typing), reschedule to try again
-      -- Only log once when we start waiting
-      if not waiting_to_flush then
-        waiting_to_flush = true
-        logger.info("scheduler", "Waiting for user to finish typing before applying code...")
-        -- Notify user about the wait
+      flush_retries = flush_retries + 1
+      if flush_retries > MAX_FLUSH_RETRIES then
+        flush_retries = 0
+        logger.warn("scheduler", "Patch flush gave up after max retries")
+        return
+      end
+      -- Notify user once when we start waiting
+      if flush_retries == 1 then
         local utils = require("codetyper.support.utils")
         if reason == "visual_mode" then
           utils.notify("Queue waiting: exit Visual mode to inject code", vim.log.levels.INFO)
@@ -623,11 +688,15 @@ function M.schedule_patch_flush()
           utils.notify("Queue waiting: exit Insert mode to inject code", vim.log.levels.INFO)
         end
       end
-      -- Retry after a delay - keep waiting for user to finish typing
+      -- Retry (non-recursive: just schedule a new single timer)
       M.schedule_patch_flush()
     end
-  end, state.config.completion_delay_ms)
+  end, delay)
 end
+
+--- Tick counter for deterministic cleanup scheduling
+local tick_count = 0
+local CLEANUP_EVERY_N_TICKS = 100 -- At 100ms poll_interval = every 10s
 
 --- Main scheduler loop
 local function scheduler_loop()
@@ -637,8 +706,10 @@ local function scheduler_loop()
 
   dispatch_next()
 
-  -- Cleanup old items periodically
-  if math.random() < 0.01 then -- ~1% chance each tick
+  -- Cleanup old items every CLEANUP_EVERY_N_TICKS ticks
+  tick_count = tick_count + 1
+  if tick_count >= CLEANUP_EVERY_N_TICKS then
+    tick_count = 0
     queue.cleanup(300)
     patch.cleanup(300)
   end

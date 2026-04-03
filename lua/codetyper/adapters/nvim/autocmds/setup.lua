@@ -2,11 +2,8 @@ local utils = require("codetyper.support.utils")
 local constants = require("codetyper.constants.constants")
 local AUGROUP = constants.AUGROUP
 local PROMPT_PROCESS_DEBOUNCE_MS = constants.PROMPT_PROCESS_DEBOUNCE_MS
-local schedule_tree_update = require("codetyper.adapters.nvim.autocmds.schedule_tree_update")
 local check_for_closed_prompt_with_preference = require("codetyper.adapters.nvim.autocmds.check_for_closed_prompt_with_preference")
 local check_all_prompts_with_preference = require("codetyper.adapters.nvim.autocmds.check_all_prompts_with_preference")
-local set_coder_filetype = require("codetyper.adapters.nvim.autocmds.set_coder_filetype")
-local clear_auto_opened = require("codetyper.adapters.nvim.autocmds.clear_auto_opened")
 local auto_index_file = require("codetyper.adapters.nvim.autocmds.auto_index_file")
 local update_brain_from_file = require("codetyper.adapters.nvim.autocmds.update_brain_from_file")
 
@@ -96,28 +93,27 @@ local function setup()
     desc = "Auto-process closed prompts when idle in normal mode",
   })
 
-  vim.api.nvim_create_autocmd({ "BufRead", "BufNewFile" }, {
+  -- Clean up processed_prompts and inline placeholders when buffer is deleted
+  vim.api.nvim_create_autocmd({ "BufDelete", "BufWipeout" }, {
     group = group,
-    pattern = "*.codetyper/*",
-    callback = function()
-      set_coder_filetype()
-    end,
-    desc = "Set filetype for coder files",
-  })
-
-  vim.api.nvim_create_autocmd("BufWipeout", {
-    group = group,
-    pattern = "*.codetyper/*",
+    pattern = "*",
     callback = function(ev)
       local bufnr = ev.buf
+      -- Purge processed_prompts entries for this buffer
       for key, _ in pairs(constants.processed_prompts) do
         if key:match("^" .. bufnr .. ":") then
           constants.processed_prompts[key] = nil
         end
       end
-      clear_auto_opened(bufnr)
+      -- Clean up any orphaned inline placeholders for this buffer
+      pcall(function()
+        local tp = require("codetyper.core.thinking_placeholder")
+        if tp.cleanup_buffer then
+          tp.cleanup_buffer(bufnr)
+        end
+      end)
     end,
-    desc = "Cleanup on coder buffer close",
+    desc = "Clean up processed prompts and placeholders on buffer close",
   })
 
   vim.api.nvim_create_autocmd({ "BufWritePost", "BufNewFile" }, {
@@ -125,15 +121,11 @@ local function setup()
     pattern = "*",
     callback = function(ev)
       local filepath = ev.file or vim.fn.expand("%:p")
-      if filepath:match("%.codetyper%.") or filepath:match("tree%.log$") then
+      if filepath:match("node_modules") or filepath:match("%.git/") then
         return
       end
-      if filepath:match("node_modules") or filepath:match("%.git/") or filepath:match("%.codetyper/") then
-        return
-      end
-      schedule_tree_update()
 
-      local indexer_loaded, indexer = pcall(require, "codetyper.indexer")
+      local indexer_loaded, indexer = pcall(require, "codetyper.features.indexer")
       if indexer_loaded then
         indexer.schedule_index_file(filepath)
       end
@@ -145,29 +137,7 @@ local function setup()
         end, 500)
       end
     end,
-    desc = "Update tree.log, index, and brain on file creation/save",
-  })
-
-  vim.api.nvim_create_autocmd("BufDelete", {
-    group = group,
-    pattern = "*",
-    callback = function(ev)
-      local filepath = ev.file or ""
-      if filepath == "" or filepath:match("%.codetyper%.") or filepath:match("tree%.log$") then
-        return
-      end
-      schedule_tree_update()
-    end,
-    desc = "Update tree.log on file deletion",
-  })
-
-  vim.api.nvim_create_autocmd("DirChanged", {
-    group = group,
-    pattern = "*",
-    callback = function()
-      schedule_tree_update()
-    end,
-    desc = "Update tree.log on directory change",
+    desc = "Update index and brain on file creation/save",
   })
 
   vim.api.nvim_create_autocmd("VimLeavePre", {

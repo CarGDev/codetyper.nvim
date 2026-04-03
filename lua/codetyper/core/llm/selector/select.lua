@@ -51,7 +51,18 @@ local function query_brain_context(prompt, file_path)
   return result
 end
 
+--- Check if Ollama is configured (has host set)
+---@return boolean
+local function is_ollama_configured()
+  local ok, codetyper = pcall(require, "codetyper")
+  if not ok then return false end
+  local config = codetyper.get_config()
+  return config and config.llm and config.llm.ollama and config.llm.ollama.host ~= nil
+end
+
 --- Select the best provider
+--- Strategy: default to Ollama if configured (free, local), fall back to Copilot.
+--- Brain memories boost confidence but are NOT required for Ollama selection.
 ---@param prompt string
 ---@param context table
 ---@return table SelectionResult
@@ -72,17 +83,29 @@ local function select_provider(prompt, context)
   local provider = "copilot"
   local reason = ""
 
-  if brain_context.count >= MIN_MEMORIES_FOR_LOCAL and combined_confidence >= MIN_RELEVANCE_FOR_LOCAL then
+  -- Default to Ollama if configured — it's free and local.
+  -- Brain memories and historical accuracy boost confidence for pondering decisions,
+  -- but Ollama is always tried first when available.
+  if is_ollama_configured() then
     provider = "ollama"
-    reason = string.format(
-      "Rich context: %d memories (%.0f%% relevance), historical: %.0f%%",
-      brain_context.count, brain_context.relevance * 100, historical_confidence * 100
-    )
-  elseif brain_context.count > 0 and combined_confidence >= 0.4 then
-    provider = "ollama"
-    reason = string.format("Moderate context: %d memories, will verify", brain_context.count)
+    if brain_context.count >= MIN_MEMORIES_FOR_LOCAL and combined_confidence >= MIN_RELEVANCE_FOR_LOCAL then
+      reason = string.format(
+        "Ollama + rich context: %d memories (%.0f%% relevance), historical: %.0f%%",
+        brain_context.count, brain_context.relevance * 100, historical_confidence * 100
+      )
+      -- High confidence — less likely to ponder
+      combined_confidence = math.max(combined_confidence, 0.7)
+    elseif brain_context.count > 0 then
+      reason = string.format("Ollama + moderate context: %d memories, will verify if needed", brain_context.count)
+      combined_confidence = math.max(combined_confidence, 0.4)
+    else
+      reason = "Ollama first (free, local) — will escalate on failure or low confidence"
+      -- Low confidence triggers pondering/verification with Copilot
+      combined_confidence = 0.3
+    end
   else
-    reason = string.format("Insufficient context: %d memories, using Copilot", brain_context.count)
+    reason = "Ollama not configured, using Copilot"
+    combined_confidence = 0.9
   end
 
   return {

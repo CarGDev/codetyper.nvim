@@ -245,7 +245,7 @@ local function get_suggestions(prefix, context)
   end
 
   -- Get completions from indexer
-  local ok_indexer, indexer = pcall(require, "codetyper.indexer")
+  local ok_indexer, indexer = pcall(require, "codetyper.features.indexer")
   if ok_indexer then
     local index = indexer.load_index()
     if index and index.symbols then

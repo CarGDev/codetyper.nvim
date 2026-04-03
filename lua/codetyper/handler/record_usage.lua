@@ -31,6 +31,14 @@ local function record_usage(model, input_tokens, output_tokens, cached_tokens)
     is_free = is_free_model(model),
   })
 
+  -- Cap usage entries to prevent unbounded memory growth
+  if #state.usage > 10000 then
+    local trim = math.floor(#state.usage * 0.2)
+    for _ = 1, trim do
+      table.remove(state.usage, 1)
+    end
+  end
+
   save_to_disk()
 
   if state.win and vim.api.nvim_win_is_valid(state.win) then

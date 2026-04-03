@@ -61,10 +61,18 @@ local function format_log(level, module, message)
   return string.format("[%s] [%s] [%s] %s | %s", timestamp, level, module, caller, message)
 end
 
---- Write log to file
+--- Max log file size before rotation (512KB)
+local MAX_LOG_SIZE = 512 * 1024
+
+--- Write log to file (with size-based rotation)
 ---@param message string Log message
 local function write_to_file(message)
   local log = get_logger()
+  -- Rotate if file is too large
+  local stat = vim.loop.fs_stat(log.log_file)
+  if stat and stat.size > MAX_LOG_SIZE then
+    os.remove(log.log_file)
+  end
   local f = io.open(log.log_file, "a")
   if f then
     f:write(message .. "\n")
@@ -94,7 +102,6 @@ end
 function M.info(module, message)
   local formatted = format_log("INFO", module, message)
   write_to_file(formatted)
-  vim.notify("[codetyper] " .. message, vim.log.levels.INFO)
 end
 
 --- Log warning message
@@ -103,7 +110,6 @@ end
 function M.warn(module, message)
   local formatted = format_log("WARN", module, message)
   write_to_file(formatted)
-  vim.notify("[codetyper] " .. message, vim.log.levels.WARN)
 end
 
 --- Log error message

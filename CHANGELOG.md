@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-04-03
+
+### Added
+
+- **Ollama-first smart selection** — Plugin now tries Ollama (free, local) first and automatically escalates to Copilot on failure or low confidence. Includes pondering (cross-validation) when confidence is moderate. Enabled by default via `smart_selection = true`
+- **Ollama health check** — Async health check (cached 60s) skips Ollama when offline instead of hard-failing
+- **Thinking-only detection** — When LLM responds with only a `@thinking` block (no code), the response is shown in the explain window instead of injecting empty code into the buffer
+- **Buffer cleanup on close** — `BufDelete`/`BufWipeout` now purges `processed_prompts` entries and orphaned throbbers/placeholders for the closed buffer
+- **Worker stale pruning** — Active workers older than 5 minutes are automatically pruned on new worker creation
+- **Placeholder buffer cleanup** — `thinking_placeholder.cleanup_buffer()` stops throbbers and removes extmarks when a buffer is deleted
+
+### Changed
+
+- **Default provider** — Changed from `"ollama"` to `"copilot"` (smart selection handles Ollama-first logic)
+- **Copilot fallback model** — Changed from `"gpt-4o-mini"` to `"claude-sonnet-4"` to match config default
+- **Notification reduction** — Removed `vim.notify` from `notify_stage`, `logger.info`, `logger.warn`, and scheduler patch stages. Status updates now only show in the inline placeholder and thinking window
+- **Scheduler cleanup** — Replaced random 1% cleanup chance with deterministic 100-tick interval (~10s)
+- **Patch flush** — Replaced unbounded recursive `vim.defer_fn` with single-timer retry (max 60 retries)
+- **Patch ordering** — `flush_pending_smart` now sorts patches bottom-to-top to prevent line number corruption when applying multiple patches to the same buffer
+- **Queue listeners** — Replaced array-index IDs with stable counter-based map so removal doesn't shift other listener IDs
+- **Stats calculation** — `get_all_time_stats` uses shallow reference list instead of `vim.deepcopy` on usage history
+
+### Removed
+
+- **`.codetyper/` folder creation** — Plugin no longer creates a `.codetyper/` directory in user projects
+- **Gitignore injection** — Plugin no longer silently modifies `.gitignore` on setup
+- **Tree scanning** — Removed recursive filesystem scanning on startup and on every file save/delete/directory change
+- **Tree/gitignore commands** — Removed `:Coder tree`, `:Coder tree-view`, `:Coder gitignore`, `:CoderTree`, `:CoderTreeView`
+
+### Fixed
+
+- **Memory leaks** — Fixed 7 sources of unbounded memory growth:
+  - `save_timer.lua`: timer assigned to detached local variable, orphaning old timers
+  - `check_all_prompts.lua`: poll timer running forever if queue never emptied (now has 30s max timeout)
+  - `storage.lua`: debounce timer entries persisting after cancellation
+  - `state.entries`: in-memory log entries growing unbounded (now capped at 10K with 20% trim)
+  - `state.usage`: session usage entries growing unbounded (now capped at 10K)
+  - `logger.lua`: log file growing unbounded (now rotated at 512KB)
+  - `schedule_patch_flush`: recursive deferred calls stacking unboundedly
+- **Broken require paths** — Fixed `"codetyper.indexer"` → `"codetyper.features.indexer"` in 4 files (autocmds, suggestion, llm/init, cmp). Project indexing was completely non-functional
+- **Broken client require** — Fixed `"codetyper.llm."` → `"codetyper.core.llm.providers."` in worker.lua direct client path
+- **HTTP GET double callback** — Added `done` flag guard to GET handler matching POST handler pattern
+- **Worker cancel race** — Scheduler callback now checks event queue status before processing stale results
+- **Transform scope crash** — `resolve_selection_context` return value now guarded with pcall
+- **Path traversal** — `@../` patterns in file references are now rejected
+- **Block anchor performance** — Similarity function fast-rejects strings with >50% length difference before computing Levenshtein distance
+- **Marks out-of-bounds** — `mark_range` now clamps line numbers to valid buffer range
+- **Custom model validation** — Model name input validates format before saving
+
 ## [1.2.0] - 2026-04-01
 
 ### Added
@@ -462,7 +511,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fixed** — Bug fixes
 - **Security** — Vulnerability fixes
 
-[Unreleased]: https://github.com/cargdev/codetyper.nvim/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/cargdev/codetyper.nvim/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/cargdev/codetyper.nvim/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/cargdev/codetyper.nvim/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/cargdev/codetyper.nvim/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/cargdev/codetyper.nvim/compare/v1.0.4...v1.1.0

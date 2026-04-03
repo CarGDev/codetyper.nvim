@@ -1,9 +1,6 @@
 local utils = require("codetyper.support.utils")
 local transform = require("codetyper.core.transform")
-local cmd_tree = require("codetyper.adapters.nvim.commands.cmd_tree")
-local cmd_tree_view = require("codetyper.adapters.nvim.commands.cmd_tree_view")
 local cmd_reset = require("codetyper.adapters.nvim.commands.cmd_reset")
-local cmd_gitignore = require("codetyper.adapters.nvim.commands.cmd_gitignore")
 local cmd_index_project = require("codetyper.adapters.nvim.commands.cmd_index_project")
 local cmd_index_status = require("codetyper.adapters.nvim.commands.cmd_index_status")
 local cmd_llm_stats = require("codetyper.adapters.nvim.commands.cmd_llm_stats")
@@ -19,10 +16,7 @@ local function coder_cmd(args)
       local codetyper = require("codetyper")
       utils.notify("Codetyper.nvim " .. codetyper.version, vim.log.levels.INFO)
     end,
-    tree = cmd_tree,
-    ["tree-view"] = cmd_tree_view,
     reset = cmd_reset,
-    gitignore = cmd_gitignore,
     ["transform-selection"] = transform.cmd_transform_selection,
     ["index-project"] = cmd_index_project,
     ["index-status"] = cmd_index_status,

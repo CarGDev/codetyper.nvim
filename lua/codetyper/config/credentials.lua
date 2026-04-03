@@ -373,12 +373,18 @@ function M.interactive_copilot_config(silent)
         prompt = "Enter custom model name: ",
         default = current_model,
       }, function(custom_model)
-        if custom_model and custom_model ~= "" then
-          M.save_and_notify("copilot", {
-            model = custom_model,
-            configured = true,
-          })
+        if not custom_model or custom_model == "" then
+          return
         end
+        -- Basic validation: model names should be alphanumeric with dashes/dots/colons
+        if not custom_model:match("^[%w%.%-/:]+$") then
+          vim.notify("Invalid model name: " .. custom_model, vim.log.levels.WARN)
+          return
+        end
+        M.save_and_notify("copilot", {
+          model = custom_model,
+          configured = true,
+        })
       end)
     else
       M.save_and_notify("copilot", {

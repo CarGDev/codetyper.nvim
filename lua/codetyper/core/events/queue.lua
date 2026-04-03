@@ -35,10 +35,6 @@ local M = {}
 ---@type PromptEvent[]
 local queue = {}
 
---- Event listeners (observer pattern)
----@type function[]
-local listeners = {}
-
 --- Event ID counter
 local event_counter = 0
 
@@ -60,12 +56,18 @@ function M.hash_content(content)
   return string.format("%x", hash)
 end
 
+--- Listener ID counter (stable, never reused)
+local listener_counter = 0
+
+--- Listener map: id -> callback (stable IDs that don't shift on removal)
+local listener_map = {}
+
 --- Notify all listeners of queue change
 ---@param event_type string "enqueue"|"dequeue"|"update"|"cancel"
 ---@param event PromptEvent|nil The affected event
 local function notify_listeners(event_type, event)
-  for _, listener in ipairs(listeners) do
-    pcall(listener, event_type, event, #queue)
+  for _, cb in pairs(listener_map) do
+    pcall(cb, event_type, event, #queue)
   end
 end
 
@@ -73,16 +75,15 @@ end
 ---@param callback function(event_type: string, event: PromptEvent|nil, queue_size: number)
 ---@return number Listener ID for removal
 function M.add_listener(callback)
-  table.insert(listeners, callback)
-  return #listeners
+  listener_counter = listener_counter + 1
+  listener_map[listener_counter] = callback
+  return listener_counter
 end
 
 --- Remove event listener
 ---@param listener_id number
 function M.remove_listener(listener_id)
-  if listener_id > 0 and listener_id <= #listeners then
-    table.remove(listeners, listener_id)
-  end
+  listener_map[listener_id] = nil
 end
 
 --- Compare events for priority sorting

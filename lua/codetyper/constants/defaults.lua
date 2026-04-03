@@ -5,7 +5,8 @@ local M = {}
 ---@type CoderConfig
 local defaults = {
   llm = {
-    provider = "ollama", -- Options: "ollama", "copilot"
+    provider = "copilot", -- Options: "ollama", "copilot"
+    smart_selection = true, -- Try Ollama first if available, escalate to Copilot on failure/low confidence
     ollama = {
       host = "http://localhost:11434",
       model = "deepseek-coder:6.7b",

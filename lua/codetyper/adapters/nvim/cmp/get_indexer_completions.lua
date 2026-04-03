@@ -4,7 +4,7 @@
 local function get_indexer_completions(prefix)
   local items = {}
 
-  local indexer_loaded, indexer = pcall(require, "codetyper.indexer")
+  local indexer_loaded, indexer = pcall(require, "codetyper.features.indexer")
   if not indexer_loaded then
     return items
   end

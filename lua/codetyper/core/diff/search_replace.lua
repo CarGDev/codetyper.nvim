@@ -174,9 +174,15 @@ local function similarity(s1, s2)
   if s1 == s2 then
     return 1.0
   end
-  local max_len = math.max(#s1, #s2)
+  local len1, len2 = #s1, #s2
+  local max_len = math.max(len1, len2)
   if max_len == 0 then
     return 1.0
+  end
+  -- Fast reject: if length difference is too large, skip expensive levenshtein
+  local min_len = math.min(len1, len2)
+  if min_len < max_len * 0.5 then
+    return min_len / max_len
   end
   local distance = levenshtein(s1, s2)
   return 1.0 - (distance / max_len)

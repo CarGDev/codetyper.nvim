@@ -26,16 +26,20 @@ end
 function M.get_all_time_stats()
   load_from_history()
 
-  local all_usage = vim.deepcopy(state.all_usage)
+  -- Build combined list without deep-copying all_usage (avoids large temp allocation)
+  local combined = {}
+  for _, usage in ipairs(state.all_usage) do
+    combined[#combined + 1] = usage
+  end
   for _, usage in ipairs(state.usage) do
-    table.insert(all_usage, usage)
+    combined[#combined + 1] = usage
   end
 
-  local stats = aggregate_mod.aggregate_usage(all_usage, is_free_model, calculate_savings)
+  local stats = aggregate_mod.aggregate_usage(combined, is_free_model, calculate_savings)
 
-  if #all_usage > 0 then
-    local oldest = all_usage[1].timestamp or os.time()
-    for _, usage in ipairs(all_usage) do
+  if #combined > 0 then
+    local oldest = combined[1].timestamp or os.time()
+    for _, usage in ipairs(combined) do
       if usage.timestamp and usage.timestamp < oldest then
         oldest = usage.timestamp
       end
@@ -44,6 +48,8 @@ function M.get_all_time_stats()
   else
     stats.time_span = 0
   end
+
+  combined = nil -- Release reference
 
   return stats
 end

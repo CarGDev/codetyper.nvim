@@ -85,7 +85,7 @@ function M.build_context(target_path, prompt_type)
     local project_root = utils.get_project_root()
     context.project_root = project_root
 
-    local ok_indexer, indexer = pcall(require, "codetyper.indexer")
+    local ok_indexer, indexer = pcall(require, "codetyper.features.indexer")
     if ok_indexer then
       local status = indexer.get_status()
       if status.indexed then

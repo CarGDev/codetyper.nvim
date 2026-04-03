@@ -86,15 +86,29 @@ local function check_all_prompts()
     idx = idx + 1
 
     -- Wait for the scheduler to finish this tag before processing next
-    -- Poll every 500ms — check if the queue is empty
+    -- Poll every 1s — check if the queue is empty, with 30s max timeout
     local poll_timer = vim.loop.new_timer()
+    local poll_start = os.clock()
+    local MAX_POLL_SECONDS = 30
+
     poll_timer:start(1000, 1000, vim.schedule_wrap(function()
+      local elapsed = os.clock() - poll_start
+
+      -- Force stop if polling too long
+      if elapsed > MAX_POLL_SECONDS then
+        poll_timer:stop()
+        poll_timer:close()
+        flog.warn("check_all", "poll timer timed out after " .. MAX_POLL_SECONDS .. "s")
+        return
+      end
+
       local queue = require("codetyper.core.events.queue")
       local pending = queue.pending_count()
       local processing = queue.processing_count()
 
       if pending == 0 and processing == 0 then
         poll_timer:stop()
+        poll_timer:close()
         -- Small delay for buffer to stabilize after injection
         vim.defer_fn(function()
           process_next()

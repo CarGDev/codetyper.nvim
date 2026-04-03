@@ -1187,40 +1187,40 @@ end
 ---@return number stale_count
 ---@return number deferred_count
 function M.flush_pending_smart()
-  local has_pending = false
+  -- Collect pending patches and sort bottom-to-top (highest line first)
+  -- so earlier injections don't shift later patches' line numbers
+  local pending = {}
   for _, p in ipairs(patches) do
     if p.status == "pending" then
-      has_pending = true
-      break
+      table.insert(pending, p)
     end
   end
-  if not has_pending then
+  if #pending == 0 then
     return 0, 0, 0
   end
-  flog.info("patch", ">>> flush_pending_smart ENTERED") -- TODO: remove after debugging
+
+  table.sort(pending, function(a, b)
+    local a_line = a.injection_range and a.injection_range.start_line or 0
+    local b_line = b.injection_range and b.injection_range.start_line or 0
+    return a_line > b_line
+  end)
+
   local applied = 0
   local stale = 0
   local deferred = 0
 
-  for _, p in ipairs(patches) do
-    if p.status == "pending" then
-      flog.info("patch", string.format("flush trying: id=%s strategy=%s range=%s", -- TODO: remove after debugging
-        p.id, p.injection_strategy or "nil",
-        p.injection_range and (p.injection_range.start_line .. "-" .. p.injection_range.end_line) or "nil"
-      ))
-      logger.info("patch", string.format("flush trying: id=%s", p.id))
-      local success, err = M.smart_apply(p)
-      flog.info("patch", string.format("flush result: id=%s success=%s err=%s", p.id, tostring(success), tostring(err or "nil"))) -- TODO: remove after debugging
-      if success then
-        applied = applied + 1
-        logger.info("patch", string.format("flush result: id=%s success", p.id))
-      elseif err == "user_typing" then
-        deferred = deferred + 1
-        logger.info("patch", string.format("flush result: id=%s deferred (user_typing)", p.id))
-      else
-        stale = stale + 1
-        logger.info("patch", string.format("flush result: id=%s stale (%s)", p.id, tostring(err)))
-      end
+  for _, p in ipairs(pending) do
+    logger.info("patch", string.format("flush trying: id=%s", p.id))
+    local success, err = M.smart_apply(p)
+    if success then
+      applied = applied + 1
+      logger.info("patch", string.format("flush result: id=%s success", p.id))
+    elseif err == "user_typing" then
+      deferred = deferred + 1
+      logger.info("patch", string.format("flush result: id=%s deferred (user_typing)", p.id))
+    else
+      stale = stale + 1
+      logger.info("patch", string.format("flush result: id=%s stale (%s)", p.id, tostring(err)))
     end
   end
 

@@ -269,11 +269,14 @@ function M.cmd_transform_selection()
   end
 
   if has_selection and selection_data then
-    sel_context = scope_mod.resolve_selection_context(bufnr, start_line, end_line)
-    is_whole_file = sel_context.type == "file"
+    local ok_sel, resolved_sel = pcall(scope_mod.resolve_selection_context, bufnr, start_line, end_line)
+    if ok_sel and resolved_sel then
+      sel_context = resolved_sel
+    end
+    is_whole_file = sel_context and sel_context.type == "file" or false
 
     -- Expand injection range to cover full enclosing scopes when needed
-    if sel_context.type == "whole_function" or sel_context.type == "multi_function" then
+    if sel_context and (sel_context.type == "whole_function" or sel_context.type == "multi_function") then
       injection_range.start_line = sel_context.expanded_start
       injection_range.end_line = sel_context.expanded_end
       start_line = sel_context.expanded_start

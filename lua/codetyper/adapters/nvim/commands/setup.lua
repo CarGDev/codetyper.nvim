@@ -1,8 +1,6 @@
 local utils = require("codetyper.support.utils")
 local transform = require("codetyper.core.transform")
 local coder_cmd = require("codetyper.adapters.nvim.commands.coder_cmd")
-local cmd_tree = require("codetyper.adapters.nvim.commands.cmd_tree")
-local cmd_tree_view = require("codetyper.adapters.nvim.commands.cmd_tree_view")
 local cmd_index_project = require("codetyper.adapters.nvim.commands.cmd_index_project")
 local cmd_index_status = require("codetyper.adapters.nvim.commands.cmd_index_status")
 local setup_keymaps = require("codetyper.adapters.nvim.commands.setup_keymaps")
@@ -14,10 +12,7 @@ local function setup()
     complete = function()
       return {
         "version",
-        "tree",
-        "tree-view",
         "reset",
-        "gitignore",
         "transform-selection",
         "index-project",
         "index-status",
@@ -32,14 +27,6 @@ local function setup()
     end,
     desc = "Codetyper.nvim commands",
   })
-
-  vim.api.nvim_create_user_command("CoderTree", function()
-    cmd_tree()
-  end, { desc = "Refresh tree.log" })
-
-  vim.api.nvim_create_user_command("CoderTreeView", function()
-    cmd_tree_view()
-  end, { desc = "View tree.log" })
 
   vim.api.nvim_create_user_command("CoderTransformSelection", function()
     transform.cmd_transform_selection()

@@ -38,7 +38,7 @@ local function get_model(context)
     end
   end
 
-  return "gpt-4o-mini"
+  return "claude-sonnet-4"
 end
 
 --- Track if we've already suggested Ollama fallback this session

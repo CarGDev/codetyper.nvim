@@ -9,7 +9,7 @@
 
 local M = {}
 
-M.version = "1.2.0"
+M.version = "1.3.0"
 
 ---@type CoderConfig
 M.config = {}
@@ -29,9 +29,7 @@ function M.setup(opts)
 
   -- Initialize modules
   local commands_setup = require("codetyper.adapters.nvim.commands.setup")
-  local gitignore = require("codetyper.support.gitignore")
   local autocmds_setup = require("codetyper.adapters.nvim.autocmds.setup")
-  local tree = require("codetyper.support.tree")
   local completion = require("codetyper.features.completion.inline")
 
   -- Register commands
@@ -42,12 +40,6 @@ function M.setup(opts)
 
   -- Setup file reference completion
   completion.setup()
-
-  -- Ensure .gitignore has coder files excluded
-  gitignore.ensure_ignored()
-
-  -- Initialize tree logging (creates .codetyper folder and initial tree.log)
-  tree.setup()
 
   -- Initialize project indexer if enabled
   if M.config.indexer and M.config.indexer.enabled then

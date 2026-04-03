@@ -43,6 +43,9 @@ function M.smart_generate(prompt, context, callback)
   client.generate(prompt, context, function(response, err)
     if err then
       if selection.provider == "ollama" then
+        flog.info("selector", "Ollama failed (" .. tostring(err) .. "), falling back to Copilot")
+        -- Record failure so accuracy stats reflect it
+        accuracy.record("ollama", false)
         local copilot = require("codetyper.core.llm.providers.copilot")
         copilot.generate(prompt, context, function(fb_response, fb_err)
           callback(fb_response, fb_err, {

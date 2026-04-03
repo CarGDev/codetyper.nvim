@@ -2,18 +2,18 @@
 local get_history_path = require("codetyper.utils.get_history_path")
 local utils = require("codetyper.support.utils")
 local state = require("codetyper.state.state")
+local constants = require("codetyper.constants.constants")
 
-local save_timer = require("codetyper.constants.constants").save_timer
 local function save_to_disk()
   -- Cancel existing timer
-  if save_timer then
-    save_timer:stop()
-    save_timer = nil
+  if constants.save_timer then
+    constants.save_timer:stop()
+    constants.save_timer = nil
   end
 
   -- Debounce writes (500ms)
-  save_timer = vim.loop.new_timer()
-  save_timer:start(
+  constants.save_timer = vim.loop.new_timer()
+  constants.save_timer:start(
     500,
     0,
     vim.schedule_wrap(function()
@@ -41,7 +41,7 @@ local function save_to_disk()
         utils.write_file(history_path, json)
       end
 
-      save_timer = nil
+      constants.save_timer = nil
     end)
   )
 end

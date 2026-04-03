@@ -148,7 +148,8 @@ function M.save(key, data, root, immediate)
   -- Debounced write
   local timer_key = root .. ":" .. key
   if timers[timer_key] then
-    timers[timer_key]:stop()
+    pcall(function() timers[timer_key]:stop() end)
+    timers[timer_key] = nil
   end
 
   timers[timer_key] = vim.defer_fn(function()
@@ -187,10 +188,20 @@ function M.flush(key, root)
   return success
 end
 
---- Flush all dirty keys to disk
+--- Flush all dirty keys to disk and stop pending timers
 ---@param root? string Project root
 function M.flush_all(root)
   root = root or utils.get_project_root()
+
+  -- Stop all debounce timers for this root
+  local prefix = root .. ":"
+  for timer_key, timer in pairs(timers) do
+    if timer_key:sub(1, #prefix) == prefix then
+      pcall(function() timer:stop() end)
+      timers[timer_key] = nil
+    end
+  end
+
   if not dirty[root] then
     return
   end

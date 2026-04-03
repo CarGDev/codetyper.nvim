@@ -101,9 +101,11 @@ function M.get(url, headers, callback)
 
   flog.debug("http", "GET " .. url) -- TODO: remove after debugging
 
+  local done = false
   vim.fn.jobstart(cmd, {
     stdout_buffered = true,
     on_stdout = function(_, data)
+      if done then return end
       if not data or #data == 0 or (data[1] == "" and #data == 1) then
         return
       end
@@ -111,25 +113,31 @@ function M.get(url, headers, callback)
       local response_text = table.concat(data, "\n")
       local ok, parsed = pcall(vim.json.decode, response_text)
       if not ok then
+        done = true
         vim.schedule(function()
           callback(nil, "Failed to parse response")
         end)
         return
       end
 
+      done = true
       vim.schedule(function()
         callback(parsed, nil)
       end)
     end,
     on_stderr = function(_, data)
+      if done then return end
       if data and #data > 0 and data[1] ~= "" then
+        done = true
         vim.schedule(function()
           callback(nil, "HTTP request failed: " .. table.concat(data, "\n"))
         end)
       end
     end,
     on_exit = function(_, code)
+      if done then return end
       if code ~= 0 then
+        done = true
         vim.schedule(function()
           callback(nil, "curl exited with code: " .. code)
         end)

@@ -195,4 +195,26 @@ function M.clear_inline(event_id)
   inline_status[event_id] = nil
 end
 
+--- Clean up all placeholders and inline status entries for a deleted buffer.
+---@param bufnr number Buffer number being deleted
+function M.cleanup_buffer(bufnr)
+  -- Clean up placeholders for this buffer
+  for event_id, p in pairs(placeholders) do
+    if p.bufnr == bufnr then
+      marks.delete(p.start_mark)
+      marks.delete(p.end_mark)
+      placeholders[event_id] = nil
+    end
+  end
+  -- Clean up inline status entries for this buffer
+  for event_id, ent in pairs(inline_status) do
+    if ent.bufnr == bufnr then
+      if ent.throbber then
+        ent.throbber:stop()
+      end
+      inline_status[event_id] = nil
+    end
+  end
+end
+
 return M

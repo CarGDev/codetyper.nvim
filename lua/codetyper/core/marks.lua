@@ -43,6 +43,12 @@ end
 ---@return Mark end_mark
 function M.mark_range(buffer, start_line, end_line, end_col_0)
   end_col_0 = end_col_0 or 0
+  -- Clamp to valid buffer range
+  if vim.api.nvim_buf_is_valid(buffer) then
+    local line_count = vim.api.nvim_buf_line_count(buffer)
+    start_line = math.max(1, math.min(start_line, line_count))
+    end_line = math.max(1, math.min(end_line, line_count))
+  end
   local start_mark = M.mark_point(buffer, start_line - 1, 0)
   local end_mark = M.mark_point(buffer, end_line - 1, end_col_0)
   return start_mark, end_mark

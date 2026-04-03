@@ -128,10 +128,6 @@ local function run_iteration(event, response, iteration, conversation, on_comple
 
         flog.info("agent.loop", string.format("follow-up response_len=%d", #new_response)) -- TODO: remove after debugging
 
-        -- Strip thinking block for cleaner parsing
-        local strip_thinking = require("codetyper.core.scheduler.worker")
-        -- Just use the raw response, thinking is stripped in parse_response
-
         -- Recurse
         run_iteration(event, new_response, iteration + 1, conversation, on_complete)
       end)
@@ -148,10 +144,12 @@ function M.start(event, initial_response, system_prompt, on_complete)
   flog.info("agent.loop", ">>> starting agent loop") -- TODO: remove after debugging
 
   -- Initialize conversation with the original prompt
+  -- Keep system_prompt separate from the messages array to avoid
+  -- mixed hash/array table issues (ipairs skips hash keys)
   local conversation = {
-    system_prompt = system_prompt,
     { role = "user", content = event.prompt_content or "" },
   }
+  conversation.system_prompt = system_prompt
 
   run_iteration(event, initial_response, 1, conversation, on_complete)
 end
