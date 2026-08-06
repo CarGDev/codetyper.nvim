@@ -2,6 +2,9 @@
 
 local M = {}
 
+--- Relative path (from project root) to the cost/usage history file
+M.COST_HISTORY_FILE = "/.codetyper/cost_history.json"
+
 ---@type CoderConfig
 local defaults = {
   llm = {
@@ -19,6 +22,11 @@ local defaults = {
   },
   auto_gitignore = false, -- Disabled - no longer creating project folders
   auto_index = false, -- Auto-create coder companion files on file open
+  patterns = {
+    open_tag = "/@", -- Opening tag for inline prompts
+    close_tag = "@/", -- Closing tag for inline prompts
+    file_pattern = "*.coder.*", -- Pattern for coder companion files
+  },
   indexer = {
     enabled = true, -- Enable project indexing
     auto_index = true, -- Index files on save

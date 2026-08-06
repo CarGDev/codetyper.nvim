@@ -41,4 +41,19 @@ function M.format_duration(seconds)
   end
 end
 
+--- Format an integer count with thousands separators (e.g. 1500 -> "1,500")
+---@param n number
+---@return string
+function M.format_count(n)
+  n = math.floor(n or 0)
+  local formatted = tostring(n)
+  local sign, int_part = formatted:match("^(-?)(%d+)$")
+  if not int_part then
+    return formatted
+  end
+  local reversed = int_part:reverse():gsub("(%d%d%d)", "%1,")
+  local result = reversed:reverse():gsub("^,", "")
+  return (sign or "") .. result
+end
+
 return M

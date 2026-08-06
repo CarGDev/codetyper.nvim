@@ -80,40 +80,22 @@ function M.is_safe_to_inject()
   return true, nil
 end
 
---- Get the provider for escalation
+--- Get the provider for escalation. Escalation always happens away from
+--- Ollama (e.g. after an Ollama failure/low confidence), so the target is
+--- always Copilot — never re-select Ollama here even if it's still
+--- configured, otherwise we'd loop back to the provider that just failed.
 ---@return string
 local function get_remote_provider()
-  local ok, codetyper = pcall(require, "codetyper")
-  if ok then
-    local config = codetyper.get_config()
-    if config and config.llm and config.llm.provider then
-      if config.llm.provider == "ollama" then
-        return "copilot"
-      end
-      return config.llm.provider
-    end
-  end
   return "copilot"
 end
 
---- Get the primary provider from config
+--- Get the primary provider to use (Copilot-first, auth-gated; Ollama only
+--- when Copilot auth is invalid/unavailable). Delegates to the single
+--- provider_resolver so this stays consistent with the selector and llm/init.
 ---@return string
 local function get_primary_provider()
-  local ok, codetyper = pcall(require, "codetyper")
-  if ok then
-    local config = codetyper.get_config()
-    if config and config.llm then
-      -- If smart_selection is on, let the selector decide (it handles fallback)
-      if config.llm.smart_selection then
-        return "ollama"
-      end
-      -- Use configured provider directly
-      if config.llm.provider then
-        return config.llm.provider
-      end
-    end
-  end
-  return "copilot"
+  local resolver = require("codetyper.core.llm.provider_resolver")
+  return resolver.resolve_sync()
 end
 
 --- Retry event with additional context

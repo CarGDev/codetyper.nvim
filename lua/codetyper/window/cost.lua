@@ -19,6 +19,11 @@ local view_deps = {
   formatters = fmt,
 }
 
+--- Last fetched Copilot quota (cached across refreshes so we don't block the
+--- window on a network round-trip every time)
+local last_quota = nil
+local quota_fetch_in_flight = false
+
 --- Refresh the cost window content
 function M.refresh_window()
   if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then
@@ -27,11 +32,38 @@ function M.refresh_window()
 
   local session_stats = stats_mod.get_stats()
   local all_time_stats = stats_mod.get_all_time_stats()
+  view_deps.copilot_quota = last_quota
   local lines = view.generate_content(session_stats, all_time_stats, view_deps)
 
   vim.bo[state.buf].modifiable = true
   vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, lines)
   vim.bo[state.buf].modifiable = false
+
+  -- Kick off an async fetch of live Copilot usage (once at a time); only
+  -- re-render if the fetched data actually changed, to avoid a refresh loop
+  -- (the auth module itself caches the underlying HTTP call for 5 minutes).
+  if quota_fetch_in_flight then
+    return
+  end
+  quota_fetch_in_flight = true
+  pcall(function()
+    local copilot_usage = require("codetyper.core.cost.copilot_usage")
+    copilot_usage.get_usage(function(quota, err)
+      quota_fetch_in_flight = false
+      if not quota then
+        return
+      end
+      local changed = not last_quota
+        or last_quota.credits_used ~= quota.credits_used
+        or last_quota.entitlement ~= quota.entitlement
+      last_quota = quota
+      if changed and state.buf and vim.api.nvim_buf_is_valid(state.buf) then
+        vim.schedule(function()
+          M.refresh_window()
+        end)
+      end
+    end)
+  end)
 end
 
 --- Open the cost estimation window

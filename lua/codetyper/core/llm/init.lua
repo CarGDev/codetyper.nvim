@@ -6,14 +6,16 @@ local extract_code = require("codetyper.core.llm.shared.extract_code")
 local build_system_prompt = require("codetyper.core.llm.shared.build_system_prompt")
 
 --- Get the appropriate LLM client based on configuration
+--- NOTE: if provider_name is not given, this uses the resolver's best-effort
+--- synchronous snapshot (Copilot-first, auth-gated). For a fully accurate,
+--- freshly-verified decision use M.get_client_async().
 ---@param provider_name string|nil Override provider name
 ---@return table LLM client module
 function M.get_client(provider_name)
   local provider = provider_name
   if not provider then
-    local codetyper = require("codetyper")
-    local config = codetyper.get_config()
-    provider = config.llm.provider
+    local resolver = require("codetyper.core.llm.provider_resolver")
+    provider = resolver.resolve_sync()
   end
 
   if provider == "ollama" then
@@ -21,8 +23,23 @@ function M.get_client(provider_name)
   elseif provider == "copilot" then
     return require("codetyper.core.llm.providers.copilot")
   else
-    error("Unknown LLM provider: " .. provider .. ". Supported: ollama, copilot, claude")
+    error("Unknown LLM provider: " .. provider .. ". Supported: ollama, copilot")
   end
+end
+
+--- Async, auth-verified client resolution (Copilot-first, Ollama only as
+--- fallback when Copilot auth is invalid/unavailable). Prefer this over
+--- get_client() when you can afford a callback.
+---@param callback fun(client: table|nil, provider: string|nil, err: string|nil)
+function M.get_client_async(callback)
+  local resolver = require("codetyper.core.llm.provider_resolver")
+  resolver.resolve(function(provider, err)
+    if err then
+      callback(nil, nil, err)
+      return
+    end
+    callback(M.get_client(provider), provider, nil)
+  end)
 end
 
 --- Generate code from a prompt

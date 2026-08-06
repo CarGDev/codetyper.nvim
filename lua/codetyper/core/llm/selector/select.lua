@@ -1,5 +1,6 @@
 --- Provider selection logic — pick Ollama vs Copilot based on context
 local accuracy = require("codetyper.core.llm.selector.accuracy")
+local provider_resolver = require("codetyper.core.llm.provider_resolver")
 
 local MIN_MEMORIES_FOR_LOCAL = 3
 local MIN_RELEVANCE_FOR_LOCAL = 0.6
@@ -51,18 +52,12 @@ local function query_brain_context(prompt, file_path)
   return result
 end
 
---- Check if Ollama is configured (has host set)
----@return boolean
-local function is_ollama_configured()
-  local ok, codetyper = pcall(require, "codetyper")
-  if not ok then return false end
-  local config = codetyper.get_config()
-  return config and config.llm and config.llm.ollama and config.llm.ollama.host ~= nil
-end
-
 --- Select the best provider
---- Strategy: default to Ollama if configured (free, local), fall back to Copilot.
---- Brain memories boost confidence but are NOT required for Ollama selection.
+--- Strategy: Copilot-first, auth-gated. Ollama is only selected when
+--- Copilot authentication is invalid/unavailable (see provider_resolver).
+--- Brain memories and historical accuracy only affect pondering/verification
+--- confidence when Ollama ends up being the active provider — they never
+--- cause Ollama to be preferred over an authenticated Copilot.
 ---@param prompt string
 ---@param context table
 ---@return table SelectionResult
@@ -80,31 +75,27 @@ local function select_provider(prompt, context)
   local historical_confidence = accuracy.get_ollama_confidence()
   local combined_confidence = (memory_confidence * 0.6) + (historical_confidence * 0.4)
 
-  local provider = "copilot"
+  local provider = provider_resolver.resolve_sync()
   local reason = ""
 
-  -- Default to Ollama if configured — it's free and local.
-  -- Brain memories and historical accuracy boost confidence for pondering decisions,
-  -- but Ollama is always tried first when available.
-  if is_ollama_configured() then
-    provider = "ollama"
+  if provider == "ollama" then
     if brain_context.count >= MIN_MEMORIES_FOR_LOCAL and combined_confidence >= MIN_RELEVANCE_FOR_LOCAL then
       reason = string.format(
-        "Ollama + rich context: %d memories (%.0f%% relevance), historical: %.0f%%",
+        "Copilot unavailable, using Ollama + rich context: %d memories (%.0f%% relevance), historical: %.0f%%",
         brain_context.count, brain_context.relevance * 100, historical_confidence * 100
       )
       -- High confidence — less likely to ponder
       combined_confidence = math.max(combined_confidence, 0.7)
     elseif brain_context.count > 0 then
-      reason = string.format("Ollama + moderate context: %d memories, will verify if needed", brain_context.count)
+      reason = string.format("Copilot unavailable, using Ollama + moderate context: %d memories, will verify if needed", brain_context.count)
       combined_confidence = math.max(combined_confidence, 0.4)
     else
-      reason = "Ollama first (free, local) — will escalate on failure or low confidence"
-      -- Low confidence triggers pondering/verification with Copilot
+      reason = "Copilot unavailable, using Ollama — will escalate on failure or low confidence"
+      -- Low confidence triggers pondering/verification with Copilot (if it recovers)
       combined_confidence = 0.3
     end
   else
-    reason = "Ollama not configured, using Copilot"
+    reason = "Copilot authenticated — using Copilot"
     combined_confidence = 0.9
   end
 

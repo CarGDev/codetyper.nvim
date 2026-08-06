@@ -22,7 +22,9 @@ function M.inject(bufnr, code, opts)
     code = tostring(code)
   end
 
-  local lines = vim.split(code, "\n", { plain = true })
+  -- Empty code means "delete this range" — produce zero replacement lines
+  -- instead of a single blank placeholder line (vim.split("", "\n") -> {""}).
+  local lines = code == "" and {} or vim.split(code, "\n", { plain = true })
 
   -- Ensure every element is a string (protect against E5101)
   for i, line in ipairs(lines) do

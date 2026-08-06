@@ -255,11 +255,10 @@ return M
 ### Running Tests
 
 ```bash
-make test              # Run all tests
-make test-file F=x     # Run a specific test file
-make test-verbose      # Verbose output
-make lint              # Run luacheck
-make format            # Format with stylua
+make test                        # Run all tests (tests/spec/*.lua, plenary.busted)
+make test-file FILE=tests/spec/patch_spec.lua   # Run a specific test file
+make lint                        # Run luacheck
+make format                      # Format with stylua
 ```
 
 ### Manual Testing

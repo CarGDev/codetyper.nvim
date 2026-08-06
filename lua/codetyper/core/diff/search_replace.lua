@@ -469,15 +469,18 @@ function M.apply_block(content, block)
     end
   end
 
-  -- Apply indentation adjustment
+  -- Apply indentation adjustment. A truly empty replace (deletion) should
+  -- produce zero output lines, not a single blank placeholder line.
   local adjusted_replace = {}
-  for _, line in ipairs(replace_lines) do
-    if line:match("^" .. vim.pesc(replace_indent)) then
-      table.insert(adjusted_replace, original_indent .. line:sub(#replace_indent + 1))
-    elseif line:match("^%s*$") then
-      table.insert(adjusted_replace, "")
-    else
-      table.insert(adjusted_replace, original_indent .. line)
+  if block.replace ~= "" then
+    for _, line in ipairs(replace_lines) do
+      if line:match("^" .. vim.pesc(replace_indent)) then
+        table.insert(adjusted_replace, original_indent .. line:sub(#replace_indent + 1))
+      elseif line:match("^%s*$") then
+        table.insert(adjusted_replace, "")
+      else
+        table.insert(adjusted_replace, original_indent .. line)
+      end
     end
   end
 

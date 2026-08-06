@@ -122,8 +122,8 @@ add error handling and input validation
 ```lua
 require("codetyper").setup({
   llm = {
-    provider = "copilot", -- Fallback when smart_selection is off: "copilot" or "ollama"
-    smart_selection = true, -- Try Ollama first (free), escalate to Copilot on failure/low confidence
+    provider = "copilot", -- Copilot is always tried first (auth-gated)
+    smart_selection = true, -- Adds Ollama response verification ("pondering") + escalation
 
     copilot = {
       model = "claude-sonnet-4",
@@ -135,18 +135,45 @@ require("codetyper").setup({
       model = "deepseek-coder:6.7b",
     },
   },
+  -- Optional — these are the defaults, override only if you want different tags
+  patterns = {
+    open_tag = "/@",
+    close_tag = "@/",
+    file_pattern = "*.coder.*",
+  },
 })
 ```
+
+### Provider Priority
+
+Codetyper always tries **Copilot first**. Ollama is only used as a fallback
+when Copilot authentication is unavailable or invalid — it is **not**
+selected just because `llm.ollama.host` is configured. This is checked with
+a real token exchange (not just file presence), so a stale/expired token
+correctly falls back instead of silently failing requests.
+
+`smart_selection` no longer changes *which* provider is preferred — it only
+controls whether Ollama responses are cross-verified against Copilot
+("pondering") when Ollama ends up being used (i.e. when Copilot isn't
+authenticated).
 
 ### Credentials Management
 
 Credentials are stored in `~/.local/share/nvim/codetyper/configuration.json`.
 
 ```vim
+:CoderAuth              " Connect to GitHub Copilot (no-op if already connected)
 :CoderCredentials       " View status
 :CoderSwitchProvider    " Switch between Copilot and Ollama
 :CoderModel             " Quick switch Copilot model
 ```
+
+`:CoderAuth` first checks if Copilot is already authenticated (via a real
+token exchange, not just file presence). If not connected, it runs the
+standard GitHub OAuth Device Flow — the same client used by `copilot.vim`/
+`copilot.lua` — so it works even if you don't have those plugins installed.
+It opens the verification URL in your browser, shows you a code to enter,
+and polls until you authorize. No manual setup required.
 
 ---
 
@@ -154,7 +181,9 @@ Credentials are stored in `~/.local/share/nvim/codetyper/configuration.json`.
 
 ### GitHub Copilot
 
-Uses your existing Copilot subscription via OAuth. Requires `copilot.lua` or `copilot.vim`.
+Uses your GitHub Copilot subscription via OAuth. Reuses OAuth tokens from
+`copilot.lua`/`copilot.vim` if present, or run `:CoderAuth` to connect
+directly (no other plugin required).
 
 ```lua
 llm = {
@@ -167,11 +196,13 @@ Use `:CoderModel` to switch between Copilot models (gpt-4o, gpt-4.1, claude-sonn
 
 ### Ollama (Local)
 
-Run models locally with no API costs.
+Run models locally with no API costs. Used automatically as a fallback
+whenever Copilot authentication is unavailable/invalid — no need to switch
+`provider` manually.
 
 ```lua
 llm = {
-  provider = "ollama",
+  provider = "copilot", -- Copilot still tried first; Ollama used on auth failure
   ollama = {
     host = "http://localhost:11434",
     model = "deepseek-coder:6.7b",
@@ -203,6 +234,7 @@ llm = {
 | `:Coder credentials` | Show credentials status |
 | `:Coder switch-provider` | Switch provider |
 | `:Coder model` | Quick switch Copilot model |
+| `:Coder auth` | Connect to GitHub Copilot (no-op if already connected) |
 
 ### Standalone Commands
 
@@ -215,6 +247,7 @@ llm = {
 | `:CoderCredentials` | Show credentials status |
 | `:CoderSwitchProvider` | Switch provider |
 | `:CoderModel [model]` | Switch Copilot model |
+| `:CoderAuth` | Connect to GitHub Copilot (no-op if already connected) |
 
 ### Conflict Resolution
 
@@ -360,6 +393,7 @@ Track LLM API costs across sessions:
 - Per-model breakdown with token counts
 - Pricing for 50+ models
 - Savings tracking for free models (Ollama, Copilot free tier)
+- **Live Copilot account usage** — real premium request credits (e.g. `427 / 1,500 (28.6%)`) and reset date, fetched from your GitHub account
 - History persisted in `.codetyper/cost_history.json`
 
 ---
@@ -402,6 +436,8 @@ Please include:
 ## Contributing
 
 Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Run the test suite with `make test` (or `make test-file FILE=tests/spec/foo_spec.lua` for a single file).
 
 ---
 

@@ -23,6 +23,7 @@ local function setup()
         "credentials",
         "switch-provider",
         "model",
+        "auth",
       }
     end,
     desc = "Codetyper.nvim commands",
@@ -74,6 +75,25 @@ local function setup()
     local credentials = require("codetyper.config.credentials")
     credentials.interactive_switch_provider()
   end, { desc = "Switch active LLM provider" })
+
+  vim.api.nvim_create_user_command("CoderAuth", function()
+    local auth = require("codetyper.core.llm.providers.copilot.auth")
+    auth.is_valid(function(valid)
+      if valid then
+        utils.notify("Already connected to GitHub Copilot.", vim.log.levels.INFO)
+        return
+      end
+
+      local device_auth = require("codetyper.core.llm.providers.copilot.device_auth")
+      device_auth.start(function(success, err)
+        if success then
+          utils.notify("Connected to GitHub Copilot successfully!", vim.log.levels.INFO)
+        else
+          utils.notify("GitHub Copilot authentication failed: " .. (err or "unknown error"), vim.log.levels.ERROR)
+        end
+      end)
+    end)
+  end, { desc = "Connect to GitHub Copilot (only runs the auth flow if not already connected)" })
 
   vim.api.nvim_create_user_command("CoderModel", function(opts)
     local credentials = require("codetyper.config.credentials")

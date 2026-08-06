@@ -55,6 +55,24 @@ local function coder_cmd(args)
       local credentials = require("codetyper.config.credentials")
       credentials.show_status()
     end,
+    ["auth"] = function()
+      local auth = require("codetyper.core.llm.providers.copilot.auth")
+      auth.is_valid(function(valid)
+        if valid then
+          utils.notify("Already connected to GitHub Copilot.", vim.log.levels.INFO)
+          return
+        end
+
+        local device_auth = require("codetyper.core.llm.providers.copilot.device_auth")
+        device_auth.start(function(success, err)
+          if success then
+            utils.notify("Connected to GitHub Copilot successfully!", vim.log.levels.INFO)
+          else
+            utils.notify("GitHub Copilot authentication failed: " .. (err or "unknown error"), vim.log.levels.ERROR)
+          end
+        end)
+      end)
+    end,
     ["switch-provider"] = function()
       local credentials = require("codetyper.config.credentials")
       credentials.interactive_switch_provider()

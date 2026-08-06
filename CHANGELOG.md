@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-08-05
+
+### Added
+
+- **Functional test suite** (`tests/spec/*.lua`, plenary.busted-style) — 30 deterministic tests covering: deleting a specific line, injecting code mid-file, scope-aware whole-function replace, `/@ ... @/` tag parsing, explain-whole-file / explain-snippet / explain-cursor-scope prompt building (LLM mocked, zero network calls), and agent file operations (create/modify/delete with monorepo path resolution, multi-block SEARCH/REPLACE, dedup). Run via `make test` or `make test-file FILE=tests/spec/foo_spec.lua`
+- **`tests/minimal_init.lua`** — headless plenary.nvim bootstrap for the test suite
+- **`:CoderAuth` / `:Coder auth`** — connects to GitHub Copilot on demand. Checks real auth validity first (actual token exchange, not just file presence) and is a no-op if already connected. If not connected, runs the standard GitHub OAuth Device Flow (same client as `copilot.vim`/`copilot.lua`) — works without those plugins installed. Opens the verification URL, shows the code, polls until authorized, and writes the token to `~/.config/github-copilot/hosts.json` for interoperability
+- **Live Copilot account usage in `:CoderCost`** — new "Copilot Account Usage" section shows real premium request credits from your GitHub account (e.g. `427 / 1,500 (28.6%)`) and the quota reset date, fetched from `GET /copilot_internal/user`
+- **`auth.is_valid()`** — real Copilot auth check (performs the token exchange) vs. the old `is_authenticated()` which only checked for oauth file presence
+- **`auth.get_quota()`** — fetches premium request credit usage from GitHub
+- **`provider_resolver.lua`** — single source of truth for Copilot vs Ollama selection
+
+### Changed
+
+- **Provider selection unified** — Copilot is now always tried first; Ollama is used ONLY when Copilot authentication is invalid/unavailable (verified via real token exchange, not just config presence). This replaces 3 previously uncoordinated mechanisms:
+  - `selector/select.lua` no longer defaults to Ollama just because `llm.ollama.host` is set
+  - `scheduler.lua`'s `get_primary_provider`/`get_remote_provider` now delegate to the shared resolver
+  - Copilot's rate-limit fallback no longer permanently mutates `config.llm.provider` — it falls back per-request and self-heals once Copilot auth recovers
+- **`transform.lua` explain flow refactored** — extracted `is_explain_intent` (now exported) and `build_explain_request` (prompt/context construction) out of the monolithic `cmd_transform_selection` so the explain-mode logic (whole file / snippet / cursor scope) is unit-testable without driving the full floating-prompt-window UI. No behavior change
+
+### Fixed
+
+- **Missing `patterns` config default** — `constants/defaults.lua` never defined a default `patterns` table (`open_tag`/`close_tag`/`file_pattern`), even though core parser modules (`find_prompts_in_buffer.lua`, `is_cursor_in_open_tag.lua`, `check_for_closed_prompt.lua`) read it unconditionally. Without explicitly configuring `patterns`, all `/@ ... @/` inline prompt tag processing was silently broken. Now defaults to `/@` / `@/` / `*.coder.*`
+- **`:CoderCost` / `:Coder cost` crash** — `constants.defaults.COST_HISTORY_FILE` was referenced by `utils/get_history_path.lua` but never defined, causing the cost window to error on open. Added `M.COST_HISTORY_FILE = "/.codetyper/cost_history.json"`
+- **Line deletion left a blank line instead of removing it** — both `search_replace.apply_block` and `inject.lua`'s `M.inject` treated an empty `replace`/`generated_code` string as "replace with one blank line" (an artifact of `vim.split("", "\n")` producing `{""}`) instead of removing the matched line(s) entirely. Fixed in both places so deleting a line via SEARCH/REPLACE or a `replace` patch with empty generated code now truly removes it
+
 ## [1.3.1] - 2026-08-05
 
 ### Added
@@ -518,7 +544,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fixed** — Bug fixes
 - **Security** — Vulnerability fixes
 
-[Unreleased]: https://github.com/cargdev/codetyper.nvim/compare/v1.3.1...HEAD
+[Unreleased]: https://github.com/cargdev/codetyper.nvim/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/cargdev/codetyper.nvim/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/cargdev/codetyper.nvim/compare/v1.2.0...v1.3.1
 [1.2.0]: https://github.com/cargdev/codetyper.nvim/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/cargdev/codetyper.nvim/compare/v1.1.0...v1.1.1

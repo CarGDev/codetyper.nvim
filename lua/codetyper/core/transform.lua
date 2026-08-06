@@ -53,6 +53,98 @@ local function is_explain_intent(input)
   return question_words[first_word] == true
 end
 
+-- Exposed for testing (pure function, no behavior change)
+M.is_explain_intent = is_explain_intent
+
+--- Build the explain prompt + LLM context for a "what/how/explain" style input.
+--- Pure(ish) function — no LLM call, no window UI — extracted from
+--- cmd_transform_selection's submit_prompt so it can be unit tested directly
+--- without driving the full floating-prompt-window flow.
+---@param bufnr number
+---@param filepath string
+---@param opts table {
+---   input: string,
+---   has_selection: boolean,
+---   selection_text: string|nil,
+---   start_line: number|nil,
+---   end_line: number|nil,
+---   sel_context: table|nil,        -- from scope.resolve_selection_context
+---   cursor_scope: table|nil,       -- from scope.resolve_scope
+--- }
+---@return table { prompt: string, context: table, title: string }
+function M.build_explain_request(bufnr, filepath, opts)
+  local ft = vim.bo[bufnr].filetype or "text"
+  local code_to_explain = ""
+  local context_block = ""
+  local has_selection = opts.has_selection
+  local selection_text = opts.selection_text or ""
+  local start_line = opts.start_line
+  local end_line = opts.end_line
+  local sel_context = opts.sel_context
+  local cursor_scope = opts.cursor_scope
+  local input = opts.input
+
+  if has_selection then
+    code_to_explain = selection_text
+    if sel_context and sel_context.type == "partial_function" and #sel_context.scopes > 0 then
+      local scope = sel_context.scopes[1]
+      context_block = string.format(
+        '\n\nThis code is inside %s "%s":\n```%s\n%s\n```',
+        scope.type,
+        scope.name or "anonymous",
+        ft,
+        scope.text
+      )
+    end
+  elseif cursor_scope then
+    -- No selection but cursor inside a function — explain the function
+    code_to_explain = cursor_scope.text or ""
+    context_block = string.format(
+      '\nThis is %s "%s" (lines %d-%d)',
+      cursor_scope.type,
+      cursor_scope.name or "anonymous",
+      cursor_scope.range.start_row,
+      cursor_scope.range.end_row
+    )
+  else
+    -- No selection, no scope — explain the whole file
+    code_to_explain = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n"):sub(1, 8000)
+  end
+
+  -- Resolve file dependencies for context
+  local resolve_deps = require("codetyper.core.llm.shared.resolve_deps")
+  local deps = resolve_deps.resolve(filepath, nil, ft)
+  local deps_context = resolve_deps.format_context(deps)
+
+  local explain_prompt = string.format(
+    "%s\n\nExplain the following %s code in markdown format. "
+      .. "Include: what it does, how it works, parameters, return values, "
+      .. "usage examples if applicable, and any important details.%s"
+      .. "\n\n%s"
+      .. "\n\n```%s\n%s\n```",
+    input,
+    ft,
+    context_block,
+    deps_context,
+    ft,
+    code_to_explain
+  )
+
+  local ask_context = {
+    prompt_type = "ask",
+    file_path = filepath,
+    language = ft,
+    source_code = code_to_explain,
+    source_lines = has_selection and { start_line, end_line } or nil,
+    deps_context = deps_context,
+  }
+
+  local title = has_selection and string.format("Explanation (lines %d-%d)", start_line, end_line)
+    or (cursor_scope and cursor_scope.name or filepath)
+
+  return { prompt = explain_prompt, context = ask_context, title = title }
+end
+
 --- Return editor dimensions (from UI, like 99 plugin)
 ---@return number width
 ---@return number height
@@ -328,55 +420,15 @@ function M.cmd_transform_selection()
 
     -- Explain intent: show explanation in right-side panel (not injected into code)
     if is_explain then
-      local ft = vim.bo[bufnr].filetype or "text"
-      local code_to_explain = ""
-      local context_block = ""
-
-      if has_selection then
-        code_to_explain = selection_text
-        if sel_context and sel_context.type == "partial_function" and #sel_context.scopes > 0 then
-          local scope = sel_context.scopes[1]
-          context_block = string.format(
-            '\n\nThis code is inside %s "%s":\n```%s\n%s\n```',
-            scope.type,
-            scope.name or "anonymous",
-            ft,
-            scope.text
-          )
-        end
-      elseif cursor_scope then
-        -- No selection but cursor inside a function — explain the function
-        code_to_explain = cursor_scope.text or ""
-        context_block = string.format(
-          '\nThis is %s "%s" (lines %d-%d)',
-          cursor_scope.type,
-          cursor_scope.name or "anonymous",
-          cursor_scope.range.start_row,
-          cursor_scope.range.end_row
-        )
-      else
-        -- No selection, no scope — explain the whole file
-        code_to_explain = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n"):sub(1, 8000)
-      end
-
-      -- Resolve file dependencies for context
-      local resolve_deps = require("codetyper.core.llm.shared.resolve_deps")
-      local deps = resolve_deps.resolve(filepath, nil, ft)
-      local deps_context = resolve_deps.format_context(deps)
-
-      local explain_prompt = string.format(
-        "%s\n\nExplain the following %s code in markdown format. "
-          .. "Include: what it does, how it works, parameters, return values, "
-          .. "usage examples if applicable, and any important details.%s"
-          .. "\n\n%s"
-          .. "\n\n```%s\n%s\n```",
-        input,
-        ft,
-        context_block,
-        deps_context,
-        ft,
-        code_to_explain
-      )
+      local built = M.build_explain_request(bufnr, filepath, {
+        input = input,
+        has_selection = has_selection,
+        selection_text = selection_text,
+        start_line = start_line,
+        end_line = end_line,
+        sel_context = sel_context,
+        cursor_scope = cursor_scope,
+      })
 
       flog.info("transform", "explain mode — sending to LLM") -- TODO: remove after debugging
 
@@ -384,25 +436,14 @@ function M.cmd_transform_selection()
       local llm = require("codetyper.core.llm")
       local explain_window = require("codetyper.window.explain")
 
-      local ask_context = {
-        prompt_type = "ask",
-        file_path = filepath,
-        language = ft,
-        source_code = code_to_explain,
-        source_lines = has_selection and { start_line, end_line } or nil,
-        deps_context = deps_context,
-      }
+      explain_window.show("Thinking...", "Loading explanation...", vim.bo[bufnr].filetype or "text", built.context)
 
-      explain_window.show("Thinking...", "Loading explanation...", ft, ask_context)
-
-      llm.generate(explain_prompt, ask_context, function(response, err)
+      llm.generate(built.prompt, built.context, function(response, err)
         vim.schedule(function()
           if err then
             explain_window.update("# Error\n\n" .. tostring(err))
           elseif response then
-            local title = has_selection and string.format("Explanation (lines %d-%d)", start_line, end_line)
-              or (cursor_scope and cursor_scope.name or filepath)
-            explain_window.update("# " .. title .. "\n\n" .. response)
+            explain_window.update("# " .. built.title .. "\n\n" .. response)
           else
             explain_window.update("# No Response\n\nThe LLM returned an empty response.")
           end

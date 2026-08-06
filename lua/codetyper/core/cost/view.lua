@@ -58,7 +58,7 @@ end
 --- Generate full window content
 ---@param session_stats table Session statistics
 ---@param all_time_stats table All-time statistics
----@param deps table { comparison_model: string, pricing: table, normalize_model: function, is_free: function, formatters: table }
+---@param deps table { comparison_model: string, pricing: table, normalize_model: function, is_free: function, formatters: table, copilot_quota: table|nil }
 ---@return string[] Lines for the buffer
 function M.generate_content(session_stats, all_time_stats, deps)
   local format_cost = deps.formatters.format_cost
@@ -77,6 +77,34 @@ function M.generate_content(session_stats, all_time_stats, deps)
     "╠══════════════════════════════════════════════════════╣"
   )
   table.insert(lines, "")
+
+  -- Live Copilot account usage (premium request credits), if available
+  local quota = deps.copilot_quota
+  if quota then
+    table.insert(lines, "🔑 Copilot Account Usage")
+    table.insert(
+      lines,
+      "───────────────────────────────────────────────────────"
+    )
+    if quota.unlimited then
+      table.insert(lines, "  Premium requests: Unlimited")
+    else
+      local percent_used = 100 - (quota.percent_remaining or 100)
+      table.insert(
+        lines,
+        string.format(
+          "  Premium requests: %s / %s (%.1f%%)",
+          deps.formatters.format_count(quota.credits_used or 0),
+          deps.formatters.format_count(quota.entitlement or 0),
+          percent_used
+        )
+      )
+    end
+    if quota.reset_date then
+      table.insert(lines, string.format("  Resets:           %s", quota.reset_date))
+    end
+    table.insert(lines, "")
+  end
 
   -- All-time summary (prominent)
   table.insert(lines, "🌐 All-Time Summary (Project)")
