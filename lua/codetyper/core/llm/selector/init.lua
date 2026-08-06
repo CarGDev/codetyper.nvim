@@ -20,10 +20,16 @@ M.report_feedback = accuracy.record
 function M.smart_generate(prompt, context, callback)
   local selection = select_provider(prompt, context)
 
-  flog.info("selector", string.format( -- TODO: remove after debugging
-    "provider=%s confidence=%.0f%% memories=%d reason=%s",
-    selection.provider, selection.confidence * 100, selection.memory_count, selection.reason
-  ))
+  flog.info(
+    "selector",
+    string.format( -- TODO: remove after debugging
+      "provider=%s confidence=%.0f%% memories=%d reason=%s",
+      selection.provider,
+      selection.confidence * 100,
+      selection.memory_count,
+      selection.reason
+    )
+  )
 
   pcall(function()
     local logs_add = require("codetyper.adapters.nvim.ui.logs.add")

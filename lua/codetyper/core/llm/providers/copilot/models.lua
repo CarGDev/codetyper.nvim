@@ -138,13 +138,12 @@ function M.detect_tier(model_info)
   return "basic"
 end
 
---- Save fetched models to .codetyper/models_cache.json
+--- Save fetched models to global cache
 ---@param models table[]
 function M.save_to_disk(models)
   pcall(function()
-    local utils = require("codetyper.support.utils")
-    local root = utils.get_project_root()
-    local cache_path = root .. "/.codetyper/models_cache.json"
+    local data_dir = vim.fn.stdpath("data")
+    local cache_path = data_dir .. "/codetyper/copilot_models_cache.json"
 
     local dir = vim.fn.fnamemodify(cache_path, ":h")
     vim.fn.mkdir(dir, "p")
@@ -166,9 +165,8 @@ end
 ---@return table[]|nil
 function M.load_from_disk()
   local ok, result = pcall(function()
-    local utils = require("codetyper.support.utils")
-    local root = utils.get_project_root()
-    local cache_path = root .. "/.codetyper/models_cache.json"
+    local data_dir = vim.fn.stdpath("data")
+    local cache_path = data_dir .. "/codetyper/copilot_models_cache.json"
 
     if vim.fn.filereadable(cache_path) ~= 1 then
       return nil

@@ -96,45 +96,18 @@ local function get_remote_provider()
   return "copilot"
 end
 
---- Cached Ollama health status (avoid checking on every dispatch)
-local ollama_healthy = nil -- nil = unknown, true = reachable, false = offline
-local ollama_last_check = 0
-local OLLAMA_CHECK_INTERVAL = 60 -- Re-check every 60 seconds
-
---- Check Ollama availability (async, caches result)
-local function check_ollama_health()
-  local now = os.time()
-  if now - ollama_last_check < OLLAMA_CHECK_INTERVAL then
-    return
-  end
-  ollama_last_check = now
-  pcall(function()
-    local ollama = require("codetyper.core.llm.providers.ollama")
-    ollama.health_check(function(ok)
-      ollama_healthy = ok
-    end)
-  end)
-end
-
---- Get the primary provider (prefers Ollama if healthy, else Copilot)
+--- Get the primary provider from config
 ---@return string
 local function get_primary_provider()
-  -- Kick off async health check if stale
-  check_ollama_health()
-
   local ok, codetyper = pcall(require, "codetyper")
   if ok then
     local config = codetyper.get_config()
     if config and config.llm then
       -- If smart_selection is on, let the selector decide (it handles fallback)
       if config.llm.smart_selection then
-        -- If we know Ollama is offline, skip straight to Copilot
-        if ollama_healthy == false then
-          return "copilot"
-        end
         return "ollama"
       end
-      -- No smart selection — use configured provider directly
+      -- Use configured provider directly
       if config.llm.provider then
         return config.llm.provider
       end
@@ -429,6 +402,58 @@ local function handle_worker_result(event, result)
     return
   end
 
+  -- Native tool calls from structured API (streaming + native tool calling)
+  -- Takes priority over text-based TOOL: parsing
+  if result.tool_calls and #result.tool_calls > 0 then
+    flog.info("scheduler", string.format(
+      ">>> native tool_calls: event=%s count=%d text_len=%d",
+      event.id or "nil", #result.tool_calls, #(result.response or "")
+    ))
+    require("codetyper.core.thinking_placeholder").clear_inline(event.id)
+
+    -- Also parse FILE: ops from text (model may output both)
+    local file_ops_handled = false
+    pcall(function()
+      local parse_agent = require("codetyper.core.agent.parse_response")
+      local utils = require("codetyper.support.utils")
+      local root = utils.get_project_root()
+      local ops = parse_agent(result.response, root, event.target_path)
+      if ops and #ops > 0 then
+        local executor = require("codetyper.core.agent.executor")
+        executor.execute(ops)
+        file_ops_handled = true
+      end
+    end)
+
+    -- Start native agent loop for tool execution
+    local agent_loop = require("codetyper.core.agent.loop")
+    agent_loop.start_native(event, result, function(final_ops, final_response)
+      flog.info("scheduler", string.format("native agent loop complete: %d final ops", final_ops and #final_ops or 0))
+
+      if final_response and #final_response > 10 and not file_ops_handled then
+        -- Strip @thinking blocks before patching — the model may include
+        -- reasoning in the final response that shouldn't be injected as code.
+        local cleaned = final_response
+        -- Strip @thinking...end thinking (closed)
+        cleaned = cleaned:gsub("@thinking.-end thinking%s*\n?", "")
+        -- Strip @thinking... (unclosed — entire prefix is thinking)
+        if cleaned:match("^%s*@thinking") then
+          cleaned = cleaned:gsub("^%s*@thinking.-\n", "")
+        end
+        cleaned = vim.trim(cleaned)
+        if #cleaned < 5 then cleaned = final_response end
+        local p = patch.create_from_event(event, cleaned, result.confidence)
+        patch.queue_patch(p)
+        vim.defer_fn(function()
+          M.schedule_patch_flush()
+        end, state.config.apply_delay_ms or 500)
+      end
+    end)
+
+    queue.complete(event.id)
+    return
+  end
+
   -- Good enough or final attempt - check for agent operations first
   flog.info("scheduler", string.format( -- TODO: remove after debugging
     ">>> creating patch: event=%s confidence=%.2f response_len=%d",
@@ -447,7 +472,7 @@ local function handle_worker_result(event, result)
     local utils = require("codetyper.support.utils")
     local root = utils.get_project_root()
 
-    local ops, is_agent, tool_calls = parse_agent(result.response, root)
+    local ops, is_agent, tool_calls = parse_agent(result.response, root, event.target_path)
     if is_agent and (is_transform_prompt or #tool_calls > 0) then
       flog.info("scheduler", string.format("agent response: %d file ops, %d tool calls, transform=%s", #ops, #tool_calls, tostring(is_transform_prompt))) -- TODO: remove after debugging
       require("codetyper.core.thinking_placeholder").clear_inline(event.id)

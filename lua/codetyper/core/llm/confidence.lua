@@ -143,6 +143,85 @@ local function score_repetition(response)
   end
 end
 
+--- Detect whether a line looks like code based on structural signals.
+---@param line string A trimmed line of text
+---@return boolean
+local function is_code_line(line)
+  if #line < 3 then
+    return true
+  end
+  if line:match("[{}%(%)%[%];=<>]") then
+    return true
+  end
+  if line:match("^%s*[%-%+%*/#@]")
+    or line:match("^%s*import%s")
+    or line:match("^%s*export%s")
+    or line:match("^%s*from%s")
+    or line:match("^%s*require%s*%(")
+    or line:match("^%s*local%s")
+    or line:match("^%s*const%s")
+    or line:match("^%s*let%s")
+    or line:match("^%s*var%s")
+    or line:match("^%s*function%s")
+    or line:match("^%s*return%s")
+    or line:match("^%s*if%s")
+    or line:match("^%s*for%s")
+    or line:match("^%s*while%s")
+    or line:match("^%s*class%s")
+    or line:match("^%s*interface%s")
+    or line:match("^%s*type%s")
+    or line:match("^%s*def%s")
+    or line:match("^%s*end$")
+  then
+    return true
+  end
+  if line:match("^%s%s") then
+    return true
+  end
+  local symbols = #(line:gsub("[%w%s]", ""))
+  if symbols / #line > 0.15 then
+    return true
+  end
+  return false
+end
+
+--- Score based on prose/explanation contamination
+--- Uses structural code detection — any line that doesn't look like code
+--- is counted as prose. High prose ratio = low confidence.
+---@param response string
+---@return number 0.0-1.0
+local function score_prose(response)
+  local lines = vim.split(response, "\n", { plain = true })
+  local prose_lines = 0
+  local total_lines = 0
+
+  for _, line in ipairs(lines) do
+    local trimmed = vim.trim(line)
+    if #trimmed > 15 then
+      total_lines = total_lines + 1
+      if not is_code_line(trimmed) then
+        prose_lines = prose_lines + 1
+      end
+    end
+  end
+
+  if total_lines == 0 then
+    return 1.0
+  end
+
+  local prose_ratio = prose_lines / total_lines
+
+  if prose_ratio == 0 then
+    return 1.0
+  elseif prose_ratio < 0.1 then
+    return 0.7
+  elseif prose_ratio < 0.2 then
+    return 0.5
+  else
+    return 0.2
+  end
+end
+
 --- Score based on truncation indicators
 ---@param response string
 ---@return number 0.0-1.0
@@ -189,6 +268,7 @@ end
 ---@field syntax number
 ---@field repetition number
 ---@field truncation number
+---@field prose number
 ---@field weighted_total number
 
 --- Calculate confidence score for response
@@ -208,6 +288,7 @@ function M.score(response, prompt, context)
         syntax = 0,
         repetition = 0,
         truncation = 0,
+        prose = 0,
         weighted_total = 0,
       }
   end
@@ -218,6 +299,7 @@ function M.score(response, prompt, context)
     syntax = score_syntax(response),
     repetition = score_repetition(response),
     truncation = score_truncation(response),
+    prose = score_prose(response),
   }
 
   -- Calculate weighted total
@@ -262,12 +344,13 @@ end
 ---@return string
 function M.format_breakdown(breakdown)
   return string.format(
-    "len:%.2f unc:%.2f syn:%.2f rep:%.2f tru:%.2f = %.2f",
+    "len:%.2f unc:%.2f syn:%.2f rep:%.2f tru:%.2f pro:%.2f = %.2f",
     breakdown.length,
     breakdown.uncertainty,
     breakdown.syntax,
     breakdown.repetition,
     breakdown.truncation,
+    breakdown.prose or 1.0,
     breakdown.weighted_total
   )
 end

@@ -21,7 +21,7 @@ function M.get_client(provider_name)
   elseif provider == "copilot" then
     return require("codetyper.core.llm.providers.copilot")
   else
-    error("Unknown LLM provider: " .. provider .. ". Supported: ollama, copilot")
+    error("Unknown LLM provider: " .. provider .. ". Supported: ollama, copilot, claude")
   end
 end
 

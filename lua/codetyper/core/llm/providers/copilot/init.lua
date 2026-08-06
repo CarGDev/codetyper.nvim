@@ -141,6 +141,134 @@ function M.generate(prompt, context, callback)
   end)
 end
 
+--- Generate using streaming with native tool calling support
+--- Returns structured result instead of a plain string.
+---@param prompt string User prompt
+---@param context table Context { system_prompt, messages, is_follow_up, prompt_type }
+---@param callbacks table { on_text_delta: fun(str), on_complete: fun(result), on_error: fun(err) }
+function M.generate_structured(prompt, context, callbacks)
+  local model = get_model(context)
+  flog.info("copilot", string.format(">>> generate_structured: model=%s prompt_len=%d", model, #(prompt or "")))
+
+  auth.get_valid_token(function(token, err)
+    if err then
+      callbacks.on_error(err)
+      return
+    end
+
+    -- Build system prompt
+    local system_prompt = ""
+    if context and context.system_prompt then
+      system_prompt = context.system_prompt
+    else
+      local build_sys = require("codetyper.core.llm.shared.build_system_prompt")
+      system_prompt = build_sys(context or {})
+    end
+
+    -- Build tools: terminal + MCP
+    -- Only include tools for project-level tasks where the user gave an
+    -- instruction without selecting specific code. When code IS selected
+    -- (even if it covers the whole file), the user wants it modified directly
+    -- — tools just distract the model.
+    local tools = {}
+    local is_project_task = context and context.is_project_task or false
+    if is_project_task then
+      local model_caps = require("codetyper.constants.model_caps")
+      local caps = model_caps.get(model)
+      if caps and caps.tools then
+        table.insert(tools, request.terminal_tool)
+        local mcp = require("codetyper.core.agent.mcp")
+        local mcp_tools = mcp.get_tools_for_api()
+        for _, t in ipairs(mcp_tools) do
+          table.insert(tools, t)
+        end
+      end
+    end
+
+    -- Build body with streaming enabled
+    local body = request.build_body(model, system_prompt, prompt, {
+      messages = context and context.messages or nil,
+      tools = #tools > 0 and tools or nil,
+      stream = true,
+      max_tokens = 16384,
+    })
+
+    -- Create stream accumulator
+    local stream = require("codetyper.core.llm.providers.copilot.stream")
+    local acc = stream.new()
+
+    local job_id = request.send_stream(token, body, {
+      is_follow_up = context and context.is_follow_up,
+      on_chunk = function(json_str)
+        local ok, chunk = pcall(vim.json.decode, json_str)
+        if not ok then
+          flog.debug("copilot.stream", "failed to decode chunk: " .. json_str:sub(1, 100))
+          return
+        end
+        local delta = stream.process_chunk(acc, chunk)
+        if delta.text_delta and callbacks.on_text_delta then
+          callbacks.on_text_delta(delta.text_delta)
+        end
+      end,
+      on_done = function()
+        local result = stream.get_result(acc)
+        flog.info("copilot.stream", string.format(
+          "complete: text_len=%d tool_calls=%d finish=%s",
+          #result.text, #result.tool_calls, result.finish_reason or "nil"
+        ))
+
+        -- Record usage
+        if result.usage then
+          pcall(function()
+            local record_usage = require("codetyper.handler.record_usage")
+            record_usage(
+              model,
+              result.usage.prompt_tokens or 0,
+              result.usage.completion_tokens or 0,
+              (result.usage.prompt_tokens_details
+                and result.usage.prompt_tokens_details.cached_tokens) or 0
+            )
+          end)
+        end
+
+        callbacks.on_complete(result)
+      end,
+      on_error = function(stream_err)
+        flog.info("copilot.stream", "stream error, falling back to non-streaming: " .. stream_err)
+        -- Fallback: rebuild request as non-streaming but preserve conversation history
+        local fallback_body = request.build_body(model, system_prompt, prompt, {
+          messages = context and context.messages or nil,
+          tools = #tools > 0 and tools or nil,
+          stream = false,
+          max_tokens = 16384,
+        })
+        request.send(token, fallback_body, function(parsed, http_err)
+          if http_err then
+            callbacks.on_error(http_err)
+            return
+          end
+          local fb_result = parse_response(parsed)
+          if fb_result.error then
+            callbacks.on_error(fb_result.error)
+            return
+          end
+          callbacks.on_complete({
+            text = fb_result.code or "",
+            tool_calls = {},
+            usage = fb_result.usage,
+            finish_reason = "stop",
+          })
+        end)
+      end,
+    })
+
+    -- Store job_id on context for cancellation
+    if context then
+      context._stream_job_id = job_id
+    end
+  end)
+end
+
 --- Validate configuration
 ---@return boolean, string|nil
 function M.validate()

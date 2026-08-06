@@ -194,6 +194,7 @@ function M.list_providers()
     local is_configured = has_stored_key
       or (provider == "ollama" and provider_data ~= nil)
       or (provider == "copilot" and (provider_data ~= nil or configured_from_config))
+      or (provider == "claude" and (has_stored_key or configured_from_config))
       or configured_from_config
 
     table.insert(result, {
@@ -213,6 +214,7 @@ end
 M.default_models = {
   copilot = "claude-sonnet-4",
   ollama = "deepseek-coder:6.7b",
+  claude = "claude-3-5-sonnet-20241022",
 }
 
 --- Hardcoded fallback models (used before API models are fetched)
@@ -251,7 +253,9 @@ function M.get_copilot_models()
   if not models_data then
     -- In-memory cache exists, get all via get() with immediate callback
     local result = nil
-    copilot_models.get(function(m) result = m end)
+    copilot_models.get(function(m)
+      result = m
+    end)
     models_data = result
   end
 
@@ -272,8 +276,12 @@ function M.get_copilot_models()
 
   -- Sort: unlimited first, then by cost ascending
   table.sort(list, function(a, b)
-    if a.cost == "Unlimited" and b.cost ~= "Unlimited" then return true end
-    if a.cost ~= "Unlimited" and b.cost == "Unlimited" then return false end
+    if a.cost == "Unlimited" and b.cost ~= "Unlimited" then
+      return true
+    end
+    if a.cost ~= "Unlimited" and b.cost == "Unlimited" then
+      return false
+    end
     return a.name < b.name
   end)
 
@@ -309,7 +317,7 @@ end
 
 --- Interactive command to add/update configuration
 function M.interactive_add()
-  local providers = { "copilot", "ollama" }
+  local providers = { "copilot", "ollama", "claude" }
 
   vim.ui.select(providers, {
     prompt = "Select LLM provider:",
@@ -552,7 +560,7 @@ local function is_provider_configured(provider)
   local data = M.load()
   local stored = data.providers and data.providers[provider]
   if stored then
-    if stored.configured or provider == "ollama" or provider == "copilot" then
+    if stored.configured or provider == "ollama" or provider == "copilot" or provider == "claude" then
       return true, "stored"
     end
   end
@@ -576,6 +584,10 @@ local function is_provider_configured(provider)
     return true, "config"
   elseif provider == "ollama" then
     if provider_config.host then
+      return true, "config"
+    end
+  elseif provider == "claude" then
+    if provider_config.api_key or vim.env.ANTHROPIC_API_KEY then
       return true, "config"
     end
   end

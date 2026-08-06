@@ -116,37 +116,12 @@ function M.add_to_gitignore()
 end
 
 --- Ensure coder files are in .gitignore (called on setup)
---- Only adds to .gitignore if in a git project (has .git/ folder)
---- Does NOT ask for permission - silently adds entries
----@param auto_gitignore? boolean Override auto_gitignore setting (default: true)
+--- DISABLED: No longer creating project folders
+---@param auto_gitignore? boolean Override auto_gitignore setting (default: false)
 ---@return boolean Success status
 function M.ensure_ignored(auto_gitignore)
-  -- Only add to gitignore if this is a git project
-  if not utils.is_git_project() then
-    return false -- Not a git project, skip
-  end
-
-  -- Default to config value if not explicitly passed
-  if auto_gitignore == nil then
-    local ok, codetyper = pcall(require, "codetyper")
-    if ok and codetyper.is_initialized and codetyper.is_initialized() then
-      local config = codetyper.get_config()
-      auto_gitignore = config and config.auto_gitignore
-    else
-      auto_gitignore = true
-    end
-  end
-
-  if auto_gitignore == false then
-    return true
-  end
-
-  if M.is_ignored() then
-    return true
-  end
-
-  -- Silently add to gitignore (no notifications unless there's an error)
-  return M.add_to_gitignore_silent()
+  -- Disabled: No longer auto-modifying .gitignore
+  return true
 end
 
 -- /@ @/

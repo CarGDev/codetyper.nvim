@@ -273,45 +273,11 @@ local function is_project_initialized(root)
 end
 
 --- Initialize tree logging (called on setup)
---- Only creates .codetyper/ folder for git projects (has .git/ folder)
+--- NOTE: Folder creation disabled - tree functionality deprecated
 ---@param force? boolean Force re-initialization even if cached
 ---@return boolean success
 function M.setup(force)
-  -- Only initialize for git projects
-  if not utils.is_git_project() then
-    return false -- Not a git project, don't create .codetyper/
-  end
-
-  local coder_folder = M.get_coder_folder()
-  if not coder_folder then
-    return false
-  end
-
-  local root = utils.get_project_root()
-  if not root then
-    return false
-  end
-
-  -- Skip if already initialized (unless forced)
-  if not force and is_project_initialized(root) then
-    return true
-  end
-
-  -- Ensure .codetyper folder exists (silent, no asking)
-  if not M.ensure_coder_folder() then
-    -- Silent failure - don't bother user
-    return false
-  end
-
-  -- Create settings.json with defaults if it doesn't exist
-  M.ensure_settings()
-
-  -- Create initial tree log
-  M.update_tree_log()
-
-  -- Mark project as initialized
-  initialized_projects[root] = true
-
+  -- Disabled: No longer creating .codetyper folders
   return true
 end
 

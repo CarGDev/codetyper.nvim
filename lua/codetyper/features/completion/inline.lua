@@ -73,10 +73,11 @@ local function get_file_completions(prefix)
       rel_path = vim.fn.fnamemodify(match, ":t") -- Just filename if can't make relative
     end
 
-    -- Skip directories, coder files, and hidden/generated files
+    local is_dir = vim.fn.isdirectory(match) == 1
+
+    -- Skip coder files and hidden/generated files
     if
-      vim.fn.isdirectory(match) == 0
-      and not utils.is_coder_file(match)
+      not utils.is_coder_file(match)
       and not rel_path:match("^%.")
       and not rel_path:match("node_modules")
       and not rel_path:match("%.git/")
@@ -85,12 +86,25 @@ local function get_file_completions(prefix)
       and not seen[rel_path]
     then
       seen[rel_path] = true
-      table.insert(files, {
-        word = rel_path,
-        abbr = rel_path,
-        kind = "File",
-        menu = "[ref]",
-      })
+      if is_dir then
+        local dir_path = rel_path .. "/"
+        if not seen[dir_path] then
+          seen[dir_path] = true
+          table.insert(files, {
+            word = dir_path,
+            abbr = dir_path,
+            kind = "Folder",
+            menu = "[ref]",
+          })
+        end
+      else
+        table.insert(files, {
+          word = rel_path,
+          abbr = rel_path,
+          kind = "File",
+          menu = "[ref]",
+        })
+      end
     end
   end
 

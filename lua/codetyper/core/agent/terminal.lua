@@ -1,7 +1,10 @@
 --- Terminal command execution for agent tool calls
-local flog = require("codetyper.support.flog") -- TODO: remove after debugging
+local flog = require("codetyper.support.flog")
 
 local M = {}
+
+--- Whether to show commands in the visible terminal panel
+M.show_in_panel = true
 
 --- Dangerous command patterns that should never auto-execute
 local BLOCKED_PATTERNS = {
@@ -113,6 +116,30 @@ function M.run(cmd, callback, opts)
       end
     end, timeout)
   end
+end
+
+--- Run a command in the visible terminal panel.
+--- Opens the panel if not visible, sends the command, and captures output
+--- via a background job (the panel is for visual feedback only).
+---@param cmd string Shell command
+---@param callback fun(output: string|nil, error: string|nil, exit_code: number)
+---@param opts table|nil { timeout_ms: number, cwd: string }
+function M.run_visible(cmd, callback, opts)
+  -- Show the command in the visible terminal panel for user feedback
+  vim.schedule(function()
+    local ok, term_window = pcall(require, "codetyper.window.terminal")
+    if ok then
+      term_window.open()
+      -- Small delay to let terminal initialize before sending
+      vim.defer_fn(function()
+        term_window.send(cmd)
+      end, 150)
+    end
+  end)
+
+  -- Still run via background job for reliable output capture
+  -- (the visible terminal is just for display)
+  M.run(cmd, callback, opts)
 end
 
 return M

@@ -20,6 +20,8 @@ local flog = require("codetyper.support.flog") -- TODO: remove after debugging
 ---@field duration number Time taken in seconds
 ---@field worker_type string LLM provider used
 ---@field usage table|nil Token usage if available
+---@field tool_calls table[]|nil Native tool calls from structured API response
+---@field system_prompt string|nil System prompt used for the request (needed for agent loop)
 
 ---@class Worker
 ---@field id string Worker ID
@@ -119,7 +121,13 @@ local function extract_thinking_content(text)
   if not text or text == "" then
     return nil
   end
+  -- With closing tag
   local thinking = text:match("^%s*@thinking%s*\n(.-)\nend thinking")
+  if thinking then
+    return thinking:match("^%s*(.-)%s*$") or thinking
+  end
+  -- Without closing tag — entire response is thinking
+  thinking = text:match("^%s*@thinking%s*\n(.*)")
   if thinking then
     return thinking:match("^%s*(.-)%s*$") or thinking
   end
@@ -127,16 +135,21 @@ local function extract_thinking_content(text)
 end
 
 --- Strip @thinking ... end thinking block; return only the code part for injection.
----@param text string Raw response that may start with @thinking ... end thinking
----@return string Text with thinking block removed (or original if no block)
+--- Handles both closed (@thinking ... end thinking) and unclosed (@thinking ...) blocks.
+---@param text string Raw response that may start with @thinking
+---@return string Text with thinking block removed (or empty if no code after thinking)
 local function strip_thinking_block(text)
   if not text or text == "" then
     return text or ""
   end
-  -- Match from start: @thinking, any content, then line "end thinking"; capture everything after that
+  -- With closing tag: strip thinking, keep everything after
   local after = text:match("^%s*@thinking[%s%S]*\nend thinking%s*\n(.*)")
   if after then
     return after:match("^%s*(.-)%s*$") or after
+  end
+  -- Without closing tag: the whole response is thinking — nothing to inject
+  if text:match("^%s*@thinking") then
+    return ""
   end
   return text
 end
@@ -145,6 +158,68 @@ end
 ---@param response string Raw LLM response
 ---@param filetype string|nil File type for language detection
 ---@return string Cleaned code
+--- Detect whether a line looks like code based on structural signals.
+--- Checks for syntax characters, indentation, and symbol density
+--- rather than trying to enumerate English phrases.
+---@param line string A trimmed line of text
+---@return boolean
+local function is_code_line(line)
+  -- Empty or very short lines are ambiguous — treat as code to avoid
+  -- stripping blank separators inside code blocks
+  if #line < 3 then
+    return true
+  end
+
+  -- Structural code characters: braces, parens, semicolons, arrows, operators
+  if line:match("[{}%(%)%[%];=<>]") then
+    return true
+  end
+
+  -- Common code starters: keywords, decorators, imports, comments
+  if line:match("^%s*[%-%+%*/#@]")          -- comment / decorator / diff marker
+    or line:match("^%s*import%s")
+    or line:match("^%s*export%s")
+    or line:match("^%s*from%s")
+    or line:match("^%s*require%s*%(")
+    or line:match("^%s*local%s")
+    or line:match("^%s*const%s")
+    or line:match("^%s*let%s")
+    or line:match("^%s*var%s")
+    or line:match("^%s*function%s")
+    or line:match("^%s*return%s")
+    or line:match("^%s*if%s")
+    or line:match("^%s*for%s")
+    or line:match("^%s*while%s")
+    or line:match("^%s*class%s")
+    or line:match("^%s*interface%s")
+    or line:match("^%s*type%s")
+    or line:match("^%s*enum%s")
+    or line:match("^%s*def%s")
+    or line:match("^%s*async%s")
+    or line:match("^%s*await%s")
+    or line:match("^%s*end$")
+    or line:match("^%s*end[%s%-]")
+  then
+    return true
+  end
+
+  -- Indented lines (2+ spaces or tab) are almost always code
+  if line:match("^%s%s") then
+    return true
+  end
+
+  -- Symbol density: code has more punctuation relative to letters.
+  -- Count code-like symbols vs word characters.
+  local symbols = #(line:gsub("[%w%s]", ""))
+  local ratio = symbols / #line
+  if ratio > 0.15 then
+    return true
+  end
+
+  -- If none of the above matched, it's likely prose
+  return false
+end
+
 local function clean_response(response, filetype)
   if not response then
     return ""
@@ -190,42 +265,62 @@ local function clean_response(response, filetype)
   if code_block then
     cleaned = code_block
   else
-    -- No code block found, try to remove common prefixes/suffixes
-    -- Remove common apology/explanation phrases at the start
-    local explanation_starts = {
-      "^[Ii]'m sorry.-\n",
-      "^[Ii] apologize.-\n",
-      "^[Hh]ere is.-:\n",
-      "^[Hh]ere's.-:\n",
-      "^[Tt]his is.-:\n",
-      "^[Bb]ased on.-:\n",
-      "^[Ss]ure.-:\n",
-      "^[Oo][Kk].-:\n",
-      "^[Cc]ertainly.-:\n",
-    }
-    for _, pattern in ipairs(explanation_starts) do
-      cleaned = cleaned:gsub(pattern, "")
+    -- No code block found — strip prose that wraps code.
+    -- Instead of listing English phrases, detect code structurally:
+    -- a line is "code" if it has code-specific characters or patterns.
+    -- Everything else before/after the code block is prose.
+    local lines = vim.split(cleaned, "\n")
+
+    -- Strip leading prose
+    local code_start = 1
+    for i, line in ipairs(lines) do
+      local trimmed = line:match("^%s*(.-)%s*$") or ""
+      if trimmed == "" then
+        code_start = i + 1
+      elseif not is_code_line(trimmed) then
+        code_start = i + 1
+      else
+        break
+      end
     end
 
-    -- Remove trailing explanations
-    local explanation_ends = {
-      "\n[Tt]his code.-$",
-      "\n[Tt]his function.-$",
-      "\n[Tt]his is a.-$",
-      "\n[Ii] hope.-$",
-      "\n[Ll]et me know.-$",
-      "\n[Ff]eel free.-$",
-      "\n[Nn]ote:.-$",
-      "\n[Pp]lease replace.-$",
-      "\n[Pp]lease note.-$",
-      "\n[Yy]ou might want.-$",
-      "\n[Yy]ou may want.-$",
-      "\n[Mm]ake sure.-$",
-      "\n[Aa]lso,.-$",
-      "\n[Rr]emember.-$",
-    }
-    for _, pattern in ipairs(explanation_ends) do
-      cleaned = cleaned:gsub(pattern, "")
+    -- Strip trailing prose
+    local code_end = #lines
+    for i = #lines, code_start, -1 do
+      local trimmed = lines[i]:match("^%s*(.-)%s*$") or ""
+      if trimmed == "" then
+        code_end = i - 1
+      elseif not is_code_line(trimmed) then
+        code_end = i - 1
+      else
+        break
+      end
+    end
+
+    if code_start <= code_end then
+      -- Also detect prose in the MIDDLE of code — this means the model
+      -- output multiple code blocks with explanation between them.
+      -- Truncate at the first interior prose line (keep only the first block).
+      local cut_at = nil
+      local consecutive_prose = 0
+      for i = code_start, code_end do
+        local trimmed = lines[i]:match("^%s*(.-)%s*$") or ""
+        if trimmed ~= "" and not is_code_line(trimmed) then
+          consecutive_prose = consecutive_prose + 1
+          if consecutive_prose >= 1 and not cut_at then
+            cut_at = i - 1
+          end
+        else
+          consecutive_prose = 0
+        end
+      end
+
+      local actual_end = cut_at or code_end
+      local code_lines = {}
+      for i = code_start, actual_end do
+        table.insert(code_lines, lines[i])
+      end
+      cleaned = table.concat(code_lines, "\n")
     end
   end
 
@@ -504,6 +599,8 @@ local function build_prompt(event, model)
     attached_files = event.attached_files,
     system_prompt = system_prompt,
     formatted_prompt = user_prompt,
+    is_whole_file = event.is_whole_file,
+    is_project_task = event.is_project_task,
   }
 
   return user_prompt, context
@@ -628,7 +725,38 @@ function M.start(worker)
       M.complete(worker, nil, client_err)
       return
     end
-    client.generate(prompt, context, handle_response)
+
+    -- Prefer structured (streaming + native tools) when available
+    if client.generate_structured then
+      flog.info("worker", "using generate_structured (streaming + native tools)")
+      -- Store system_prompt for the agent loop (it needs it for follow-up turns)
+      worker._system_prompt = context.system_prompt or ""
+      local received_chars = 0
+      client.generate_structured(prompt, context, {
+        on_text_delta = function(delta)
+          if delta and #delta > 0 then
+            received_chars = received_chars + #delta
+            local size
+            if received_chars >= 1000 then
+              size = string.format("%.1fK", received_chars / 1000)
+            else
+              size = tostring(received_chars)
+            end
+            notify_stage(eid, "Receiving... (" .. size .. " chars)")
+          end
+        end,
+        on_complete = function(result)
+          if worker.status ~= "running" then return end
+          M.complete_structured(worker, result)
+        end,
+        on_error = function(stream_err)
+          if worker.status ~= "running" then return end
+          handle_response(nil, stream_err)
+        end,
+      })
+    else
+      client.generate(prompt, context, handle_response)
+    end
   end
 end
 
@@ -726,11 +854,25 @@ function M.complete(worker, response, error, usage)
   end
 
   local flog = require("codetyper.support.flog")
-  flog.info("worker", string.format("raw_response_len=%d cleaned_len=%d is_explanation=%s type=%s", #(response or ""), #(cleaned_response or ""), tostring(is_explanation), type(cleaned_response)))
+  flog.info("worker", string.format(
+    "raw_response_len=%d cleaned_len=%d is_explanation=%s thinking=%s type=%s",
+    #(response or ""), #(cleaned_response or ""),
+    tostring(is_explanation),
+    thinking_content and string.format("yes(%d)", #thinking_content) or "no",
+    type(cleaned_response)
+  ))
   flog.debug("worker", "cleaned_preview: " .. (cleaned_response and cleaned_response:sub(1, 300):gsub("\n", "\\n") or "nil"))
 
   -- Score confidence on cleaned response
   local conf_score, breakdown = confidence.score(cleaned_response, worker.event.prompt_content)
+
+  -- If the model produced a thinking block, it was "reasoning" about the task.
+  -- The code that follows is more likely to be a plan/explanation than actual code.
+  -- Penalize confidence so escalation or explain-mode kicks in more easily.
+  if thinking_content and #thinking_content > 10 and not is_explanation then
+    conf_score = conf_score * 0.7
+    flog.debug("worker", string.format("confidence penalized for thinking response: %.2f", conf_score))
+  end
 
   worker.status = "completed"
   active_workers[worker.id] = nil
@@ -763,6 +905,75 @@ function M.complete(worker, response, error, usage)
     duration = duration,
     worker_type = worker.worker_type,
     usage = usage,
+  })
+end
+
+--- Complete worker with structured result from generate_structured()
+---@param worker Worker
+---@param result table { text: string, tool_calls: table[], usage: table|nil, finish_reason: string|nil }
+function M.complete_structured(worker, result)
+  local duration = os.clock() - worker.start_time
+  flog.info("worker", string.format(
+    ">>> complete_structured: id=%s duration=%.2fs text_len=%d tool_calls=%d finish=%s",
+    worker.id, duration, #(result.text or ""), #(result.tool_calls or {}), result.finish_reason or "nil"
+  ))
+
+  -- If model returned tool_calls, pass them through directly — the scheduler
+  -- will route to the native agent loop. Skip confidence scoring since the
+  -- model is still working (tool results will feed back).
+  if result.tool_calls and #result.tool_calls > 0 then
+    worker.status = "completed"
+    active_workers[worker.id] = nil
+
+    worker.callback({
+      success = true,
+      response = result.text,
+      error = nil,
+      tool_calls = result.tool_calls,
+      system_prompt = worker._system_prompt,
+      confidence = 1.0,
+      confidence_breakdown = {},
+      duration = duration,
+      worker_type = worker.worker_type,
+      usage = result.usage,
+    })
+    return
+  end
+
+  -- No tool calls — treat as regular text response.
+  -- Run through clean_response + confidence like the existing path.
+  local filetype = vim.fn.fnamemodify(worker.event.target_path or "", ":e")
+  local cleaned_response = clean_response(result.text or "", filetype)
+  local is_explanation = false
+
+  -- Empty text = explanation or thinking-only
+  if #(cleaned_response or "") < 10 or (cleaned_response or ""):match("^%s*$") then
+    is_explanation = true
+    if #(result.text or "") > 10 then
+      cleaned_response = result.text
+    end
+  end
+
+  flog.info("worker", string.format(
+    "structured text: cleaned_len=%d is_explanation=%s",
+    #(cleaned_response or ""), tostring(is_explanation)
+  ))
+
+  local conf_score, breakdown = confidence.score(cleaned_response or "", worker.event.prompt_content or "")
+
+  worker.status = "completed"
+  active_workers[worker.id] = nil
+
+  worker.callback({
+    success = true,
+    response = cleaned_response,
+    error = nil,
+    is_explanation = is_explanation,
+    confidence = conf_score,
+    confidence_breakdown = breakdown,
+    duration = duration,
+    worker_type = worker.worker_type,
+    usage = result.usage,
   })
 end
 

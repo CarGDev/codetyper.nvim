@@ -3,11 +3,12 @@ local M = {}
 
 --- Heuristic weights (must sum to 1.0)
 M.weights = {
-  length = 0.15, -- Response length relative to prompt
-  uncertainty = 0.30, -- Uncertainty phrases
-  syntax = 0.25, -- Syntax completeness
-  repetition = 0.15, -- Duplicate lines
-  truncation = 0.15, -- Incomplete ending
+  length = 0.10, -- Response length relative to prompt
+  uncertainty = 0.25, -- Uncertainty phrases
+  syntax = 0.20, -- Syntax completeness
+  repetition = 0.10, -- Duplicate lines
+  truncation = 0.10, -- Incomplete ending
+  prose = 0.25, -- Explanation/prose contamination
 }
 
 --- Uncertainty phrases that indicate low confidence

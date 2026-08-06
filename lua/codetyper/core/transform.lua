@@ -1,52 +1,37 @@
 local M = {}
 
-local EXPLAIN_PATTERNS = {
-  "explain",
-  "what does",
-  "what is",
-  "what are",
-  "how does",
-  "how is",
-  "how this",
-  "how are",
-  "how can",
-  "why does",
-  "why is",
-  "why are",
-  "tell me",
-  "walk through",
-  "walk me",
-  "understand",
-  "describe",
-  "question",
-  "what's this",
-  "what this",
-  "about this",
-  "help me understand",
-  "being used",
-  "is used",
-  "are used",
-  "show me how",
-  "where is",
-  "where does",
-  "when is",
-  "when does",
-  "can you explain",
-  "overview",
-  "summary of",
-  "usage of",
-}
-
+--- Detect explain/question intent from structural signals:
+--- 1. Ends with ? → question
+--- 2. First word is a question word → question
+--- 3. Everything else → transform (default)
 ---@param input string
 ---@return boolean
 local function is_explain_intent(input)
-  local lower = input:lower()
-  for _, pat in ipairs(EXPLAIN_PATTERNS) do
-    if lower:find(pat, 1, true) then
-      return true
-    end
+  local trimmed = vim.trim(input)
+  if #trimmed == 0 then
+    return false
   end
-  return false
+
+  -- Ends with ? is always a question
+  if trimmed:sub(-1) == "?" then
+    return true
+  end
+
+  -- Check if the first word is a question/inquiry word
+  local first_word = trimmed:lower():match("^(%a+)")
+  if not first_word then
+    return false
+  end
+
+  local question_words = {
+    what = true, how = true, why = true, where = true, when = true,
+    which = true, who = true, can = true, could = true, does = true,
+    ["do"] = true, is = true, are = true, was = true, were = true,
+    will = true, would = true, should = true, explain = true,
+    describe = true, tell = true, show = true, help = true,
+  }
+
+  return question_words[first_word] == true
 end
 
 --- Return editor dimensions (from UI, like 99 plugin)
@@ -395,6 +380,33 @@ function M.cmd_transform_selection()
 
     local content
     local doc_injection_range = injection_range
+
+    -- No selection = project-level instruction.
+    -- The user is talking to an agent, not editing a line range.
+    -- Expand context to the whole file and let the model use tools
+    -- to understand the project and make changes across files.
+    if not has_selection and not is_explain then
+      local total_lines = vim.api.nvim_buf_line_count(bufnr)
+      flog.info("transform", string.format(
+        "no selection — treating as project-level task, whole file context (%d lines)", total_lines
+      ))
+      has_selection = true
+      is_cursor_insert = false
+      start_line = 1
+      end_line = total_lines
+      selection_text = table.concat(
+        vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n"
+      )
+      injection_range = { start_line = start_line, end_line = end_line }
+      doc_injection_range = injection_range
+      is_whole_file = true
+      -- Mark as project task — user gave instruction without selecting code.
+      -- This is what triggers tool calling (terminal, MCP) in the agent.
+      -- When the user explicitly selects code, tools are NOT sent even if
+      -- the selection covers the whole file.
+      event_is_project_task = true
+    end
+
     local doc_intent_override = has_selection and { action = "replace" }
       or (is_cursor_insert and { action = "insert" } or nil)
 
@@ -477,6 +489,7 @@ function M.cmd_transform_selection()
       injection_range = doc_injection_range,
       intent_override = doc_intent_override,
       is_whole_file = is_whole_file,
+      is_project_task = event_is_project_task or false,
     }
 
     local flog = require("codetyper.support.flog")
@@ -573,17 +586,28 @@ function M.cmd_transform_selection()
 
       -- Use vim.ui.select with project files
       local project_root = vim.fn.getcwd()
+      local excludes = " -not -path '*/node_modules/*'"
+        .. " -not -path '*/.git/*'"
+        .. " -not -path '*/.codetyper/*'"
+        .. " -not -path '*/dist/*'"
+        .. " -not -path '*/build/*'"
+        .. " -not -path '*/.next/*'"
       local ok_files, files = pcall(function()
-        local raw = vim.fn.systemlist("find " .. vim.fn.shellescape(project_root)
-          .. " -type f"
-          .. " -not -path '*/node_modules/*'"
-          .. " -not -path '*/.git/*'"
-          .. " -not -path '*/.codetyper/*'"
-          .. " -not -path '*/dist/*'"
-          .. " -not -path '*/build/*'"
+        -- Collect all directories (usually few) and files separately
+        local dirs = vim.fn.systemlist("find " .. vim.fn.shellescape(project_root)
+          .. " -type d" .. excludes
+          .. " 2>/dev/null")
+        local raw_files = vim.fn.systemlist("find " .. vim.fn.shellescape(project_root)
+          .. " -type f" .. excludes
           .. " 2>/dev/null | head -200")
         local rel = {}
-        for _, f in ipairs(raw) do
+        for _, d in ipairs(dirs) do
+          local relative = d:sub(#project_root + 2)
+          if relative ~= "" then
+            table.insert(rel, relative .. "/")
+          end
+        end
+        for _, f in ipairs(raw_files) do
           local relative = f:sub(#project_root + 2)
           if relative ~= "" then
             table.insert(rel, relative)
@@ -599,7 +623,7 @@ function M.cmd_transform_selection()
       end
 
       vim.ui.select(files, {
-        prompt = "Attach file (@):",
+        prompt = "Attach file/folder (@):",
         format_item = function(item)
           return item
         end,

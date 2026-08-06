@@ -5,26 +5,26 @@ local M = {}
 ---@type CoderConfig
 local defaults = {
   llm = {
-    provider = "copilot", -- Options: "ollama", "copilot"
-    smart_selection = true, -- Try Ollama first if available, escalate to Copilot on failure/low confidence
+    provider = "copilot", -- Options: "ollama", "copilot", "claude"
+    smart_selection = false, -- Try Ollama first if available, escalate to Copilot on failure/low confidence
     ollama = {
       host = "http://localhost:11434",
-      model = "deepseek-coder:6.7b",
+      model = "gemma4:26b",
       ask_model = nil, -- Optional: cheaper model for question/explain calls
     },
     copilot = {
-      model = "claude-sonnet-4", -- Uses GitHub Copilot authentication
+      model = "claude-sonnet-5", -- Uses GitHub Copilot authentication
       ask_model = "gpt-5-mini", -- Cheaper model for question/explain calls
     },
   },
-  auto_gitignore = true,
+  auto_gitignore = false, -- Disabled - no longer creating project folders
   auto_index = false, -- Auto-create coder companion files on file open
   indexer = {
     enabled = true, -- Enable project indexing
     auto_index = true, -- Index files on save
     index_on_open = false, -- Index project when opening
     max_file_size = 100000, -- Skip files larger than 100KB
-    excluded_dirs = { "node_modules", "dist", "build", ".git", ".codetyper", "__pycache__", "vendor", "target" },
+    excluded_dirs = { "node_modules", "dist", "build", ".git", "__pycache__", "vendor", "target" },
     index_extensions = { "lua", "ts", "tsx", "js", "jsx", "py", "go", "rs", "rb", "java", "c", "cpp", "h", "hpp" },
     memory = {
       enabled = true, -- Enable memory persistence
@@ -50,8 +50,6 @@ local defaults = {
     },
   },
 }
-
-M.COST_HISTORY_FILE = "/.codetyper/cost_history.json"
 
 --- Deep merge two tables
 ---@param t1 table Base table

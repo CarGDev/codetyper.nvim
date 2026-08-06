@@ -10,16 +10,73 @@ local flog = require("codetyper.support.flog") -- TODO: remove after debugging
 ---@field search string|nil Code to find (for modify)
 ---@field replace string|nil Replacement code (for modify)
 
---- Resolve a path relative to project root
----@param path string
----@param project_root string
+--- Resolve a path relative to the correct base directory.
+--- Handles monorepos where .git is in a parent dir but the actual source
+--- is in a subdirectory (e.g., personalFinacesApp/.git but source in frontend/src/).
+---
+--- Strategy: find which base contains the first path segment (e.g. "src/"),
+--- trying: target file's root, cwd, project_root — in that priority order.
+---@param path string Relative path from model output (e.g. "src/interfaces/api/foo.ts")
+---@param project_root string Git root or detected project root
+---@param target_path string|nil The file being edited (used to infer the correct base)
 ---@return string absolute path
-local function resolve_path(path, project_root)
+local function resolve_path(path, project_root, target_path)
   path = path:gsub("^%s+", ""):gsub("%s+$", "")
   if path:match("^/") then
     return path
   end
-  return project_root .. "/" .. path
+
+  local first_segment = path:match("^([^/]+)")
+  if not first_segment then
+    return project_root .. "/" .. path
+  end
+
+  -- Build list of candidate base directories, ordered by priority
+  local candidates = {}
+
+  -- 1. Infer base from target file: if target is .../frontend/src/api/me.ts
+  --    and path starts with "src/", then base is .../frontend/
+  if target_path then
+    local target_abs = target_path
+    -- Walk up from target file to find where first_segment lives
+    local dir = vim.fn.fnamemodify(target_abs, ":h")
+    for _ = 1, 10 do
+      if dir == "" or dir == "/" then break end
+      if vim.fn.fnamemodify(dir, ":t") == first_segment then
+        -- The target's ancestor IS the first segment — base is its parent
+        table.insert(candidates, vim.fn.fnamemodify(dir, ":h"))
+        break
+      end
+      if vim.fn.isdirectory(dir .. "/" .. first_segment) == 1 then
+        table.insert(candidates, dir)
+        break
+      end
+      dir = vim.fn.fnamemodify(dir, ":h")
+    end
+  end
+
+  -- 2. cwd
+  table.insert(candidates, vim.fn.getcwd())
+
+  -- 3. project root
+  table.insert(candidates, project_root)
+
+  -- Try each candidate: pick the first where first_segment exists
+  for _, base in ipairs(candidates) do
+    if vim.fn.isdirectory(base .. "/" .. first_segment) == 1 then
+      return base .. "/" .. path
+    end
+  end
+
+  -- If file already exists under any candidate, use that
+  for _, base in ipairs(candidates) do
+    if vim.fn.filereadable(base .. "/" .. path) == 1 then
+      return base .. "/" .. path
+    end
+  end
+
+  -- Default: first candidate (target-inferred or cwd)
+  return candidates[1] .. "/" .. path
 end
 
 --- Split response into sections by FILE: markers
@@ -129,10 +186,11 @@ end
 --- Parse a structured agent response into file operations and tool calls
 ---@param response string Raw LLM response
 ---@param project_root string Project root path
+---@param target_path string|nil The file being edited (helps resolve paths in monorepos)
 ---@return FileOperation[] operations
 ---@return boolean is_agent_response
 ---@return table[] tool_calls
-local function parse_response(response, project_root)
+local function parse_response(response, project_root, target_path)
   local ops = {}
 
   -- Strip thinking block
@@ -150,7 +208,7 @@ local function parse_response(response, project_root)
   local sections = split_sections(cleaned)
 
   for _, section in ipairs(sections) do
-    local full_path = resolve_path(section.path, project_root)
+    local full_path = resolve_path(section.path, project_root, target_path)
 
     if section.action == "FILE:CREATE" then
       local content = strip_fences(section.body)

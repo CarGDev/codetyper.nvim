@@ -198,6 +198,7 @@ local function process_single_prompt(bufnr, prompt, current_file, skip_processed
       injection_marks = injection_marks,
       injection_range = prompt.injection_range,
       is_whole_file = prompt.is_whole_file,
+      is_project_task = prompt.is_project_task,
       project_context = project_context,
     })
 

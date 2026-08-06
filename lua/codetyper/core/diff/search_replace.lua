@@ -123,18 +123,6 @@ local function normalize_whitespace(str)
   return (str:gsub("%s+", " "):gsub("^%s*", ""):gsub("%s*$", ""))
 end
 
---- Trim trailing whitespace from each line
----@param str string
----@return string
-local function trim_lines(str)
-  local lines = vim.split(str, "\n", { plain = true })
-  for i, line in ipairs(lines) do
-    -- Wrap in parentheses to only get string, not count
-    lines[i] = (line:gsub("%s+$", ""))
-  end
-  return table.concat(lines, "\n")
-end
-
 --- Calculate Levenshtein distance between two strings
 ---@param s1 string
 ---@param s2 string

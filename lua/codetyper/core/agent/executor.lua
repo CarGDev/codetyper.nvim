@@ -22,9 +22,17 @@ function M.create_file(path, content)
 
   flog.info("agent.exec", "created: " .. path) -- TODO: remove after debugging
 
-  -- Open the new file in a vertical split so user can review it alongside the original
+  -- Open the new file — but only if not already open in a buffer
   vim.schedule(function()
-    vim.cmd("vsplit " .. vim.fn.fnameescape(path))
+    local bufnr = vim.fn.bufnr(path)
+    if bufnr ~= -1 and vim.api.nvim_buf_is_valid(bufnr) then
+      -- Already open — just reload its content
+      local new_lines = vim.split(content, "\n", { plain = true })
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, new_lines)
+    else
+      -- First creation — open in a split
+      vim.cmd("vsplit " .. vim.fn.fnameescape(path))
+    end
     vim.notify("Created: " .. vim.fn.fnamemodify(path, ":~:."), vim.log.levels.INFO)
   end)
 
@@ -110,7 +118,7 @@ function M.delete_file(path)
   return true
 end
 
---- Execute a list of file operations
+--- Execute a list of file operations (deduplicated — same path+action runs once)
 ---@param operations table[] FileOperation list from parse_response
 ---@return number applied Count of successful operations
 ---@return number failed Count of failed operations
@@ -120,7 +128,25 @@ function M.execute(operations)
   local failed = 0
   local errors = {}
 
-  for _, op in ipairs(operations) do
+  -- Deduplicate: keep only the LAST operation per path+action
+  -- (the model may repeat the same FILE: block multiple times)
+  local seen = {}
+  local deduped = {}
+  for i = #operations, 1, -1 do
+    local op = operations[i]
+    local key = (op.action or "") .. ":" .. (op.path or "")
+    if not seen[key] then
+      seen[key] = true
+      table.insert(deduped, 1, op)
+    end
+  end
+
+  flog.info("agent.exec", string.format(
+    "executing: %d ops (%d deduplicated from %d)",
+    #deduped, #operations - #deduped, #operations
+  ))
+
+  for _, op in ipairs(deduped) do
     local ok, err
 
     if op.action == "create" then
@@ -139,7 +165,7 @@ function M.execute(operations)
     else
       failed = failed + 1
       table.insert(errors, err or "Unknown error")
-      flog.error("agent.exec", err or "Unknown error") -- TODO: remove after debugging
+      flog.error("agent.exec", err or "Unknown error")
     end
   end
 

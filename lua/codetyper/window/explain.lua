@@ -285,17 +285,28 @@ local function open_file_picker()
     state.picker_open = true
 
     local project_root = vim.fn.getcwd()
+    local excludes = " -not -path '*/node_modules/*'"
+      .. " -not -path '*/.git/*'"
+      .. " -not -path '*/.codetyper/*'"
+      .. " -not -path '*/dist/*'"
+      .. " -not -path '*/build/*'"
+      .. " -not -path '*/.next/*'"
     local ok_files, files = pcall(function()
-      local raw = vim.fn.systemlist("find " .. vim.fn.shellescape(project_root)
-        .. " -type f"
-        .. " -not -path '*/node_modules/*'"
-        .. " -not -path '*/.git/*'"
-        .. " -not -path '*/.codetyper/*'"
-        .. " -not -path '*/dist/*'"
-        .. " -not -path '*/build/*'"
+      -- Collect all directories (usually few) and files separately
+      local dirs = vim.fn.systemlist("find " .. vim.fn.shellescape(project_root)
+        .. " -type d" .. excludes
+        .. " 2>/dev/null")
+      local raw_files = vim.fn.systemlist("find " .. vim.fn.shellescape(project_root)
+        .. " -type f" .. excludes
         .. " 2>/dev/null | head -200")
       local rel = {}
-      for _, f in ipairs(raw) do
+      for _, d in ipairs(dirs) do
+        local relative = d:sub(#project_root + 2)
+        if relative ~= "" then
+          table.insert(rel, relative .. "/")
+        end
+      end
+      for _, f in ipairs(raw_files) do
         local relative = f:sub(#project_root + 2)
         if relative ~= "" then
           table.insert(rel, relative)
@@ -311,7 +322,7 @@ local function open_file_picker()
     end
 
     vim.ui.select(files, {
-      prompt = "Attach file (@):",
+      prompt = "Attach file/folder (@):",
       format_item = function(item) return item end,
     }, function(choice)
       state.picker_open = false

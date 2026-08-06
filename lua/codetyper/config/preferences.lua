@@ -20,19 +20,21 @@ local defaults = {
 ---@type table<string, CoderPreferences>
 local cache = {}
 
---- Get the preferences file path for current project
+--- Get the preferences file path for current project (global storage)
 ---@return string
 local function get_preferences_path()
   local cwd = vim.fn.getcwd()
-  return cwd .. "/.codetyper/preferences.json"
+  local data_dir = vim.fn.stdpath("data")
+  local project_name = cwd:gsub("[^%w]", "_")
+  return data_dir .. "/codetyper/preferences/" .. project_name .. ".json"
 end
 
---- Ensure .codetyper directory exists
-local function ensure_coder_dir()
-  local cwd = vim.fn.getcwd()
-  local coder_dir = cwd .. "/.codetyper"
-  if vim.fn.isdirectory(coder_dir) == 0 then
-    vim.fn.mkdir(coder_dir, "p")
+--- Ensure preferences directory exists
+local function ensure_preferences_dir()
+  local data_dir = vim.fn.stdpath("data")
+  local prefs_dir = data_dir .. "/codetyper/preferences"
+  if vim.fn.isdirectory(prefs_dir) == 0 then
+    vim.fn.mkdir(prefs_dir, "p")
   end
 end
 
@@ -71,7 +73,7 @@ end
 ---@param prefs CoderPreferences
 function M.save(prefs)
   local cwd = vim.fn.getcwd()
-  ensure_coder_dir()
+  ensure_preferences_dir()
 
   local path = get_preferences_path()
   local ok, encoded = pcall(vim.json.encode, prefs)

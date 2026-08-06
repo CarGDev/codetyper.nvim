@@ -25,13 +25,34 @@ local function read_attached_files(prompt_content, base_path)
     end
 
     if file_path then
-      local content = utils.read_file(file_path)
-      if content then
-        table.insert(attached, {
-          path = ref,
-          full_path = file_path,
-          content = content,
-        })
+      if vim.fn.isdirectory(file_path) == 1 then
+        -- Folder reference: attach all files inside the directory
+        local dir_files = vim.fn.glob(file_path .. "/*", false, true)
+        for _, f in ipairs(dir_files) do
+          if vim.fn.isdirectory(f) == 0 then
+            local content = utils.read_file(f)
+            if content then
+              local f_rel = ref .. vim.fn.fnamemodify(f, ":t")
+              if not ref:match("/$") then
+                f_rel = ref .. "/" .. vim.fn.fnamemodify(f, ":t")
+              end
+              table.insert(attached, {
+                path = f_rel,
+                full_path = f,
+                content = content,
+              })
+            end
+          end
+        end
+      else
+        local content = utils.read_file(file_path)
+        if content then
+          table.insert(attached, {
+            path = ref,
+            full_path = file_path,
+            content = content,
+          })
+        end
       end
     end
   end

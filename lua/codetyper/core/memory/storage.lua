@@ -20,12 +20,22 @@ local timers = {}
 
 local DEBOUNCE_MS = 500
 
---- Get brain directory path for current project
----@param root? string Project root (defaults to current)
+--- Get brain directory path (global storage in data dir)
+---@param root? string Project root (used to create project-specific subdirectory)
 ---@return string Brain directory path
 function M.get_brain_dir(root)
+  local data_dir = vim.fn.stdpath("data")
+  local base_dir = data_dir .. "/codetyper/brain"
+  
+  -- Use project-specific subdirectory based on root path
   root = root or utils.get_project_root()
-  return root .. "/.codetyper/brain"
+  if root then
+    -- Create a safe directory name from project root
+    local project_name = root:gsub("[^%w]", "_")
+    return base_dir .. "/" .. project_name
+  end
+  
+  return base_dir
 end
 
 --- Ensure brain directory structure exists

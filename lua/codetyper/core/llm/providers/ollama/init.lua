@@ -47,19 +47,11 @@ function M.generate(prompt, context, callback)
   end)
 end
 
---- Check if Ollama is reachable
+--- Check if Ollama is reachable (deprecated - no longer used)
 ---@param callback fun(ok: boolean, error: string|nil)
 function M.health_check(callback)
-  local host = ollama_config.get_host()
-  local http_mod = require("codetyper.core.llm.shared.http")
-
-  http_mod.get(host .. "/api/tags", {}, function(_, err)
-    if err then
-      callback(false, "Cannot connect to Ollama at " .. host)
-    else
-      callback(true, nil)
-    end
-  end)
+  -- Health check disabled - always return true
+  callback(true, nil)
 end
 
 --- Validate configuration

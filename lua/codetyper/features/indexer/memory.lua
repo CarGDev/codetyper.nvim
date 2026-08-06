@@ -35,24 +35,28 @@ local cache = {
 ---@field updated_at number Last update timestamp
 ---@field used_count number Times referenced
 
---- Get the memories base directory
+--- Get the memories base directory (global storage)
 ---@return string|nil
 local function get_memories_dir()
   local root = utils.get_project_root()
   if not root then
     return nil
   end
-  return root .. "/.codetyper/" .. MEMORIES_DIR
+  local data_dir = vim.fn.stdpath("data")
+  local project_name = root:gsub("[^%w]", "_")
+  return data_dir .. "/codetyper/memories/" .. project_name
 end
 
---- Get the sessions directory
+--- Get the sessions directory (global storage)
 ---@return string|nil
 local function get_sessions_dir()
   local root = utils.get_project_root()
   if not root then
     return nil
   end
-  return root .. "/.codetyper/" .. SESSIONS_DIR
+  local data_dir = vim.fn.stdpath("data")
+  local project_name = root:gsub("[^%w]", "_")
+  return data_dir .. "/codetyper/sessions/" .. project_name
 end
 
 --- Ensure memories directory exists

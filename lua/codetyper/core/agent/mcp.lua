@@ -65,6 +65,99 @@ function M.get_tools_for_prompt()
   return table.concat(parts, "\n")
 end
 
+--- Sanitize a string for OpenAI function name (must match ^[a-zA-Z0-9_-]+$)
+---@param s string
+---@return string
+local function sanitize_name(s)
+  return (s or "unknown"):gsub("[^%w_%-]", "_")
+end
+
+--- Encode server + tool name into a single function name for the API
+---@param server string
+---@param tool string
+---@return string
+function M.encode_tool_name(server, tool)
+  return sanitize_name(server) .. "__" .. sanitize_name(tool)
+end
+
+--- Decode an encoded function name back into server + tool
+---@param encoded string
+---@return string|nil server
+---@return string|nil tool
+function M.decode_tool_name(encoded)
+  if not encoded or type(encoded) ~= "string" then
+    return nil, nil
+  end
+  local server, tool = encoded:match("^(.-)__(.+)$")
+  return server, tool
+end
+
+--- MCP tool names that overlap with FILE:/terminal and cause path conflicts.
+--- These are excluded from the native API tools since the agent prompt
+--- already handles file operations via FILE: markers and the terminal tool.
+local EXCLUDED_MCP_TOOLS = {
+  write_file = true,
+  read_text_file = true,
+  read_file = true,
+  create_file = true,
+  edit_file = true,
+  delete_file = true,
+  rename_file = true,
+  move_file = true,
+  copy_file = true,
+  list_directory = true,
+  create_directory = true,
+  read_directory = true,
+  search_files = true,
+  find_files = true,
+  glob = true,
+  execute_command = true,
+  run_command = true,
+  shell = true,
+}
+
+--- Get all available MCP tools in OpenAI function-calling format
+--- Excludes filesystem/shell tools that overlap with FILE: and terminal.
+---@return table[] tools Array of {type: "function", function: {name, description, parameters}}
+function M.get_tools_for_api()
+  local hub = get_hub()
+  if not hub then
+    return {}
+  end
+
+  local tools = hub:get_tools()
+  if not tools or #tools == 0 then
+    return {}
+  end
+
+  local result = {}
+  local skipped = 0
+  for _, tool in ipairs(tools) do
+    -- Skip filesystem/shell tools — handled by FILE: markers and terminal
+    if EXCLUDED_MCP_TOOLS[tool.name] then
+      skipped = skipped + 1
+    else
+      local name = M.encode_tool_name(tool.server_name or "unknown", tool.name)
+      local desc = tool.description or ""
+      if #desc > 200 then
+        desc = desc:sub(1, 197) .. "..."
+      end
+
+      table.insert(result, {
+        type = "function",
+        ["function"] = {
+          name = name,
+          description = desc,
+          parameters = tool.inputSchema or { type = "object", properties = {} },
+        },
+      })
+    end
+  end
+
+  flog.info("mcp", string.format("built %d tools for API (%d filesystem/shell excluded)", #result, skipped))
+  return result
+end
+
 --- Call an MCP tool
 ---@param server_name string Server name
 ---@param tool_name string Tool name
