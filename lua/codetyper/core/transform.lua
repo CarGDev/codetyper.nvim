@@ -1,4 +1,5 @@
 local M = {}
+local event_is_project_task
 
 --- Detect explain/question intent from structural signals:
 --- 1. Ends with ? → question
@@ -24,11 +25,29 @@ local function is_explain_intent(input)
   end
 
   local question_words = {
-    what = true, how = true, why = true, where = true, when = true,
-    which = true, who = true, can = true, could = true, does = true,
-    ["do"] = true, is = true, are = true, was = true, were = true,
-    will = true, would = true, should = true, explain = true,
-    describe = true, tell = true, show = true, help = true,
+    what = true,
+    how = true,
+    why = true,
+    where = true,
+    when = true,
+    which = true,
+    who = true,
+    can = true,
+    could = true,
+    does = true,
+    ["do"] = true,
+    is = true,
+    are = true,
+    was = true,
+    were = true,
+    will = true,
+    would = true,
+    should = true,
+    explain = true,
+    describe = true,
+    tell = true,
+    show = true,
+    help = true,
   }
 
   return question_words[first_word] == true
@@ -115,10 +134,16 @@ function M.cmd_transform_selection()
   local line_count = vim.api.nvim_buf_line_count(bufnr)
   line_count = math.max(1, line_count)
 
-  flog.info("transform", string.format( -- TODO: remove after debugging
-    "has_selection=%s sel_len=%d bufnr=%d file=%s",
-    tostring(has_selection), #selection_text, bufnr, filepath
-  ))
+  flog.info(
+    "transform",
+    string.format( -- TODO: remove after debugging
+      "has_selection=%s sel_len=%d bufnr=%d file=%s",
+      tostring(has_selection),
+      #selection_text,
+      bufnr,
+      filepath
+    )
+  )
 
   -- Range for injection: selection, cursor line when no selection
   local start_line, end_line
@@ -205,9 +230,7 @@ function M.cmd_transform_selection()
     height = win_opts.height,
     style = "minimal",
     border = win_opts.border,
-    title = has_selection
-        and string.format(" Prompt for lines %d-%d ", start_line, end_line)
-      or " Enter prompt ",
+    title = has_selection and string.format(" Prompt for lines %d-%d ", start_line, end_line) or " Enter prompt ",
     title_pos = "center",
   })
   vim.wo[prompt_win].wrap = true
@@ -242,12 +265,15 @@ function M.cmd_transform_selection()
   local cursor_scope = nil
   if is_cursor_insert then
     local scope_ok, cursor_resolved = pcall(scope_mod.resolve_scope, bufnr, start_line, 1)
-    flog.info("transform", string.format( -- TODO: remove after debugging
-      "resolve_scope: ok=%s type=%s name=%s",
-      tostring(scope_ok),
-      scope_ok and cursor_resolved and cursor_resolved.type or "nil",
-      scope_ok and cursor_resolved and cursor_resolved.name or "nil"
-    ))
+    flog.info(
+      "transform",
+      string.format( -- TODO: remove after debugging
+        "resolve_scope: ok=%s type=%s name=%s",
+        tostring(scope_ok),
+        scope_ok and cursor_resolved and cursor_resolved.type or "nil",
+        scope_ok and cursor_resolved and cursor_resolved.name or "nil"
+      )
+    )
     if scope_ok and cursor_resolved and cursor_resolved.type ~= "file" then
       cursor_scope = cursor_resolved
     end
@@ -312,7 +338,10 @@ function M.cmd_transform_selection()
           local scope = sel_context.scopes[1]
           context_block = string.format(
             '\n\nThis code is inside %s "%s":\n```%s\n%s\n```',
-            scope.type, scope.name or "anonymous", ft, scope.text
+            scope.type,
+            scope.name or "anonymous",
+            ft,
+            scope.text
           )
         end
       elseif cursor_scope then
@@ -320,14 +349,14 @@ function M.cmd_transform_selection()
         code_to_explain = cursor_scope.text or ""
         context_block = string.format(
           '\nThis is %s "%s" (lines %d-%d)',
-          cursor_scope.type, cursor_scope.name or "anonymous",
-          cursor_scope.range.start_row, cursor_scope.range.end_row
+          cursor_scope.type,
+          cursor_scope.name or "anonymous",
+          cursor_scope.range.start_row,
+          cursor_scope.range.end_row
         )
       else
         -- No selection, no scope — explain the whole file
-        code_to_explain = table.concat(
-          vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n"
-        ):sub(1, 8000)
+        code_to_explain = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n"):sub(1, 8000)
       end
 
       -- Resolve file dependencies for context
@@ -341,7 +370,12 @@ function M.cmd_transform_selection()
           .. "usage examples if applicable, and any important details.%s"
           .. "\n\n%s"
           .. "\n\n```%s\n%s\n```",
-        input, ft, context_block, deps_context, ft, code_to_explain
+        input,
+        ft,
+        context_block,
+        deps_context,
+        ft,
+        code_to_explain
       )
 
       flog.info("transform", "explain mode — sending to LLM") -- TODO: remove after debugging
@@ -366,8 +400,7 @@ function M.cmd_transform_selection()
           if err then
             explain_window.update("# Error\n\n" .. tostring(err))
           elseif response then
-            local title = has_selection
-                and string.format("Explanation (lines %d-%d)", start_line, end_line)
+            local title = has_selection and string.format("Explanation (lines %d-%d)", start_line, end_line)
               or (cursor_scope and cursor_scope.name or filepath)
             explain_window.update("# " .. title .. "\n\n" .. response)
           else
@@ -387,16 +420,15 @@ function M.cmd_transform_selection()
     -- to understand the project and make changes across files.
     if not has_selection and not is_explain then
       local total_lines = vim.api.nvim_buf_line_count(bufnr)
-      flog.info("transform", string.format(
-        "no selection — treating as project-level task, whole file context (%d lines)", total_lines
-      ))
+      flog.info(
+        "transform",
+        string.format("no selection — treating as project-level task, whole file context (%d lines)", total_lines)
+      )
       has_selection = true
       is_cursor_insert = false
       start_line = 1
       end_line = total_lines
-      selection_text = table.concat(
-        vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n"
-      )
+      selection_text = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
       injection_range = { start_line = start_line, end_line = end_line }
       doc_injection_range = injection_range
       is_whole_file = true
@@ -493,13 +525,19 @@ function M.cmd_transform_selection()
     }
 
     local flog = require("codetyper.support.flog")
-    flog.info("transform", string.format(
-      "submit: bufnr=%d file=%s range=%d-%d intent_override=%s is_whole_file=%s has_selection=%s",
-      bufnr, filepath,
-      doc_injection_range.start_line, doc_injection_range.end_line,
-      doc_intent_override and doc_intent_override.action or "nil",
-      tostring(is_whole_file), tostring(has_selection)
-    ))
+    flog.info(
+      "transform",
+      string.format(
+        "submit: bufnr=%d file=%s range=%d-%d intent_override=%s is_whole_file=%s has_selection=%s",
+        bufnr,
+        filepath,
+        doc_injection_range.start_line,
+        doc_injection_range.end_line,
+        doc_intent_override and doc_intent_override.action or "nil",
+        tostring(is_whole_file),
+        tostring(has_selection)
+      )
+    )
     flog.debug("transform", "prompt_content: " .. content:sub(1, 300):gsub("\n", "\\n"))
 
     local process_single_prompt = require("codetyper.adapters.nvim.autocmds.process_single_prompt")
@@ -594,12 +632,11 @@ function M.cmd_transform_selection()
         .. " -not -path '*/.next/*'"
       local ok_files, files = pcall(function()
         -- Collect all directories (usually few) and files separately
-        local dirs = vim.fn.systemlist("find " .. vim.fn.shellescape(project_root)
-          .. " -type d" .. excludes
-          .. " 2>/dev/null")
-        local raw_files = vim.fn.systemlist("find " .. vim.fn.shellescape(project_root)
-          .. " -type f" .. excludes
-          .. " 2>/dev/null | head -200")
+        local dirs =
+          vim.fn.systemlist("find " .. vim.fn.shellescape(project_root) .. " -type d" .. excludes .. " 2>/dev/null")
+        local raw_files = vim.fn.systemlist(
+          "find " .. vim.fn.shellescape(project_root) .. " -type f" .. excludes .. " 2>/dev/null | head -200"
+        )
         local rel = {}
         for _, d in ipairs(dirs) do
           local relative = d:sub(#project_root + 2)

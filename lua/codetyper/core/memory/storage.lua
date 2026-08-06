@@ -26,7 +26,6 @@ local DEBOUNCE_MS = 500
 function M.get_brain_dir(root)
   local data_dir = vim.fn.stdpath("data")
   local base_dir = data_dir .. "/codetyper/brain"
-  
   -- Use project-specific subdirectory based on root path
   root = root or utils.get_project_root()
   if root then
@@ -34,7 +33,6 @@ function M.get_brain_dir(root)
     local project_name = root:gsub("[^%w]", "_")
     return base_dir .. "/" .. project_name
   end
-  
   return base_dir
 end
 
@@ -158,7 +156,9 @@ function M.save(key, data, root, immediate)
   -- Debounced write
   local timer_key = root .. ":" .. key
   if timers[timer_key] then
-    pcall(function() timers[timer_key]:stop() end)
+    pcall(function()
+      timers[timer_key]:stop()
+    end)
     timers[timer_key] = nil
   end
 
@@ -207,7 +207,9 @@ function M.flush_all(root)
   local prefix = root .. ":"
   for timer_key, timer in pairs(timers) do
     if timer_key:sub(1, #prefix) == prefix then
-      pcall(function() timer:stop() end)
+      pcall(function()
+        timer:stop()
+      end)
       timers[timer_key] = nil
     end
   end
