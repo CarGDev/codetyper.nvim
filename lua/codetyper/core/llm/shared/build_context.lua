@@ -222,8 +222,28 @@ local function gather(event)
     arch_content = architecture.get_architecture_context()
   end)
 
+  -- Dependency context (imports/importers) — mirrors core/transform.lua's
+  -- explain-prompt wiring (~lines 114-116) so the primary tag/scheduler
+  -- flow also gets dependency-aware context, not just the explain flow.
+  -- pcall-guarded: a resolve_deps failure (e.g. grep subprocess
+  -- unavailable) must never abort the rest of context assembly.
+  local deps_content = ""
+  if event.target_path then
+    pcall(function()
+      local resolve_deps = require("codetyper.core.llm.shared.resolve_deps")
+      local deps = resolve_deps.resolve(event.target_path, nil, filetype)
+      deps_content = "\n\n" .. resolve_deps.format_context(deps)
+    end)
+  end
+
   -- Combined extra context string
-  local extra = brain_content .. arch_content .. coder_content .. attached_content .. indexed_content .. project_content
+  local extra = brain_content
+    .. arch_content
+    .. coder_content
+    .. attached_content
+    .. indexed_content
+    .. project_content
+    .. deps_content
 
   flog.info("build_context", string.format( -- TODO: remove after debugging
     "brain=%d coder=%d indexed=%d attached=%d project=%d total_extra=%d",
