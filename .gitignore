@@ -1,8 +1,6 @@
 # Codetyper.nvim - AI coding partner files
 .claude/
-Makefile
-
-# Created by https://www.toptal.com/developers/gitignore/api/lua
+.atl
 
 ### Lua ###
 # Compiled Lua sources
