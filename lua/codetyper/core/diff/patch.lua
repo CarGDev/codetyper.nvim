@@ -638,17 +638,21 @@ function M.apply(patch)
 
       return true, nil
     else
-      -- SEARCH/REPLACE failed: use only REPLACE parts for fallback (never inject raw markers)
+      -- SEARCH/REPLACE failed: replace ONLY within the known injection_range using the
+      -- REPLACE-only content. NEVER fall through to line-based/EOF injection — that
+      -- generic dispatch does not recognize the "search_replace" strategy and appends
+      -- at end-of-file with no range, which is the confirmed data-loss bug.
       pcall(function()
         local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
         logs_add({
           type = "warning",
           message = string.format(
-            "SEARCH/REPLACE failed: %s. Using REPLACE content only for injection.",
+            "SEARCH/REPLACE failed: %s. Replacing within injection range only.",
             err or "unknown"
           ),
         })
       end)
+
       local replace_only = {}
       for _, block in ipairs(patch.search_replace_blocks) do
         if block.replace and block.replace ~= "" then
@@ -657,11 +661,41 @@ function M.apply(patch)
           end
         end
       end
-      if #replace_only > 0 then
-        code_lines = replace_only
-        code_to_inject = table.concat(replace_only, "\n")
+
+      if #replace_only == 0 then
+        flog.error("patch.apply", "SEARCH/REPLACE failed and all REPLACE blocks are empty; nothing to inject")
+        logger.error("patch", string.format("Patch %s: SR fallback aborted, nothing to inject", patch.id))
+        M.mark_rejected(patch.id, "nothing_to_inject")
+        return false, "nothing to inject"
       end
-      -- Fall through to line-based injection
+
+      if not patch.injection_range then
+        flog.error("patch.apply", "SEARCH/REPLACE failed and no injection_range available; refusing EOF append")
+        logger.error("patch", string.format("Patch %s: SR fallback aborted, no injection_range", patch.id))
+        M.mark_rejected(patch.id, "no_injection_range")
+        return false, "SEARCH/REPLACE failed and no injection range available"
+      end
+
+      local line_count = vim.api.nvim_buf_line_count(target_bufnr)
+      local range_start = math.max(1, patch.injection_range.start_line)
+      local range_end = math.min(line_count, patch.injection_range.end_line)
+      vim.api.nvim_buf_set_lines(target_bufnr, range_start - 1, range_end, false, replace_only)
+      M.mark_applied(patch.id)
+
+      pcall(function()
+        local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
+        logs_add({
+          type = "success",
+          message = string.format(
+            "Patch %s applied via range-bound fallback (SEARCH/REPLACE failed, replaced lines %d-%d)",
+            patch.id,
+            range_start,
+            range_end
+          ),
+        })
+      end)
+
+      return true, nil
     end
   end
 

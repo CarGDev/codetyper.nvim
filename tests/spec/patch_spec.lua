@@ -119,6 +119,149 @@ describe("patch.create_from_event + patch.apply — replace/delete via injection
   end)
 end)
 
+describe("patch.apply — SEARCH/REPLACE fallback (SR fails)", function()
+  --- Helper: build a minimal patch table with a search_replace_blocks entry
+  --- that will NOT match the buffer content, forcing search_replace.apply_to_buffer
+  --- to fail and exercise the fallback path directly (bypassing create_from_event's
+  --- block-parsing so the test controls exactly what fails and why).
+  local function make_failing_sr_patch(bufnr, path, injection_range, replace_text)
+    return {
+      id = patch.generate_id(),
+      event_id = nil,
+      source_bufnr = bufnr,
+      target_bufnr = bufnr,
+      target_path = path,
+      original_snapshot = patch.snapshot_buffer(bufnr),
+      generated_code = "placeholder",
+      injection_range = injection_range,
+      injection_strategy = "search_replace",
+      confidence = 0.9,
+      status = "pending",
+      created_at = os.time(),
+      use_search_replace = true,
+      search_replace_blocks = {
+        { search = "THIS TEXT DOES NOT EXIST IN THE BUFFER", replace = replace_text },
+      },
+      is_inline_prompt = false,
+    }
+  end
+
+  it("replaces only the lines within injection_range when SR fails and a range is present", function()
+    local path = "/tmp/codetyper_test_sr_range_" .. os.time() .. ".lua"
+    local bufnr = make_buffer({
+      "-- header, must stay",
+      "local old = 1",
+      "local old2 = 2",
+      "-- footer, must stay",
+    }, path)
+
+    local p = make_failing_sr_patch(bufnr, path, { start_line = 2, end_line = 3 }, "local fixed = 42")
+
+    local ok, err = patch.apply(p)
+    assert.is_true(ok)
+    assert.is_nil(err)
+
+    local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+    assert.are.same({
+      "-- header, must stay",
+      "local fixed = 42",
+      "-- footer, must stay",
+    }, lines)
+
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+
+  it("fails loudly with no buffer mutation when SR fails and injection_range is nil", function()
+    local path = "/tmp/codetyper_test_sr_norange_" .. os.time() .. ".lua"
+    local original = {
+      "-- header, must stay",
+      "local old = 1",
+      "local old2 = 2",
+      "-- footer, must stay",
+    }
+    local bufnr = make_buffer(original, path)
+
+    local p = make_failing_sr_patch(bufnr, path, nil, "local fixed = 42")
+
+    local ok, err = patch.apply(p)
+    assert.is_false(ok)
+    assert.is_string(err)
+    assert.is_truthy(err:match("injection range"))
+
+    local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+    assert.are.same(original, lines)
+
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+
+  it("returns 'nothing to inject' with no mutation when all REPLACE blocks are empty", function()
+    local path = "/tmp/codetyper_test_sr_allempty_" .. os.time() .. ".lua"
+    local original = {
+      "-- header, must stay",
+      "local old = 1",
+      "local old2 = 2",
+      "-- footer, must stay",
+    }
+    local bufnr = make_buffer(original, path)
+
+    local p = make_failing_sr_patch(bufnr, path, { start_line = 2, end_line = 3 }, "")
+
+    local ok, err = patch.apply(p)
+    assert.is_false(ok)
+    assert.is_string(err)
+    assert.is_truthy(err:match("nothing to inject"))
+
+    local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+    assert.are.same(original, lines)
+
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+
+  it("uses only non-empty REPLACE content when blocks are a mix of empty and non-empty", function()
+    local path = "/tmp/codetyper_test_sr_mixed_" .. os.time() .. ".lua"
+    local bufnr = make_buffer({
+      "-- header, must stay",
+      "local old = 1",
+      "local old2 = 2",
+      "-- footer, must stay",
+    }, path)
+
+    local p = {
+      id = patch.generate_id(),
+      event_id = nil,
+      source_bufnr = bufnr,
+      target_bufnr = bufnr,
+      target_path = path,
+      original_snapshot = patch.snapshot_buffer(bufnr),
+      generated_code = "placeholder",
+      injection_range = { start_line = 2, end_line = 3 },
+      injection_strategy = "search_replace",
+      confidence = 0.9,
+      status = "pending",
+      created_at = os.time(),
+      use_search_replace = true,
+      search_replace_blocks = {
+        { search = "NOT FOUND A", replace = "" },
+        { search = "NOT FOUND B", replace = "local fixed = 42" },
+      },
+      is_inline_prompt = false,
+    }
+
+    local ok, err = patch.apply(p)
+    assert.is_true(ok)
+    assert.is_nil(err)
+
+    local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+    assert.are.same({
+      "-- header, must stay",
+      "local fixed = 42",
+      "-- footer, must stay",
+    }, lines)
+
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+end)
+
 describe("patch.queue_patch / get_pending", function()
   it("queues a patch and lists it as pending", function()
     local path = "/tmp/codetyper_test_queue_" .. os.time() .. ".lua"
