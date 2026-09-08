@@ -49,7 +49,12 @@ local function run_iteration(event, response, iteration, conversation, on_comple
   flog.info("agent.loop", string.format("iteration %d/%d, response_len=%d", iteration, MAX_ITERATIONS, #response)) -- TODO: remove after debugging
 
   -- Parse the response
-  local file_ops, is_agent, tool_calls = parse_response(response, root, event.target_path)
+  local file_ops, is_agent, tool_calls, warnings = parse_response(response, root, event.target_path)
+  if warnings and #warnings > 0 then
+    for _, warning in ipairs(warnings) do
+      flog.warn("agent.loop", warning) -- TODO: remove after debugging
+    end
+  end
 
   -- Execute file operations immediately (they don't need follow-up)
   if #file_ops > 0 then

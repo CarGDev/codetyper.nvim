@@ -9,6 +9,11 @@ local M = {}
 ---@return boolean success
 ---@return string|nil error
 function M.create_file(path, content)
+  if not content or content == "" then
+    flog.warn("agent.exec", "refusing to create file with empty content: " .. path) -- TODO: remove after debugging
+    return false, "Cannot create file: empty content"
+  end
+
   -- Ensure directory exists
   local dir = vim.fn.fnamemodify(path, ":h")
   vim.fn.mkdir(dir, "p")
@@ -43,9 +48,11 @@ end
 ---@param path string Absolute file path
 ---@param search string Exact code to find
 ---@param replace string Replacement code
+---@param opts table|nil Options: { allow_empty = boolean (default false) }
 ---@return boolean success
 ---@return string|nil error
-function M.modify_file(path, search, replace)
+function M.modify_file(path, search, replace, opts)
+  opts = opts or {}
   -- Read current content
   local ok_read, lines = pcall(vim.fn.readfile, path)
   if not ok_read or not lines then
@@ -69,6 +76,14 @@ function M.modify_file(path, search, replace)
       flog.warn("agent.exec", "SEARCH text not found in " .. path) -- TODO: remove after debugging
       return false, "SEARCH text not found in file: " .. vim.fn.fnamemodify(path, ":t")
     end
+  end
+
+  -- Refuse to write back a collapsed/empty result unless explicitly allowed —
+  -- this is the confirmed data-loss vector: a failed/degenerate replace must
+  -- never silently empty a real file on disk.
+  if (not new_content or new_content == "") and not opts.allow_empty then
+    flog.warn("agent.exec", "refusing to write empty content: " .. path) -- TODO: remove after debugging
+    return false, "Refusing to write empty content: " .. path
   end
 
   -- Write back

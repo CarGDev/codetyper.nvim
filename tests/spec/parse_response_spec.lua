@@ -124,6 +124,100 @@ describe("parse_response — FILE:MODIFY with multiple SEARCH/REPLACE blocks", f
   end)
 end)
 
+describe("parse_response — truncated FILE:CREATE rejection", function()
+  it("drops a FILE:CREATE whose fenced body is empty (truncated mid-stream response)", function()
+    local root = make_tmp_dir()
+    local response = table.concat({
+      "FILE:CREATE " .. root .. "/truncated.lua",
+      "```lua",
+      "```",
+    }, "\n")
+
+    local ops, is_agent, _tool_calls, warnings = parse_response(response, root, nil)
+
+    assert.are.equal(0, #ops)
+    assert.is_table(warnings)
+    assert.is_true(#warnings > 0)
+  end)
+
+  it("drops a FILE:CREATE whose fenced body is whitespace-only", function()
+    local root = make_tmp_dir()
+    local response = table.concat({
+      "FILE:CREATE " .. root .. "/truncated_ws.lua",
+      "```lua",
+      "   ",
+      "```",
+    }, "\n")
+
+    local ops, _is_agent, _tool_calls, warnings = parse_response(response, root, nil)
+
+    assert.are.equal(0, #ops)
+    assert.is_table(warnings)
+    assert.is_true(#warnings > 0)
+  end)
+
+  it("still parses a non-empty FILE:CREATE body into one create op (regression guard)", function()
+    local root = make_tmp_dir()
+    local response = table.concat({
+      "FILE:CREATE " .. root .. "/ok.lua",
+      "```lua",
+      "return 1",
+      "```",
+    }, "\n")
+
+    local ops, is_agent, _tool_calls, warnings = parse_response(response, root, nil)
+
+    assert.is_true(is_agent)
+    assert.are.equal(1, #ops)
+    assert.are.equal("return 1", ops[1].content)
+    assert.is_table(warnings)
+    assert.are.equal(0, #warnings)
+  end)
+end)
+
+describe("parse_response — ambiguous path resolution", function()
+  it("flags an unresolved/low-confidence path when no candidate base or target hint exists", function()
+    local root = make_tmp_dir()
+    -- No directory anywhere named after this segment, no target_path hint,
+    -- and no existing file under any candidate base — this must NOT silently
+    -- resolve as a confident cwd-joined guess.
+    local response = table.concat({
+      "FILE:CREATE zzz_no_such_dir_xyz/module.lua",
+      "```lua",
+      "return true",
+      "```",
+    }, "\n")
+
+    local ops, _is_agent, _tool_calls, warnings = parse_response(response, root, nil)
+
+    assert.are.equal(1, #ops)
+    assert.is_table(warnings)
+    assert.is_true(#warnings > 0)
+  end)
+
+  it("still resolves an unambiguous monorepo path unchanged (regression guard)", function()
+    local root = make_tmp_dir()
+    vim.fn.mkdir(root .. "/frontend/src/api", "p")
+    local target_path = root .. "/frontend/src/api/existing.ts"
+    write_file(target_path, "// existing file")
+
+    local response = table.concat({
+      "FILE:CREATE src/api/new_module.ts",
+      "```typescript",
+      "export function hello() { return 'hi'; }",
+      "```",
+    }, "\n")
+
+    local ops, is_agent, _tool_calls, warnings = parse_response(response, root, target_path)
+
+    assert.is_true(is_agent)
+    assert.are.equal(1, #ops)
+    assert.are.equal(root .. "/frontend/src/api/new_module.ts", ops[1].path)
+    assert.is_table(warnings)
+    assert.are.equal(0, #warnings)
+  end)
+end)
+
 describe("parse_response — FILE:DELETE + dedup handling", function()
   it("dedupes repeated FILE:DELETE for the same path (last-wins) and keeps unrelated ops", function()
     local root = make_tmp_dir()

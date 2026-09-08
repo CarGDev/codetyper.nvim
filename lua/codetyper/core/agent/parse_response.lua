@@ -19,16 +19,17 @@ local flog = require("codetyper.support.flog") -- TODO: remove after debugging
 ---@param path string Relative path from model output (e.g. "src/interfaces/api/foo.ts")
 ---@param project_root string Git root or detected project root
 ---@param target_path string|nil The file being edited (used to infer the correct base)
----@return string absolute path
+---@return string absolute_path
+---@return boolean ambiguous True when no candidate base or existing file confirmed this path
 local function resolve_path(path, project_root, target_path)
   path = path:gsub("^%s+", ""):gsub("%s+$", "")
   if path:match("^/") then
-    return path
+    return path, false
   end
 
   local first_segment = path:match("^([^/]+)")
   if not first_segment then
-    return project_root .. "/" .. path
+    return project_root .. "/" .. path, false
   end
 
   -- Build list of candidate base directories, ordered by priority
@@ -64,19 +65,21 @@ local function resolve_path(path, project_root, target_path)
   -- Try each candidate: pick the first where first_segment exists
   for _, base in ipairs(candidates) do
     if vim.fn.isdirectory(base .. "/" .. first_segment) == 1 then
-      return base .. "/" .. path
+      return base .. "/" .. path, false
     end
   end
 
   -- If file already exists under any candidate, use that
   for _, base in ipairs(candidates) do
     if vim.fn.filereadable(base .. "/" .. path) == 1 then
-      return base .. "/" .. path
+      return base .. "/" .. path, false
     end
   end
 
-  -- Default: first candidate (target-inferred or cwd)
-  return candidates[1] .. "/" .. path
+  -- No candidate confirmed this path — fall back to the first candidate but
+  -- flag it as ambiguous/unresolved (per Ambiguous Path Resolution Fails
+  -- Loudly) instead of silently presenting a confident guess.
+  return candidates[1] .. "/" .. path, true
 end
 
 --- Split response into sections by FILE: markers
@@ -190,8 +193,10 @@ end
 ---@return FileOperation[] operations
 ---@return boolean is_agent_response
 ---@return table[] tool_calls
+---@return string[] warnings Non-fatal issues detected while parsing (truncation, ambiguous paths)
 local function parse_response(response, project_root, target_path)
   local ops = {}
+  local warnings = {}
 
   -- Strip thinking block
   local cleaned = response:gsub("@thinking.-end thinking\n?", "")
@@ -200,7 +205,7 @@ local function parse_response(response, project_root, target_path)
   local tool_calls = parse_tool_calls(response)
 
   if not cleaned:match("FILE:") and #tool_calls == 0 then
-    return ops, false, tool_calls
+    return ops, false, tool_calls, warnings
   end
 
   flog.info("agent.parse", "detected agent response format") -- TODO: remove after debugging
@@ -208,16 +213,27 @@ local function parse_response(response, project_root, target_path)
   local sections = split_sections(cleaned)
 
   for _, section in ipairs(sections) do
-    local full_path = resolve_path(section.path, project_root, target_path)
+    local full_path, ambiguous = resolve_path(section.path, project_root, target_path)
+    if ambiguous then
+      local warning = "Ambiguous path resolution (no confident match): " .. section.path .. " -> " .. full_path
+      table.insert(warnings, warning)
+      flog.warn("agent.parse", warning) -- TODO: remove after debugging
+    end
 
     if section.action == "FILE:CREATE" then
       local content = strip_fences(section.body)
-      table.insert(ops, {
-        action = "create",
-        path = full_path,
-        content = content,
-      })
-      flog.info("agent.parse", "CREATE: " .. full_path) -- TODO: remove after debugging
+      if content:match("^%s*$") then
+        local warning = "Dropped FILE:CREATE with empty/truncated body: " .. full_path
+        table.insert(warnings, warning)
+        flog.warn("agent.parse", warning) -- TODO: remove after debugging
+      else
+        table.insert(ops, {
+          action = "create",
+          path = full_path,
+          content = content,
+        })
+        flog.info("agent.parse", "CREATE: " .. full_path) -- TODO: remove after debugging
+      end
 
     elseif section.action == "FILE:MODIFY" then
       -- Extract SEARCH/REPLACE blocks from the body
@@ -260,7 +276,7 @@ local function parse_response(response, project_root, target_path)
   flog.info("agent.parse", string.format("parsed %d operations", #ops)) -- TODO: remove after debugging
 
   local is_agent = #ops > 0 or #tool_calls > 0
-  return ops, is_agent, tool_calls
+  return ops, is_agent, tool_calls, warnings
 end
 
 return parse_response
