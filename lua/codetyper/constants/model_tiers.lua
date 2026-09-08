@@ -37,13 +37,13 @@ local function update_from_api(models)
   end
 end
 
---- Get tier for a model name
---- Priority: API-detected → model_caps (tools field) → static map → default "chat"
----@param model string Raw model name
----@return string tier "agent" | "chat" | "basic"
-local function get_tier(model)
-  local normalized = normalize_model(model)
-
+--- Look up a tier for a normalized model name against api_tiers, model_caps,
+--- and static_tiers, in that priority order. Returns nil (no default
+--- applied) when nothing matches, so callers can retry with a different
+--- name before falling back to a default tier.
+---@param normalized string Already-normalized model name
+---@return string|nil tier "agent" | "chat" | "basic" | nil
+local function lookup_tier(normalized)
   -- API-detected tier (most accurate, from live /models endpoint)
   if api_tiers and api_tiers[normalized] then
     return api_tiers[normalized]
@@ -66,9 +66,34 @@ local function get_tier(model)
     return static_tiers[normalized]
   end
 
-  -- Ollama models with ":" default to basic
-  if model:match(":") then
-    return "basic"
+  return nil
+end
+
+--- Get tier for a model name
+--- Priority: API-detected → model_caps (tools field) → static map →
+--- same lookup chain again against the ":tag"-stripped name → default "chat"
+---@param model string Raw model name
+---@return string tier "agent" | "chat" | "basic"
+local function get_tier(model)
+  local normalized = normalize_model(model)
+
+  local tier = lookup_tier(normalized)
+  if tier then
+    return tier
+  end
+
+  -- Strip a trailing Ollama-style ":tag" (e.g. "llama3:8b" -> "llama3",
+  -- "gemma4:26b" -> "gemma4") and retry the same lookup chain before
+  -- defaulting. A model MUST NOT be classified "basic" purely because its
+  -- raw name contains a colon — that heuristic previously misclassified
+  -- any unknown tagged model (including this plugin's own default
+  -- "gemma4:26b") into the weakest tier.
+  local stripped = normalized:match("^([^:]+):")
+  if stripped then
+    tier = lookup_tier(stripped)
+    if tier then
+      return tier
+    end
   end
 
   return "chat"
