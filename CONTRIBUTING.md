@@ -1,287 +1,151 @@
 # Contributing to Codetyper.nvim
 
-Thank you for considering contributing to Codetyper.nvim!
+Thank you for helping improve Codetyper.nvim. Keep changes small, observable,
+and safe at the boundary between Neovim, providers, local tools, and files.
 
-## Table of Contents
+## Development setup
 
-- [Code of Conduct](#code-of-conduct)
-- [Getting Started](#getting-started)
-- [Development Setup](#development-setup)
-- [Project Structure](#project-structure)
-- [Making Changes](#making-changes)
-- [Submitting Changes](#submitting-changes)
-- [Style Guide](#style-guide)
-- [Testing](#testing)
-- [Questions](#questions)
+Prerequisites:
 
-## Code of Conduct
-
-This project and everyone participating in it is governed by our commitment to creating a welcoming and inclusive environment. Please be respectful and constructive in all interactions.
-
-## Getting Started
-
-1. Fork the repository
-2. Clone your fork locally
-3. Set up the development environment
-4. Create a branch for your changes
-5. Make your changes
-6. Submit a pull request
-
-## Development Setup
-
-### Prerequisites
-
-- Neovim >= 0.8.0
-- Lua 5.1+ or LuaJIT
+- Neovim 0.9 or newer
+- LuaJIT or Lua 5.1-compatible tooling
 - Git
-- One of: GitHub Copilot (via copilot.lua/copilot.vim) or Ollama
+- `make`
+- Plenary.nvim available to the headless test bootstrap
+- StyLua and Luacheck for formatting and linting
 
-### Local Development
+A real LLM provider, CodeGraph, TokenSave, MCPHub, database, or network access
+is not required for tests. Specs inject fakes for HTTP, CLI, MCP, providers,
+buffers, popups, and cancellation.
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/CarGDev/codetyper.nvim.git
-   cd codetyper.nvim
-   ```
-
-2. Create a minimal test configuration:
-   ```lua
-   -- tests/minimal_init.lua
-   vim.opt.runtimepath:append(".")
-   require("codetyper").setup({
-     llm = {
-       provider = "ollama",
-     },
-   })
-   ```
-
-3. Test your changes:
-   ```bash
-   nvim --clean -u tests/minimal_init.lua
-   ```
-
-4. Run the full test suite:
-   ```bash
-   make test
-   ```
-
-## Project Structure
-
-```
-codetyper.nvim/
-├── lua/codetyper/
-│   ├── init.lua                         # Entry point, setup()
-│   ├── inject.lua                       # Code injection into buffers
-│   ├── parser.lua                       # /@ @/ tag parser
-│   ├── types.lua                        # Lua type annotations
-│   │
-│   ├── config/
-│   │   ├── defaults.lua                 # Default configuration values
-│   │   ├── credentials.lua              # Credential & model storage
-│   │   └── preferences.lua              # User preference persistence
-│   │
-│   ├── adapters/nvim/
-│   │   ├── autocmds.lua                 # Autocommands (prompt processing)
-│   │   ├── commands.lua                 # All :Coder* user commands
-│   │   ├── cmp/init.lua                 # nvim-cmp source integration
-│   │   └── ui/
-│   │       ├── thinking.lua             # Status window ("Thinking...")
-│   │       ├── throbber.lua             # Animated spinner
-│   │       ├── logs.lua                 # Internal log viewer
-│   │       ├── logs_panel.lua           # Standalone logs panel
-│   │       ├── context_modal.lua        # File-context picker
-│   │       └── diff_review.lua          # Side-by-side diff review
-│   │
-│   ├── core/
-│   │   ├── transform.lua                # Visual selection -> prompt -> apply
-│   │   ├── marks.lua                    # Extmark tracking for injection
-│   │   ├── thinking_placeholder.lua     # Inline virtual text status
-│   │   ├── scope/init.lua              # Tree-sitter + indent scope
-│   │   ├── intent/init.lua             # Prompt intent classifier
-│   │   ├── llm/
-│   │   │   ├── init.lua                 # Provider dispatcher
-│   │   │   ├── copilot.lua              # GitHub Copilot client
-│   │   │   ├── ollama.lua               # Ollama client (local)
-│   │   │   ├── confidence.lua           # Response confidence scoring
-│   │   │   └── selector.lua             # Provider selection logic
-│   │   ├── diff/
-│   │   │   ├── diff.lua                 # Diff utilities
-│   │   │   ├── patch.lua                # Patch generation + staleness
-│   │   │   ├── conflict.lua             # Git-style conflict resolution
-│   │   │   └── search_replace.lua       # SEARCH/REPLACE block parser
-│   │   ├── events/queue.lua             # Priority event queue
-│   │   ├── scheduler/
-│   │   │   ├── scheduler.lua            # Event dispatch orchestrator
-│   │   │   ├── worker.lua               # Async LLM worker
-│   │   │   ├── executor.lua             # Tool execution
-│   │   │   ├── loop.lua                 # Processing loop
-│   │   │   └── resume.lua               # Session resume
-│   │   ├── cost/init.lua               # Token usage + cost estimation
-│   │   └── memory/                      # Knowledge graph & pattern learning
-│   │
-│   ├── features/
-│   │   ├── completion/                  # Inline completion & suggestions
-│   │   └── indexer/                     # Project indexing & analysis
-│   │
-│   ├── support/
-│   │   ├── utils.lua                    # General utilities
-│   │   ├── logger.lua                   # Logging system
-│   │   ├── tree.lua                     # Project tree generator
-│   │   ├── health.lua                   # :checkhealth provider
-│   │   ├── gitignore.lua                # .gitignore management
-│   │   └── langmap.lua                  # Language detection
-│   │
-│   ├── params/agents/                   # Config tables for subsystems
-│   └── prompts/                         # System & agent prompts
-│
-├── plugin/codetyper.lua                 # Plugin loader
-├── doc/codetyper.txt                    # Vim help documentation
-├── doc/tags                             # Help tags
-├── tests/                               # Test suite
-├── Makefile                             # Build/test/lint targets
-├── README.md
-├── CHANGELOG.md
-├── CONTRIBUTING.md
-├── LICENSE
-└── llms.txt                             # LLM context documentation
-```
-
-## Making Changes
-
-### Branch Naming
-
-Use descriptive branch names:
-- `feature/description` — New features
-- `fix/description` — Bug fixes
-- `docs/description` — Documentation updates
-- `refactor/description` — Code refactoring
-
-### Commit Messages
-
-Follow conventional commits:
-```
-type(scope): description
-
-[optional body]
-
-[optional footer]
-```
-
-Types:
-- `feat` — New feature
-- `fix` — Bug fix
-- `docs` — Documentation
-- `style` — Formatting, no code change
-- `refactor` — Code restructuring
-- `test` — Adding tests
-- `chore` — Maintenance
-
-Examples:
-```
-feat(scope): add indentation-based fallback for scope resolution
-fix(patch): handle missing if-wrapper in SEARCH/REPLACE block
-docs(readme): update commands reference for current state
-```
-
-## Submitting Changes
-
-1. Ensure your code follows the style guide
-2. Update documentation if needed
-3. Update `CHANGELOG.md` for notable changes
-4. Test your changes thoroughly
-5. Create a pull request with:
-   - Clear title describing the change
-   - Description of what and why
-   - Reference to any related issues
-
-### Pull Request Template
-
-```markdown
-## Description
-[Describe your changes]
-
-## Type of Change
-- [ ] Bug fix
-- [ ] New feature
-- [ ] Documentation update
-- [ ] Refactoring
-
-## Testing
-[Describe how you tested your changes]
-
-## Checklist
-- [ ] Code follows style guide
-- [ ] Documentation updated
-- [ ] CHANGELOG.md updated
-- [ ] All tests pass
-```
-
-## Style Guide
-
-### Lua Style
-
-- Use tabs for indentation
-- Use `snake_case` for variables and functions
-- Use `PascalCase` for module names
-- Add type annotations with `---@param`, `---@return`, etc.
-- Document public functions with LuaDoc comments
-- Avoid obvious/redundant comments
-
-```lua
----@mod module_name Module description
-
-local M = {}
-
---- Description of the function
----@param name string The parameter description
----@return boolean
-function M.example_function(name)
-  return true
-end
-
-return M
-```
-
-### Documentation
-
-- Keep `README.md` up to date
-- Update `doc/codetyper.txt` for new features
-- Regenerate `doc/tags` after help file changes
-- Use clear, concise language
-- Include examples where helpful
-
-## Testing
-
-### Running Tests
+Clone the repository and inspect the available commands:
 
 ```bash
-make test                        # Run all tests (tests/spec/*.lua, plenary.busted)
-make test-file FILE=tests/spec/patch_spec.lua   # Run a specific test file
-make lint                        # Run luacheck
-make format                      # Format with stylua
+cd codetyper.nvim
+make check-deps
 ```
 
-### Manual Testing
+## Project structure
 
-1. Test all commands work correctly
-2. Test with different file types
-3. Test LLM integration (Copilot and Ollama)
-4. Test edge cases (empty files, large files, no Tree-sitter, etc.)
-5. Run `:checkhealth codetyper`
+```text
+lua/codetyper/
+├── core/agent/                 parser, executor, loop, MCP, tool registry
+├── core/llm/                   providers, selection, shared HTTP/context
+├── core/scheduler/             event scheduling and worker flow
+├── core/transform.lua          prompt window and selection handling
+├── features/indexer/           project index and memory context
+├── inject/                     deterministic buffer insertion
+├── prompts/tiers/              agent, chat, and basic prompt builders
+├── window/                     conflict, cost, queue, terminal, ask-user UI
+├── adapters/nvim/              commands, keymaps, and Neovim UI glue
+├── config/                     defaults, provider state, and credentials
+└── params/                     language and subsystem definitions
+tests/spec/                     headless Plenary specs
+doc/codetyper.txt               Vim help
+```
 
-## Questions?
+The canonical agent registry is
+`lua/codetyper/core/agent/tools/init.lua`. It owns only:
 
-Feel free to:
-- Open an issue for bugs or feature requests
-- Start a discussion for questions
-- Reach out to the maintainer
+```text
+codegraph_context
+tokensave_search
+context7_resolve_library
+context7_query_docs
+ask_user
+add_import
+```
 
-## Contact
+Preserve the separation between registry tools, terminal commands, and external
+MCP tools. Do not widen an allowlist merely to make a test or integration pass.
 
-- **Maintainer**: cargdev
-- **Email**: carlos.gutierrez@carg.dev
-- **Website**: [cargdev.io](https://cargdev.io)
+## Making changes
 
----
+1. Create a focused branch.
+2. Read the relevant source, tests, help text, and configuration contract.
+3. For behavior changes, write a failing focused test first.
+4. Implement the smallest change that makes the test pass.
+5. Add an edge case or second path when the behavior branches.
+6. Run focused tests, then the full available checks.
+7. Update user-facing documentation and `CHANGELOG.md` for notable changes.
+8. Regenerate `doc/tags` after editing `doc/codetyper.txt`.
 
-Thank you for contributing!
+Avoid unrelated formatting or generated-file changes. Never include credentials,
+tokens, private URLs, or user project data in tests, logs, fixtures, or commits.
+
+## Tests and quality checks
+
+```bash
+make test
+make test-file FILE=tests/spec/http_boundary_spec.lua
+make lint
+make format-check
+make docs
+```
+
+The test suite is deterministic and headless. Boundary specs must use fakes:
+
+- HTTP tests replace `vim.fn.jobstart` and must never make a network request.
+- Local context tests inject argv runners and must never run indexing, sync,
+  daemon, shell, or database operations.
+- Context7 tests inject MCPHub/HTTP transports and must not use live secrets.
+- Popup tests drive headless floats or injectable UI callbacks.
+- Provider tests inject transports and verify secret-free persistence/logging.
+
+When changing an async boundary, test cancellation, timeout, late callbacks,
+and exactly-once completion. When changing a parser or tool boundary, test
+malformed input, bounds, allowlists, and no-mutation behavior.
+
+## Documentation
+
+Update the relevant section in `README.md`, `llm.txt`, and
+`doc/codetyper.txt` when public behavior changes. Keep these claims aligned:
+
+- supported providers are `copilot`, `ollama`, `claude`, and `openai`;
+- native structured tools are limited to eligible Copilot project tasks;
+- Claude uses environment-only `ANTHROPIC_API_KEY`;
+- OpenAI means ChatGPT subscription OAuth, not `OPENAI_API_KEY`;
+- Context7 is MCPHub-first with a fixed read-only fallback;
+- CodeGraph and TokenSave adapters are read-only and fail closed;
+- import paths and declarations are bounded and project-relative; and
+- tests use network/CLI/DB-free fakes.
+
+After help changes:
+
+```bash
+make docs
+```
+
+## Style guide
+
+- Use two spaces for Lua indentation, matching the repository formatter.
+- Use `snake_case` for Lua variables and functions.
+- Keep modules focused and prefer pure helpers for validation and transformations.
+- Add LuaCATS annotations to public functions when practical.
+- Keep comments concise and describe safety boundaries or non-obvious behavior.
+- Use English for code comments and project documentation.
+
+Commit messages should use a conventional prefix, for example:
+
+```text
+feat(tools): add bounded project context adapter
+```
+
+## Pull requests
+
+Describe the user-visible behavior, safety impact, and rollback boundary. Include
+the exact focused test command and result, plus full-suite/lint/format/docs
+results when available. Call out unavailable external integrations rather than
+silently substituting live services.
+
+Checklist:
+
+- [ ] Focused tests pass
+- [ ] Full test suite passes when available
+- [ ] Lint and format checks pass
+- [ ] Documentation and changelog are updated when needed
+- [ ] `doc/tags` was regenerated after help changes
+- [ ] No credentials or private project data are included
+
+For security-sensitive changes, follow [SECURITY.md](SECURITY.md) instead of
+publishing exploit details in a public issue.

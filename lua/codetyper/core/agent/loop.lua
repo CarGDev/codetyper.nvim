@@ -14,7 +14,13 @@ local function format_tool_results(tool_results)
   local parts = { "Here are the tool results:\n" }
 
   for _, result in ipairs(tool_results) do
-    if result.type == "terminal" then
+    if result.type == "agent" then
+      table.insert(parts, string.format(
+        "TOOL_RESULT: %s\n```json\n%s\n```\n",
+        result.name or "agent_tool",
+        result.output or "{}"
+      ))
+    elseif result.type == "terminal" then
       table.insert(parts, string.format(
         "TOOL_RESULT: TERMINAL `%s`\n```\n%s\n```\n",
         result.command or "",
@@ -163,112 +169,28 @@ end
 --- Copilot flags aggressive automated usage — keep a buffer.
 local TOOL_LOOP_DELAY_MS = 2500
 
---- Max content size per tool result to avoid context window exhaustion
-local MAX_TOOL_RESULT_CHARS = 4000
-
---- Normalize a tool call to flat format {id, name, arguments}
---- Handles both stream format ({id, name, arguments}) and
---- OpenAI message format ({id, type, function: {name, arguments}})
----@param tc table Raw tool call
----@return table Normalized {id, name, arguments}
+--- Normalize a tool call through the shared executor boundary.
+---@param tc table Raw text or native tool call
+---@return table Normalized dispatch call
 local function normalize_tool_call(tc)
-  if tc["function"] then
-    -- OpenAI message format
-    local args = tc["function"].arguments or "{}"
-    if type(args) == "string" then
-      local ok, parsed = pcall(vim.json.decode, args)
-      args = ok and parsed or {}
-    end
-    return {
-      id = tc.id or tc.call_id or "",
-      name = tc["function"].name or "",
-      arguments = args,
-      arguments_raw = type(tc["function"].arguments) == "string"
-        and tc["function"].arguments or vim.json.encode(args),
-    }
-  end
-  -- Already flat format
-  return tc
+  return executor.normalize_tool_call(tc)
 end
 
 --- Execute native tool calls and return results
 ---@param tool_calls table[] Array of tool calls (stream or message format)
 ---@param callback fun(results: table[]) Array of {tool_call_id, role, content}
-local function execute_native_tools(tool_calls, callback)
-  local mcp = require("codetyper.core.agent.mcp")
-  local results = {}
-  local pending = #tool_calls
-
-  if pending == 0 then
-    callback(results)
-    return
-  end
-
-  for _, raw_tc in ipairs(tool_calls) do
-    local tc = normalize_tool_call(raw_tc)
-    local tool_call_id = tc.id
-
-    flog.info("agent.loop.native", string.format(
-      "executing tool: name=%s id=%s args=%s",
-      tc.name, tc.id, vim.inspect(tc.arguments):sub(1, 200)
-    ))
-
-    if tc.name == "terminal" then
-      -- Terminal tool: run shell command in visible panel
-      local cmd = tc.arguments and tc.arguments.command or ""
-      flog.info("agent.loop.native", "terminal: " .. cmd:sub(1, 100))
-
-      local terminal = require("codetyper.core.agent.terminal")
-      terminal.run_visible(cmd, function(output, err)
-        local content = err or output or ""
-        if content == "" then
-          content = "Command completed with no output."
-        end
-        if #content > MAX_TOOL_RESULT_CHARS then
-          content = content:sub(1, MAX_TOOL_RESULT_CHARS) .. "\n...(truncated)"
-        end
-        table.insert(results, {
-          role = "tool",
-          tool_call_id = tool_call_id,
-          content = content,
-        })
-        pending = pending - 1
-        if pending == 0 then callback(results) end
-      end)
-    else
-      -- MCP tool: decode server__tool name
-      local server, tool = mcp.decode_tool_name(tc.name)
-      if server and tool then
-        flog.info("agent.loop.native", string.format("mcp: %s/%s", server, tool))
-        mcp.call_tool(server, tool, tc.arguments or {}, function(output, err)
-          local content = err or output or ""
-          if content == "" then
-            content = "Tool returned empty result. The operation may have failed silently."
-          end
-          if #content > MAX_TOOL_RESULT_CHARS then
-            content = content:sub(1, MAX_TOOL_RESULT_CHARS) .. "\n...(truncated)"
-          end
-          table.insert(results, {
-            role = "tool",
-            tool_call_id = tool_call_id,
-            content = content,
-          })
-          pending = pending - 1
-          if pending == 0 then callback(results) end
-        end)
-      else
-        -- Unknown tool — return error
-        flog.warn("agent.loop.native", "unknown tool: " .. tc.name)
-        table.insert(results, {
-          role = "tool",
-          tool_call_id = tool_call_id,
-          content = "Error: unknown tool '" .. tc.name .. "'",
-        })
-        pending = pending - 1
-        if pending == 0 then callback(results) end
-      end
+local function execute_native_tools(tool_calls, callback, opts)
+  return executor.execute_tools(tool_calls, function(results)
+    local native_results = {}
+    for _, result in ipairs(results) do
+      native_results[#native_results + 1] = {
+        role = "tool",
+        tool_call_id = result.tool_call_id or result.id or "",
+        content = result.output or "{}",
+      }
     end
-  end
+    callback(native_results)
+  end, opts)
 end
 
 --- Run one iteration of the native agent loop
@@ -277,7 +199,7 @@ end
 ---@param system_prompt string
 ---@param iteration number
 ---@param on_complete fun(file_ops: table[], final_response: string)
-local function run_native_iteration(event, messages, system_prompt, iteration, on_complete)
+local function run_native_iteration(event, messages, system_prompt, iteration, on_complete, dispatch_opts)
   flog.info("agent.loop.native", string.format("iteration %d/%d", iteration, MAX_ITERATIONS))
 
   -- Get the last assistant result
@@ -289,16 +211,41 @@ local function run_native_iteration(event, messages, system_prompt, iteration, o
 
   -- Parse and execute FILE: ops from text
   local file_ops = {}
+  local text_tool_calls = {}
   pcall(function()
     local utils = require("codetyper.support.utils")
     local root = utils.get_project_root()
-    local ops = parse_response(text or "", root, event.target_path)
+    local ops, _, parsed_tool_calls = parse_response(text or "", root, event.target_path)
     if ops and #ops > 0 then
       flog.info("agent.loop.native", string.format("executing %d file ops", #ops))
       executor.execute(ops)
       file_ops = ops
     end
+    text_tool_calls = parsed_tool_calls or {}
   end)
+
+  -- A structured response may still contain legacy markers. Feed both forms
+  -- through the same executor, suppressing duplicate name/argument pairs.
+  local combined_tool_calls = {}
+  local seen_tool_calls = {}
+  local function append_tool_call(call)
+    local normalized = normalize_tool_call(call)
+    local ok, encoded = pcall(vim.json.encode, normalized.args or {
+      command = normalized.command,
+    })
+    local key = normalized.kind .. ":" .. normalized.name .. ":" .. (ok and encoded or "")
+    if not seen_tool_calls[key] then
+      seen_tool_calls[key] = true
+      combined_tool_calls[#combined_tool_calls + 1] = call
+    end
+  end
+  for _, call in ipairs(tool_calls_raw) do
+    append_tool_call(call)
+  end
+  for _, call in ipairs(text_tool_calls) do
+    append_tool_call(call)
+  end
+  tool_calls_raw = combined_tool_calls
 
   -- No tool calls → done
   if #tool_calls_raw == 0 then
@@ -325,8 +272,8 @@ local function run_native_iteration(event, messages, system_prompt, iteration, o
   for _, raw_tc in ipairs(tool_calls_raw) do
     local ntc = normalize_tool_call(raw_tc)
     local display = ntc.name
-    if display == "terminal" and ntc.arguments and ntc.arguments.command then
-      display = "$ " .. ntc.arguments.command:sub(1, 40)
+    if display == "terminal" and ntc.command then
+      display = "$ " .. ntc.command:sub(1, 40)
     elseif display:match("__") then
       local s, t = require("codetyper.core.agent.mcp").decode_tool_name(display)
       if s and t then display = s .. "/" .. t end
@@ -379,6 +326,8 @@ local function run_native_iteration(event, messages, system_prompt, iteration, o
         messages = messages,
         is_follow_up = true,
         file_path = event.target_path,
+        provider = event.provider or event.explicit_provider,
+        is_project_task = event.is_project_task == true,
       }
 
       client.generate_structured("", context, {
@@ -415,7 +364,7 @@ local function run_native_iteration(event, messages, system_prompt, iteration, o
           local last = messages[#messages]
           last.tool_calls = assistant_msg.tool_calls or {}
 
-          run_native_iteration(event, messages, system_prompt, iteration + 1, on_complete)
+        run_native_iteration(event, messages, system_prompt, iteration + 1, on_complete, dispatch_opts)
         end,
         on_error = function(err)
           flog.error("agent.loop.native", "follow-up failed: " .. tostring(err))
@@ -423,14 +372,14 @@ local function run_native_iteration(event, messages, system_prompt, iteration, o
         end,
       })
     end, TOOL_LOOP_DELAY_MS)
-  end)
+  end, dispatch_opts)
 end
 
 --- Start a native agent loop using structured API tool_calls
 ---@param event table Original PromptEvent
 ---@param result table WorkerResult with tool_calls and system_prompt
 ---@param on_complete fun(file_ops: table[], final_response: string)
-function M.start_native(event, result, on_complete)
+function M.start_native(event, result, on_complete, dispatch_opts)
   flog.info("agent.loop.native", string.format(
     ">>> starting native agent loop: %d tool calls",
     result.tool_calls and #result.tool_calls or 0
@@ -476,7 +425,9 @@ function M.start_native(event, result, on_complete)
   table.insert(messages, assistant_msg)
 
   -- Start the loop from the first tool call execution
-  run_native_iteration(event, messages, system_prompt, 1, on_complete)
+  run_native_iteration(event, messages, system_prompt, 1, on_complete, dispatch_opts)
 end
+
+M.execute_native_tools = execute_native_tools
 
 return M

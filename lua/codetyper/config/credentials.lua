@@ -2,11 +2,55 @@
 ---@brief [[
 --- Manages API keys and model preferences stored outside of config files.
 --- Credentials are stored in ~/.local/share/nvim/codetyper/configuration.json
+--- Anthropic authentication is read from ANTHROPIC_API_KEY only and is never
+--- persisted in that metadata file. ChatGPT subscription tokens are session-only
+--- and are never accepted as ordinary OpenAI API-key credentials.
 ---@brief ]]
 
 local M = {}
 
 local utils = require("codetyper.support.utils")
+
+local function empty_data()
+  return {
+    version = 1,
+    providers = {},
+  }
+end
+
+local function has_value(value)
+  return type(value) == "string" and value:match("%S") ~= nil
+end
+
+--- Remove secrets that must never cross the Anthropic environment boundary.
+---@param data table|nil Credential metadata
+---@return table Sanitized credential metadata
+local function sanitize(data)
+  local result = type(data) == "table" and vim.deepcopy(data) or empty_data()
+  result.providers = type(result.providers) == "table" and result.providers or {}
+  result.ANTHROPIC_API_KEY = nil
+  result.anthropic_api_key = nil
+
+  local claude = result.providers.claude
+  if type(claude) == "table" then
+    claude.api_key = nil
+    claude.ANTHROPIC_API_KEY = nil
+    claude.anthropic_api_key = nil
+  end
+
+  local openai = result.providers.openai
+  if type(openai) == "table" then
+    local safe_openai = {}
+    if openai.model ~= nil then
+      safe_openai.model = vim.deepcopy(openai.model)
+    end
+    result.providers.openai = safe_openai
+  end
+
+  return result
+end
+
+M.sanitize = sanitize
 
 --- Get the credentials file path
 ---@return string Path to credentials file
@@ -30,27 +74,22 @@ function M.load()
   local content = utils.read_file(path)
 
   if not content or content == "" then
-    return {
-      version = 1,
-      providers = {},
-    }
+    return empty_data()
   end
 
   local ok, data = pcall(vim.json.decode, content)
   if not ok or not data then
-    return {
-      version = 1,
-      providers = {},
-    }
+    return empty_data()
   end
 
-  return data
+  return sanitize(data)
 end
 
 --- Save credentials to file
 ---@param data table Credentials data
 ---@return boolean Success
 function M.save(data)
+  data = sanitize(data)
   if not ensure_dir() then
     return false
   end
@@ -65,13 +104,20 @@ function M.save(data)
 end
 
 --- Get API key for a provider
----@param provider string Provider name (copilot, ollama)
+---@param provider string Provider name (copilot, ollama, claude, openai)
 ---@return string|nil API key or nil if not found
 function M.get_api_key(provider)
+  if provider == "claude" then
+    return has_value(vim.env.ANTHROPIC_API_KEY) and vim.env.ANTHROPIC_API_KEY or nil
+  end
+  if provider == "openai" then
+    return nil
+  end
+
   local data = M.load()
   local provider_data = data.providers and data.providers[provider]
 
-  if provider_data and provider_data.api_key then
+  if provider_data and has_value(provider_data.api_key) then
     return provider_data.api_key
   end
 
@@ -124,6 +170,10 @@ end
 ---@param credentials table Credentials (api_key, model, endpoint, host)
 ---@return boolean Success
 function M.set_credentials(provider, credentials)
+  if type(provider) ~= "string" or provider == "" or type(credentials) ~= "table" then
+    return false
+  end
+
   local data = M.load()
 
   if not data.providers then
@@ -136,7 +186,9 @@ function M.set_credentials(provider, credentials)
 
   -- Merge credentials
   for key, value in pairs(credentials) do
-    if value and value ~= "" then
+    local is_anthropic_secret = provider == "claude"
+      and (key == "api_key" or key == "ANTHROPIC_API_KEY" or key == "anthropic_api_key")
+    if not is_anthropic_secret and value and value ~= "" then
       data.providers[provider][key] = value
     end
   end
@@ -167,11 +219,12 @@ function M.list_providers()
   local data = M.load()
   local result = {}
 
-  local all_providers = { "copilot", "ollama" }
+  local all_providers = { "copilot", "ollama", "claude", "openai" }
 
   for _, provider in ipairs(all_providers) do
     local provider_data = data.providers and data.providers[provider]
-    local has_stored_key = provider_data and provider_data.api_key and provider_data.api_key ~= ""
+    local has_stored_key = provider ~= "claude" and provider ~= "openai" and provider_data and has_value(provider_data.api_key)
+    local has_environment_key = provider == "claude" and has_value(vim.env.ANTHROPIC_API_KEY)
     local has_model = provider_data and provider_data.model and provider_data.model ~= ""
 
     local configured_from_config = false
@@ -187,23 +240,30 @@ function M.list_providers()
           configured_from_config = true
         elseif provider == "ollama" then
           configured_from_config = pc.host ~= nil
+        elseif provider == "claude" then
+          configured_from_config = has_environment_key
+        elseif provider == "openai" then
+          local ok_auth, openai_auth = pcall(require, "codetyper.core.llm.providers.openai.auth")
+          configured_from_config = ok_auth and openai_auth.is_authenticated and openai_auth.is_authenticated() or false
         end
       end
     end
 
     local is_configured = has_stored_key
+      or has_environment_key
       or (provider == "ollama" and provider_data ~= nil)
       or (provider == "copilot" and (provider_data ~= nil or configured_from_config))
-      or (provider == "claude" and (has_stored_key or configured_from_config))
       or configured_from_config
 
     table.insert(result, {
       name = provider,
       configured = is_configured,
-      has_api_key = has_stored_key,
+      has_api_key = has_stored_key or has_environment_key,
       has_model = has_model or config_model ~= nil,
       model = (provider_data and provider_data.model) or config_model,
-      source = has_stored_key and "stored" or (configured_from_config and "config" or nil),
+      source = has_stored_key and "stored"
+        or has_environment_key and "environment"
+        or (configured_from_config and "config" or nil),
     })
   end
 
@@ -214,7 +274,8 @@ end
 M.default_models = {
   copilot = "claude-sonnet-4",
   ollama = "deepseek-coder:6.7b",
-  claude = "claude-3-5-sonnet-20241022",
+  claude = "claude-sonnet-4-5",
+  openai = "gpt-5.5",
 }
 
 --- Hardcoded fallback models (used before API models are fetched)
@@ -476,7 +537,9 @@ function M.show_status()
     local active_marker = p.name == current and " [ACTIVE]" or ""
     local source_info = ""
     if p.configured then
-      source_info = p.source == "stored" and " (stored)" or " (config)"
+      source_info = p.source == "stored" and " (stored)"
+        or p.source == "environment" and " (environment)"
+        or " (config)"
     end
     local model_info = p.model and (" - " .. p.model) or ""
 
@@ -587,8 +650,13 @@ local function is_provider_configured(provider)
       return true, "config"
     end
   elseif provider == "claude" then
-    if provider_config.api_key or vim.env.ANTHROPIC_API_KEY then
-      return true, "config"
+    if has_value(vim.env.ANTHROPIC_API_KEY) then
+      return true, "environment"
+    end
+  elseif provider == "openai" then
+    local ok_auth, openai_auth = pcall(require, "codetyper.core.llm.providers.openai.auth")
+    if ok_auth and openai_auth.is_authenticated and openai_auth.is_authenticated() then
+      return true, "session"
     end
   end
 
@@ -597,7 +665,7 @@ end
 
 --- Interactive switch provider
 function M.interactive_switch_provider()
-  local all_providers = { "copilot", "ollama" }
+  local all_providers = { "copilot", "ollama", "claude", "openai" }
   local available = {}
   local sources = {}
 
@@ -621,7 +689,9 @@ function M.interactive_switch_provider()
     prompt = "Select provider (current: " .. current .. "):",
     format_item = function(item)
       local marker = item == current and " [active]" or ""
-      local source_marker = sources[item] == "stored" and " (stored)" or " (config)"
+      local source_marker = sources[item] == "stored" and " (stored)"
+        or sources[item] == "session" and " (session)"
+        or " (config)"
       return item:upper() .. marker .. source_marker
     end,
   }, function(provider)

@@ -1,19 +1,66 @@
---- Central provider resolver — single source of truth for Copilot vs Ollama.
+--- Central provider resolver — single source of truth for provider selection.
 ---
---- Rule: Copilot is always tried first. Ollama is used ONLY as a fallback
---- when Copilot authentication is unavailable/invalid. This replaces the
---- previously uncoordinated logic scattered across selector/select.lua,
---- scheduler.lua (get_primary_provider/get_remote_provider), and the
---- rate-limit auto-switch in providers/copilot/init.lua.
+--- Rule: an explicit provider is never replaced. Without an explicit choice,
+--- Copilot is tried first and Ollama is used only when Copilot authentication
+--- is unavailable/invalid. This keeps selector, scheduler, and the LLM facade
+--- on the same routing policy.
 local M = {}
 
 local auth = require("codetyper.core.llm.providers.copilot.auth")
-local flog = require("codetyper.support.flog") -- TODO: remove after debugging
+local flog = require("codetyper.support.flog")
+
+local SUPPORTED_PROVIDERS = {
+  ollama = true,
+  copilot = true,
+  claude = true,
+  openai = true,
+}
 
 --- Cached resolution (short TTL so hot paths aren't blocked on network checks)
 local resolved_cache = nil
 local resolved_cache_time = 0
 local RESOLVE_CACHE_TTL = 30 -- seconds
+
+---@param provider string|nil
+---@return boolean
+function M.is_supported(provider)
+  return type(provider) == "string" and SUPPORTED_PROVIDERS[provider] == true
+end
+
+---@param provider string|nil
+---@return boolean, string|nil
+function M.validate_provider(provider)
+  if M.is_supported(provider) then
+    return true, nil
+  end
+  return false, "Unsupported LLM provider: " .. tostring(provider)
+end
+
+--- Find an active provider explicitly selected by the user.
+--- The default Copilot configuration is intentionally not treated as an
+--- explicit choice, so it can still participate in Copilot-first fallback.
+---@return string|nil
+function M.get_explicit_provider()
+  local ok_credentials, credentials = pcall(require, "codetyper.config.credentials")
+  if ok_credentials and credentials.get_active_provider then
+    local active = credentials.get_active_provider()
+    if M.is_supported(active) then
+      return active
+    end
+  end
+
+  local ok_codetyper, codetyper = pcall(require, "codetyper")
+  if not ok_codetyper or not codetyper.get_config then
+    return nil
+  end
+
+  local config = codetyper.get_config()
+  local provider = config and config.llm and config.llm.provider
+  if provider and provider ~= "copilot" and M.is_supported(provider) then
+    return provider
+  end
+  return nil
+end
 
 --- Check if Ollama is configured (host set)
 ---@return boolean
@@ -57,9 +104,25 @@ local function check_ollama_reachable(callback)
 end
 
 --- Resolve which provider should be used right now.
---- Copilot-first: only falls back to Ollama when Copilot auth is invalid.
 ---@param callback fun(provider: string|nil, err: string|nil)
-function M.resolve(callback)
+---@param explicit_provider string|nil Provider selected by the user
+function M.resolve(callback, explicit_provider)
+  -- Accept resolve(provider, callback) for callers that put the choice first.
+  if type(callback) == "string" and type(explicit_provider) == "function" then
+    callback, explicit_provider = explicit_provider, callback
+  end
+
+  explicit_provider = explicit_provider or M.get_explicit_provider()
+  if explicit_provider then
+    local valid, validation_error = M.validate_provider(explicit_provider)
+    if not valid then
+      callback(nil, validation_error)
+      return
+    end
+    callback(explicit_provider, nil)
+    return
+  end
+
   if resolved_cache and (os.time() - resolved_cache_time) < RESOLVE_CACHE_TTL then
     callback(resolved_cache, nil)
     return
@@ -93,12 +156,23 @@ function M.resolve(callback)
 end
 
 --- Synchronous best-effort resolution for call sites that can't go async.
---- Uses the cached result if fresh; otherwise falls back to config default
---- and kicks off a background async resolve to warm the cache for next time.
----@return string provider
-function M.resolve_sync()
+--- Uses the cached result if fresh; otherwise falls back to the automatic
+--- policy and kicks off a background async resolve to warm the cache.
+---@param explicit_provider string|nil Provider selected by the user
+---@return string|nil provider
+---@return string|nil error
+function M.resolve_sync(explicit_provider)
+  explicit_provider = explicit_provider or M.get_explicit_provider()
+  if explicit_provider then
+    local valid, validation_error = M.validate_provider(explicit_provider)
+    if not valid then
+      return nil, validation_error
+    end
+    return explicit_provider, nil
+  end
+
   if resolved_cache and (os.time() - resolved_cache_time) < RESOLVE_CACHE_TTL then
-    return resolved_cache
+    return resolved_cache, nil
   end
 
   -- Warm the cache in the background for the next call
@@ -113,7 +187,7 @@ function M.resolve_sync()
       return config.llm.provider
     end
   end
-  return "copilot"
+  return "copilot", nil
 end
 
 --- Invalidate the resolver cache (e.g. after a Copilot request fails)

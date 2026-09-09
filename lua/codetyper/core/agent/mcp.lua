@@ -1,20 +1,78 @@
---- MCP bridge — interface to mcphub.nvim for tool listing and execution
+--- MCP bridge - interface to mcphub.nvim for tool listing and execution
 local flog = require("codetyper.support.flog") -- TODO: remove after debugging
 
 local M = {}
 
+local function inspect_hub()
+  local ok, mcphub = pcall(require, "mcphub")
+  if not ok or type(mcphub) ~= "table" or type(mcphub.get_hub_instance) ~= "function" then
+    return { status = "absent" }
+  end
+  local instance_ok, hub = pcall(mcphub.get_hub_instance)
+  if not instance_ok or type(hub) ~= "table" then
+    return { status = "absent" }
+  end
+  if type(hub.is_ready) ~= "function" then
+    return { status = "error", error = "mcphub readiness is unavailable" }
+  end
+  local ready_ok, ready = pcall(hub.is_ready, hub)
+  if not ready_ok then
+    return { status = "error", error = "mcphub readiness check failed" }
+  end
+  if ready ~= true then
+    return { status = "not_ready", error = "mcphub is not ready" }
+  end
+  return { status = "ready", hub = hub }
+end
+
 --- Get the mcphub hub instance (nil if not available)
 ---@return table|nil hub
 local function get_hub()
-  local ok, mcphub = pcall(require, "mcphub")
-  if not ok then
-    return nil
-  end
-  local hub = mcphub.get_hub_instance()
-  if hub and hub:is_ready() then
-    return hub
+  local state = inspect_hub()
+  if state.status == "ready" then
+    return state.hub
   end
   return nil
+end
+
+local function safe_error(value, fallback)
+  local message = type(value) == "string" and value or ""
+  local lower = message:lower()
+  if
+    lower:find("api[_%-]?key", 1, false)
+    or lower:find("authorization", 1, true)
+    or lower:find("bearer", 1, true)
+    or lower:find("password", 1, true)
+    or lower:find("secret", 1, true)
+    or lower:find("credential", 1, true)
+    or lower:find("access[_%-]?token", 1, false)
+  then
+    return fallback
+  end
+  message = message:gsub("[%c]", " "):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+  return message ~= "" and message:sub(1, 512) or fallback
+end
+
+--- Return the safe readiness state of the optional mcphub integration.
+function M.get_hub_state()
+  local state = inspect_hub()
+  return { status = state.status, error = state.error }
+end
+
+--- Return mcphub tools through the same seam used by existing MCP calls.
+function M.get_hub_tools()
+  local state = inspect_hub()
+  if state.status ~= "ready" then
+    return nil, state.error or "mcphub is unavailable"
+  end
+  if type(state.hub.get_tools) ~= "function" then
+    return nil, "mcphub tool listing is unavailable"
+  end
+  local ok, tools = pcall(state.hub.get_tools, state.hub)
+  if not ok or type(tools) ~= "table" then
+    return nil, "mcphub tool listing failed"
+  end
+  return tools
 end
 
 --- Check if MCP is available
@@ -116,6 +174,35 @@ local EXCLUDED_MCP_TOOLS = {
   shell = true,
 }
 
+--- Check whether a named MCP tool is present in the ready, filtered hub list.
+--- Filesystem and shell tools remain unavailable even if the hub advertises
+--- them, matching the native API exclusion boundary.
+---@param server_name string
+---@param tool_name string
+---@return boolean
+function M.is_tool_allowed(server_name, tool_name)
+  if type(server_name) ~= "string" or type(tool_name) ~= "string" or server_name == "" or tool_name == "" then
+    return false
+  end
+  if EXCLUDED_MCP_TOOLS[tool_name] then
+    return false
+  end
+  local state = inspect_hub()
+  if state.status ~= "ready" or type(state.hub.get_tools) ~= "function" then
+    return false
+  end
+  local ok, tools = pcall(state.hub.get_tools, state.hub)
+  if not ok or type(tools) ~= "table" then
+    return false
+  end
+  for _, tool in ipairs(tools) do
+    if tool.server_name == server_name and tool.name == tool_name then
+      return true
+    end
+  end
+  return false
+end
+
 --- Get all available MCP tools in OpenAI function-calling format
 --- Excludes filesystem/shell tools that overlap with FILE: and terminal.
 ---@return table[] tools Array of {type: "function", function: {name, description, parameters}}
@@ -133,7 +220,7 @@ function M.get_tools_for_api()
   local result = {}
   local skipped = 0
   for _, tool in ipairs(tools) do
-    -- Skip filesystem/shell tools — handled by FILE: markers and terminal
+    -- Skip filesystem/shell tools - handled by FILE: markers and terminal
     if EXCLUDED_MCP_TOOLS[tool.name] then
       skipped = skipped + 1
     else
@@ -167,16 +254,16 @@ function M.call_tool(server_name, tool_name, arguments, callback)
   local hub = get_hub()
   if not hub then
     callback(nil, "MCP hub not available")
-    return
+    return { cancel = function() end }
   end
 
   flog.info("mcp", string.format("calling tool: %s/%s", server_name, tool_name)) -- TODO: remove after debugging
 
-  hub:call_tool(server_name, tool_name, arguments or {}, {
+  local ok, handle = pcall(hub.call_tool, hub, server_name, tool_name, arguments or {}, {
     callback = function(response, err)
       if err then
-        flog.error("mcp", "tool call failed: " .. tostring(err)) -- TODO: remove after debugging
-        callback(nil, tostring(err))
+        flog.error("mcp", "tool call failed") -- TODO: remove after debugging
+        callback(nil, safe_error(err, "MCP tool call failed"))
         return
       end
 
@@ -204,6 +291,11 @@ function M.call_tool(server_name, tool_name, arguments, callback)
     end,
     parse_response = true,
   })
+  if not ok then
+    callback(nil, "MCP tool call failed")
+    return { cancel = function() end }
+  end
+  return handle or { cancel = function() end }
 end
 
 return M

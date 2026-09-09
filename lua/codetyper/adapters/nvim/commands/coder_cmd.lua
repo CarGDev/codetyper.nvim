@@ -5,6 +5,7 @@ local cmd_index_project = require("codetyper.adapters.nvim.commands.cmd_index_pr
 local cmd_index_status = require("codetyper.adapters.nvim.commands.cmd_index_status")
 local cmd_llm_stats = require("codetyper.adapters.nvim.commands.cmd_llm_stats")
 local cmd_llm_reset_stats = require("codetyper.adapters.nvim.commands.cmd_llm_reset_stats")
+local model_menu = require("codetyper.adapters.nvim.ui.model_menu")
 
 --- Main command dispatcher
 ---@param args table Command arguments
@@ -56,6 +57,19 @@ local function coder_cmd(args)
       credentials.show_status()
     end,
     ["auth"] = function()
+      local requested_provider = args.fargs[2]
+      if requested_provider == "openai" then
+        local openai_auth = require("codetyper.core.llm.providers.openai.auth")
+        local mode = args.fargs[3] or "browser"
+        openai_auth.start(mode, function(_, err)
+          if err then
+            utils.notify("OpenAI ChatGPT authentication failed: " .. err, vim.log.levels.ERROR)
+          else
+            utils.notify("Connected to OpenAI (ChatGPT Plus/Pro) successfully!", vim.log.levels.INFO)
+          end
+        end)
+        return
+      end
       local auth = require("codetyper.core.llm.providers.copilot.auth")
       auth.is_valid(function(valid)
         if valid then
@@ -78,27 +92,7 @@ local function coder_cmd(args)
       credentials.interactive_switch_provider()
     end,
     ["model"] = function(cmd_args)
-      local credentials = require("codetyper.config.credentials")
-      local codetyper = require("codetyper")
-      local config = codetyper.get_config()
-      local provider = config.llm.provider
-
-      if provider ~= "copilot" then
-        utils.notify(
-          "CoderModel is only available when using Copilot provider. Current: " .. provider:upper(),
-          vim.log.levels.WARN
-        )
-        return
-      end
-
-      local model_arg = cmd_args.fargs[2]
-      if model_arg and model_arg ~= "" then
-        local model_cost = credentials.get_copilot_model_cost(model_arg) or "custom"
-        credentials.set_credentials("copilot", { model = model_arg, configured = true })
-        utils.notify("Copilot model set to: " .. model_arg .. " — " .. model_cost, vim.log.levels.INFO)
-      else
-        credentials.interactive_copilot_config(true)
-      end
+      model_menu.command(cmd_args.fargs[2])
     end,
   }
 

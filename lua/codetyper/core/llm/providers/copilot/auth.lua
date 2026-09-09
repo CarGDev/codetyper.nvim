@@ -1,13 +1,86 @@
 --- Copilot OAuth token discovery and GitHub token refresh
 local M = {}
 
-local flog = require("codetyper.support.flog") -- TODO: remove after debugging
 local http = require("codetyper.core.llm.shared.http")
+local flog = require("codetyper.support.flog")
 
 local AUTH_URL = "https://api.github.com/copilot_internal/v2/token"
 
 --- Cached state (singleton per session)
 M.state = nil
+
+local valid_cache = nil
+local valid_cache_time = 0
+local quota_cache = nil
+local quota_cache_time = 0
+
+local function has_text(value)
+  return type(value) == "string" and value:match("%S") ~= nil
+end
+
+local function escape_pattern(value)
+  return value:gsub("([^%w])", "%%%1")
+end
+
+local function redact(value)
+  local text = tostring(value or "")
+  local secrets = {}
+  if M.state then
+    secrets[#secrets + 1] = M.state.oauth_token
+    if type(M.state.github_token) == "table" then
+      secrets[#secrets + 1] = M.state.github_token.token
+    end
+  end
+  for _, secret in ipairs(secrets) do
+    if has_text(secret) then
+      text = text:gsub(escape_pattern(secret), "[REDACTED]")
+    end
+  end
+  if http.redact then
+    text = http.redact(text)
+  end
+  return text
+end
+
+local function report_error(message)
+  local safe_message = redact(message)
+  flog.error("copilot.auth", safe_message)
+  return safe_message
+end
+
+local function invalidate_model_cache()
+  local models = package.loaded["codetyper.core.llm.providers.copilot.models"]
+  if models and models.invalidate then
+    models.invalidate()
+  end
+end
+
+local function clear_cached_auth()
+  valid_cache = nil
+  valid_cache_time = 0
+  quota_cache = nil
+  quota_cache_time = 0
+  if M.state then
+    M.state.github_token = nil
+  end
+  invalidate_model_cache()
+end
+
+--- Validate an exchanged Copilot token before any downstream use.
+---@param token table|nil
+---@return boolean valid, string|nil error
+function M.validate_exchange(token)
+  if type(token) ~= "table" or not has_text(token.token) then
+    return false, "Copilot authentication response did not contain a usable token"
+  end
+  if type(token.endpoints) ~= "table" or not has_text(token.endpoints.api) then
+    return false, "Copilot authentication response did not contain a usable API endpoint"
+  end
+  return true, nil
+end
+
+M.redact = redact
+M.safe_error = redact
 
 --- Discover OAuth token from copilot.lua or copilot.vim config files
 ---@return string|nil OAuth token
@@ -34,7 +107,6 @@ function M.discover_oauth_token()
         if ok and data then
           for key, value in pairs(data) do
             if key:match("github.com") and value.oauth_token then
-              flog.info("copilot.auth", "found OAuth token from " .. filename) -- TODO: remove after debugging
               return value.oauth_token
             end
           end
@@ -61,17 +133,19 @@ end
 function M.refresh_github_token(callback)
   M.ensure_initialized()
 
-  if not M.state or not M.state.oauth_token then
-    callback(nil, "No OAuth token available")
+  if not M.state or not has_text(M.state.oauth_token) then
+    callback(nil, report_error("No OAuth token available"))
     return
   end
 
   -- Check if current token is still valid
-  if M.state.github_token and M.state.github_token.expires_at then
-    if M.state.github_token.expires_at > os.time() then
-      callback(M.state.github_token, nil)
-      return
-    end
+  local cached_valid = M.validate_exchange(M.state.github_token)
+  local expires_at = M.state.github_token and tonumber(M.state.github_token.expires_at)
+  if cached_valid and expires_at and expires_at > os.time() then
+    callback(M.state.github_token, nil)
+    return
+  elseif M.state.github_token then
+    M.state.github_token = nil
   end
 
   local headers = {
@@ -81,17 +155,37 @@ function M.refresh_github_token(callback)
 
   http.get(AUTH_URL, headers, function(parsed, err)
     if err then
-      callback(nil, "Token refresh failed: " .. err)
+      clear_cached_auth()
+      callback(nil, report_error("Token refresh failed: " .. err))
       return
     end
 
-    if parsed.error then
-      callback(nil, parsed.error_description or "Token refresh failed")
+    local github_message
+    if type(parsed) == "table" then
+      if type(parsed.message) == "string" then
+        github_message = parsed.message
+      elseif type(parsed.error_description) == "string" then
+        github_message = parsed.error_description
+      elseif type(parsed.error) == "string" then
+        github_message = parsed.error
+      elseif type(parsed.error) == "table" then
+        github_message = parsed.error.message
+      end
+    end
+    if github_message then
+      clear_cached_auth()
+      callback(nil, report_error("Copilot authentication failed: " .. github_message))
+      return
+    end
+
+    local valid, validation_error = M.validate_exchange(parsed)
+    if not valid then
+      clear_cached_auth()
+      callback(nil, report_error(validation_error))
       return
     end
 
     M.state.github_token = parsed
-    flog.info("copilot.auth", "token refreshed successfully") -- TODO: remove after debugging
     callback(parsed, nil)
   end)
 end
@@ -102,17 +196,14 @@ function M.get_valid_token(callback)
   M.refresh_github_token(callback)
 end
 
---- Check if authenticated (file presence only — does NOT verify the token
---- exchange actually succeeds; use M.is_valid() for a real check).
+--- Check if a validated exchanged token is cached.
 ---@return boolean
 function M.is_authenticated()
   M.ensure_initialized()
-  return M.state ~= nil and M.state.oauth_token ~= nil
+  return M.state ~= nil and M.validate_exchange(M.state.github_token)
 end
 
 --- Cached real-auth-validity result (short TTL to avoid hammering GitHub)
-local valid_cache = nil
-local valid_cache_time = 0
 local VALID_CACHE_TTL = 60 -- seconds
 
 --- Actually verify Copilot authentication by attempting a real token exchange.
@@ -126,7 +217,7 @@ function M.is_valid(callback)
   end
 
   M.ensure_initialized()
-  if not M.state or not M.state.oauth_token then
+  if not M.state or not has_text(M.state.oauth_token) then
     valid_cache = false
     valid_cache_time = os.time()
     callback(false)
@@ -134,7 +225,12 @@ function M.is_valid(callback)
   end
 
   M.get_valid_token(function(_, err)
-    valid_cache = err == nil
+    local token_valid = err == nil and M.validate_exchange(M.state and M.state.github_token)
+    if not token_valid then
+      M.state.github_token = nil
+      invalidate_model_cache()
+    end
+    valid_cache = token_valid
     valid_cache_time = os.time()
     callback(valid_cache)
   end)
@@ -143,13 +239,10 @@ end
 --- Invalidate the cached auth-validity result (call after a known auth failure
 --- so the next check re-verifies immediately instead of waiting out the TTL)
 function M.invalidate_valid_cache()
-  valid_cache = nil
-  valid_cache_time = 0
+  clear_cached_auth()
 end
 
 --- Cached quota snapshot
-local quota_cache = nil
-local quota_cache_time = 0
 local QUOTA_CACHE_TTL = 300 -- 5 minutes
 
 --- Fetch live Copilot account usage/quota (premium request credits) from
@@ -162,7 +255,7 @@ function M.get_quota(callback)
   end
 
   M.ensure_initialized()
-  if not M.state or not M.state.oauth_token then
+  if not M.state or not has_text(M.state.oauth_token) then
     callback(nil, "No OAuth token available")
     return
   end
@@ -174,11 +267,13 @@ function M.get_quota(callback)
 
   http.get("https://api.github.com/copilot_internal/user", headers, function(parsed, err)
     if err then
-      callback(nil, "Quota fetch failed: " .. err)
+      quota_cache = nil
+      callback(nil, "Quota fetch failed: " .. redact(err))
       return
     end
 
     if not parsed or parsed.message == "Not Found" then
+      quota_cache = nil
       callback(nil, "Quota data unavailable")
       return
     end

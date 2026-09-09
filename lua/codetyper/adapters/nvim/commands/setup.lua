@@ -4,28 +4,36 @@ local coder_cmd = require("codetyper.adapters.nvim.commands.coder_cmd")
 local cmd_index_project = require("codetyper.adapters.nvim.commands.cmd_index_project")
 local cmd_index_status = require("codetyper.adapters.nvim.commands.cmd_index_status")
 local setup_keymaps = require("codetyper.adapters.nvim.commands.setup_keymaps")
+local model_menu = require("codetyper.adapters.nvim.ui.model_menu")
+
+local CODER_COMMANDS = {
+  "version",
+  "reset",
+  "transform-selection",
+  "index-project",
+  "index-status",
+  "llm-stats",
+  "llm-reset-stats",
+  "cost",
+  "cost-clear",
+  "credentials",
+  "switch-provider",
+  "model",
+  "auth",
+}
+
+local function complete_coder(arglead, cmdline)
+  if cmdline and cmdline:match("^%s*Coder%s+model%s+") then
+    return model_menu.complete(arglead)
+  end
+  return CODER_COMMANDS
+end
 
 --- Setup all commands
 local function setup()
   vim.api.nvim_create_user_command("Coder", coder_cmd, {
     nargs = "?",
-    complete = function()
-      return {
-        "version",
-        "reset",
-        "transform-selection",
-        "index-project",
-        "index-status",
-        "llm-stats",
-        "llm-reset-stats",
-        "cost",
-        "cost-clear",
-        "credentials",
-        "switch-provider",
-        "model",
-        "auth",
-      }
-    end,
+    complete = complete_coder,
     desc = "Codetyper.nvim commands",
   })
 
@@ -96,42 +104,17 @@ local function setup()
   end, { desc = "Connect to GitHub Copilot (only runs the auth flow if not already connected)" })
 
   vim.api.nvim_create_user_command("CoderModel", function(opts)
-    local credentials = require("codetyper.config.credentials")
-    local codetyper = require("codetyper")
-    local config = codetyper.get_config()
-    local provider = config.llm.provider
-
-    if provider ~= "copilot" then
-      utils.notify(
-        "CoderModel is only available when using Copilot provider. Current: " .. provider:upper(),
-        vim.log.levels.WARN
-      )
-      return
-    end
-
-    if opts.args and opts.args ~= "" then
-      local model_cost = credentials.get_copilot_model_cost(opts.args) or "custom"
-      credentials.set_credentials("copilot", { model = opts.args, configured = true })
-      utils.notify("Copilot model set to: " .. opts.args .. " — " .. model_cost, vim.log.levels.INFO)
-      return
-    end
-
-    credentials.interactive_copilot_config(true)
+    model_menu.command(opts.args)
   end, {
     nargs = "?",
-    desc = "Quick switch Copilot model (only available with Copilot provider)",
-    complete = function()
-      local codetyper = require("codetyper")
-      local credentials = require("codetyper.config.credentials")
-      local config = codetyper.get_config()
-      if config.llm.provider == "copilot" then
-        return credentials.get_copilot_model_names()
-      end
-      return {}
+    desc = "Select a provider-labelled model",
+    complete = function(arglead)
+      return model_menu.complete(arglead)
     end,
   })
 
-  setup_keymaps()
+  local codetyper = require("codetyper")
+  setup_keymaps(codetyper.get_config())
 end
 
 return setup

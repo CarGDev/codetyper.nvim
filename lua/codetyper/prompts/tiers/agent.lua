@@ -4,10 +4,115 @@ local M = {}
 
 local flog = require("codetyper.support.flog") -- TODO: remove after debugging
 
+local TOOL_MARKERS = {
+  codegraph_context = "TOOL:CODEGRAPH",
+  tokensave_search = "TOOL:TOKENSAVE",
+  context7_resolve_library = "TOOL:CONTEXT7_RESOLVE",
+  context7_query_docs = "TOOL:CONTEXT7_QUERY",
+  ask_user = "TOOL:ASK_USER",
+  add_import = "TOOL:ADD_IMPORT",
+}
+
+local TOOL_DESCRIPTIONS = {
+  codegraph_context = "Read bounded local project context.",
+  tokensave_search = "Search a current local project index.",
+  context7_resolve_library = "Resolve a library through read-only Context7.",
+  context7_query_docs = "Query read-only Context7 documentation.",
+  ask_user = "Ask the user one bounded selectable question.",
+  add_import = "Add one safe, single-line import declaration.",
+}
+
+local TOOL_LIMITS = {
+  codegraph_context = "query <= 2000 chars; max_nodes 1..100; no_code boolean",
+  tokensave_search = "query <= 2000 chars; limit 1..100",
+  context7_resolve_library = "query <= 1000 chars",
+  context7_query_docs = "library_id <= 200 chars; query <= 2000 chars",
+  ask_user = "question <= 1000 chars; options 1..8, each <= 200 chars",
+  add_import = "path <= 1000 chars; statement <= 500 chars and single-line",
+}
+
+local function available_tools(capabilities)
+  if type(capabilities) ~= "table" then
+    return {}
+  end
+
+  local source = capabilities.available_tools
+  if type(source) ~= "table" then
+    source = capabilities.tools
+  end
+  if type(source) ~= "table" then
+    return {}
+  end
+
+  local result, seen = {}, {}
+  for _, tool in ipairs(source) do
+    if type(tool) == "table" and type(tool.name) == "string" and TOOL_MARKERS[tool.name] and not seen[tool.name] then
+      local is_available = tool.available == true or tool.status == "available"
+      if is_available and tool.stale ~= true then
+        seen[tool.name] = true
+        result[#result + 1] = tool.name
+      end
+    end
+  end
+  table.sort(result)
+  return result
+end
+
+local function build_capability_instructions(capabilities)
+  local names = available_tools(capabilities)
+  if #names == 0 then
+    return ""
+  end
+
+  local native = type(capabilities) == "table" and capabilities.native_tools == true
+  local markers = type(capabilities) == "table" and capabilities.marker_tools == true
+  if not native and not markers then
+    return ""
+  end
+
+  local parts = {
+    "\n\n--- CAPABILITY-BOUND TOOLS ---",
+    "Advertise and use only the explicitly available schemas below.",
+    "Results use {status,data,error,stale} and are bounded to 4000 characters.",
+    "Unavailable, stale, or invalid tools must not be claimed or called.",
+    "External work is performed only after an explicit model tool call; prompt construction never invokes tools.",
+  }
+
+  if native then
+    parts[#parts + 1] = "Native structured schemas: enabled for this eligible Copilot project task."
+  else
+    parts[#parts + 1] = "Native structured schemas: unavailable for this request."
+  end
+  if markers then
+    parts[#parts + 1] = "Text-marker fallback: enabled; use the marker shown for each available tool."
+  else
+    parts[#parts + 1] = "Text-marker fallback: unavailable for this request."
+  end
+
+  for _, name in ipairs(names) do
+    local modes = {}
+    if native then
+      modes[#modes + 1] = "native schema"
+    end
+    if markers then
+      modes[#modes + 1] = TOOL_MARKERS[name]
+    end
+    parts[#parts + 1] = string.format(
+      "- %s [%s] (%s): %s",
+      name,
+      table.concat(modes, ", "),
+      TOOL_LIMITS[name],
+      TOOL_DESCRIPTIONS[name]
+    )
+  end
+
+  return table.concat(parts, "\n")
+end
+
 --- Build system prompt for agent-tier models
 ---@param event table
 ---@return string
-local function build_system(event)
+local function build_system(event, capabilities)
   local intent_mod = require("codetyper.core.intent")
   local base = ""
   if event.intent then
@@ -71,12 +176,7 @@ You can mix FILE: operations and TOOL: calls in the same response.
 Tool results will be shown to the user.
 ]]
 
-  -- Append available MCP tools if mcphub is available
-  local mcp = require("codetyper.core.agent.mcp")
-  local mcp_tools = mcp.get_tools_for_prompt()
-  if mcp_tools ~= "" then
-    base = base .. mcp_tools
-  end
+  base = base .. build_capability_instructions(capabilities)
 
   return base
 end
@@ -168,12 +268,14 @@ end
 ---@return string user_prompt
 ---@return string system_prompt
 function M.build_prompt(event, ctx)
-  local system_prompt = build_system(event)
+  local system_prompt = build_system(event, ctx and ctx.tool_capabilities or event.tool_capabilities)
   local user_prompt = build_user(event, ctx)
 
   flog.info("tier.agent", string.format("prompt_len=%d system_len=%d", #user_prompt, #system_prompt)) -- TODO: remove after debugging
 
   return user_prompt, system_prompt
 end
+
+M.build_capability_instructions = build_capability_instructions
 
 return M

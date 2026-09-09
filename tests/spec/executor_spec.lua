@@ -95,3 +95,53 @@ describe("executor.modify_file — write-back guard", function()
     assert.are.equal("local a = 99\nlocal b = 2", read_file(path))
   end)
 end)
+
+describe("executor.execute_tools — shared boundary", function()
+  it("converts oversized completed registry data into a bounded error", function()
+    local callbacks = 0
+    local results
+
+    executor.execute_tools({
+      { id = "large-result", name = "codegraph_context", arguments = { query = "request" } },
+    }, function(value)
+      callbacks = callbacks + 1
+      results = value
+    end, {
+      registry = {
+        dispatch = function(_, _, callback)
+          callback({ status = "available", data = string.rep("x", 5000), stale = false })
+        end,
+      },
+    })
+
+    assert.are.equal(1, callbacks)
+    assert.are.equal("error", results[1].result.status)
+    assert.is_nil(results[1].result.data)
+    assert.is_true(results[1].result.stale)
+    assert.matches("4000", results[1].result.error)
+  end)
+
+  it("blocks unsafe shell calls before invoking the terminal adapter", function()
+    local run_calls = 0
+    local results
+
+    executor.execute_tools({
+      { id = "blocked-shell", type = "terminal", command = "rm -rf /" },
+    }, function(value)
+      results = value
+    end, {
+      terminal = {
+        is_safe = function()
+          return false, "blocked by test allowlist"
+        end,
+        run = function()
+          run_calls = run_calls + 1
+        end,
+      },
+    })
+
+    assert.are.equal(0, run_calls)
+    assert.are.equal("error", results[1].result.status)
+    assert.are.equal("blocked by test allowlist", results[1].result.error)
+  end)
+end)

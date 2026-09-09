@@ -23,7 +23,9 @@ local M = {}
 ---@field priority number Priority (1=high, 2=normal, 3=low)
 ---@field status string "pending"|"processing"|"completed"|"escalated"|"cancelled"|"needs_context"|"failed"
 ---@field attempt_count number Number of processing attempts
----@field worker_type string|nil LLM provider used ("ollama"|"copilot")
+---@field worker_type string|nil Resolved LLM provider used
+---@field provider string|nil Explicit provider selected for this event
+---@field explicit_provider string|nil Backward-compatible explicit provider alias
 ---@field created_at number System time when created
 ---@field intent Intent|nil Detected intent from prompt
 ---@field scope ScopeInfo|nil Resolved scope (function/class/file)
@@ -180,6 +182,12 @@ function M.enqueue(event)
   event.status = event.status or "pending"
   event.priority = event.priority or 2
   event.attempt_count = event.attempt_count or 0
+
+  -- Keep the user's provider intent separate from the worker's resolved route.
+  -- Scheduler retries may change worker_type, but never change provider.
+  if not event.provider and event.explicit_provider then
+    event.provider = event.explicit_provider
+  end
 
   -- Generate content hash if not provided
   if not event.content_hash and event.prompt_content then

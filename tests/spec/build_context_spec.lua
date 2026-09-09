@@ -18,9 +18,16 @@ local function make_tmp_file(content)
 end
 
 describe("build_context.gather — dependency context wiring", function()
+  local previous_tools
+
+  before_each(function()
+    previous_tools = package.loaded["codetyper.core.agent.tools"]
+  end)
+
   after_each(function()
     -- Ensure no stub leaks into other spec files sharing this module.
     package.loaded["codetyper.core.llm.shared.resolve_deps"] = nil
+    package.loaded["codetyper.core.agent.tools"] = previous_tools
   end)
 
   it("includes a dependency-context block listing imports and importers when target_path is present", function()
@@ -100,5 +107,30 @@ describe("build_context.gather — dependency context wiring", function()
 
     assert.is_not_nil(ctx.extra:find("File dependency context"))
     assert.is_not_nil(ctx.extra:find("No files found that import this file"))
+  end)
+
+  it("returns an injected capability snapshot without invoking external tools", function()
+    local external_calls = 0
+    package.loaded["codetyper.core.agent.tools"] = {
+      availability = function()
+        external_calls = external_calls + 1
+        error("context gathering must not probe tool adapters")
+      end,
+      list = function()
+        external_calls = external_calls + 1
+        error("context gathering must not list tool adapters")
+      end,
+    }
+    local capabilities = {
+      provider = "copilot",
+      native_tools = true,
+      marker_tools = true,
+      available_tools = { { name = "codegraph_context", status = "available" } },
+    }
+
+    local ctx = gather({ target_path = nil, tool_capabilities = capabilities })
+
+    assert.are.same(capabilities, ctx.tool_capabilities)
+    assert.are.equal(0, external_calls)
   end)
 end)

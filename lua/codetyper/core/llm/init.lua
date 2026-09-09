@@ -15,15 +15,23 @@ function M.get_client(provider_name)
   local provider = provider_name
   if not provider then
     local resolver = require("codetyper.core.llm.provider_resolver")
-    provider = resolver.resolve_sync()
+    local provider_error
+    provider, provider_error = resolver.resolve_sync()
+    if not provider then
+      error(provider_error or "Unable to resolve an LLM provider")
+    end
   end
 
   if provider == "ollama" then
     return require("codetyper.core.llm.providers.ollama")
   elseif provider == "copilot" then
     return require("codetyper.core.llm.providers.copilot")
+  elseif provider == "claude" then
+    return require("codetyper.core.llm.providers.claude")
+  elseif provider == "openai" then
+    return require("codetyper.core.llm.providers.openai")
   else
-    error("Unknown LLM provider: " .. provider .. ". Supported: ollama, copilot")
+    error("Unknown LLM provider: " .. tostring(provider) .. ". Supported: ollama, copilot, claude, openai")
   end
 end
 
@@ -31,7 +39,8 @@ end
 --- fallback when Copilot auth is invalid/unavailable). Prefer this over
 --- get_client() when you can afford a callback.
 ---@param callback fun(client: table|nil, provider: string|nil, err: string|nil)
-function M.get_client_async(callback)
+---@param provider_name string|nil Explicit provider override
+function M.get_client_async(callback, provider_name)
   local resolver = require("codetyper.core.llm.provider_resolver")
   resolver.resolve(function(provider, err)
     if err then
@@ -39,7 +48,7 @@ function M.get_client_async(callback)
       return
     end
     callback(M.get_client(provider), provider, nil)
-  end)
+  end, provider_name)
 end
 
 --- Generate code from a prompt
@@ -47,7 +56,8 @@ end
 ---@param context table Context information
 ---@param callback fun(response: string|nil, error: string|nil) Callback function
 function M.generate(prompt, context, callback)
-  local client = M.get_client()
+  local provider = context and (context.provider or context.provider_name)
+  local client = M.get_client(provider)
   client.generate(prompt, context, callback)
 end
 

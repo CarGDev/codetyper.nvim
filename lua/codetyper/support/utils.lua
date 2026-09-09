@@ -56,30 +56,43 @@ end
 ---@param filepath string File path to check
 ---@return boolean
 function M.is_coder_file(filepath)
-  return filepath:match("%.codetyper%.") ~= nil
+  if type(filepath) ~= "string" or filepath == "" then
+    return false
+  end
+  return filepath:match("[^/\\]+%.codetyper%.[^/\\]+$") ~= nil
 end
 
 --- Get the target file path from a coder file path
 ---@param coder_path string Path to the coder file
 ---@return string Target file path
 function M.get_target_path(coder_path)
-  -- Convert index.codetyper/ts -> index.ts
-  return coder_path:gsub("%.codetyper%.", ".")
+  -- Convert index.codetyper.ts -> index.ts without touching parent directories.
+  return (coder_path:gsub("%.codetyper%.([^/\\]+)$", ".%1"))
 end
 
 --- Get the coder file path from a target file path
 ---@param target_path string Path to the target file
 ---@return string Coder file path
 function M.get_coder_path(target_path)
-  -- Convert index.ts -> index.codetyper/ts
+  -- Convert index.ts -> index.codetyper.ts. Legacy index.codetyper/ts
+  -- directories are intentionally left untouched and are never renamed.
   local dir = vim.fn.fnamemodify(target_path, ":h")
-  local name = vim.fn.fnamemodify(target_path, ":t:r")
+  local filename = vim.fn.fnamemodify(target_path, ":t")
   local ext = vim.fn.fnamemodify(target_path, ":e")
 
-  if dir == "." then
-    return name .. ".codetyper/" .. ext
+  if filename == "" or ext == "" then
+    return target_path
   end
-  return dir .. "/" .. name .. ".codetyper/" .. ext
+
+  local name = filename:sub(1, #filename - #ext - 1)
+  local companion = name .. ".codetyper." .. ext
+
+  if dir == "." then
+    return companion
+  elseif dir == "/" then
+    return "/" .. companion
+  end
+  return dir .. "/" .. companion
 end
 
 --- Check if a file exists

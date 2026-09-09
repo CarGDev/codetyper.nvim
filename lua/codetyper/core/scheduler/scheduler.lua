@@ -98,6 +98,30 @@ local function get_primary_provider()
   return resolver.resolve_sync()
 end
 
+--- Resolve a queued event's provider while preserving an explicit choice.
+---@param event PromptEvent
+---@return string
+function M.resolve_event_provider(event)
+  if event and (event.provider or event.explicit_provider) then
+    return event.provider or event.explicit_provider
+  end
+
+  local provider = (event and event.worker_type) or get_primary_provider()
+  if event and not event.worker_type then
+    local resolver = require("codetyper.core.llm.provider_resolver")
+    if resolver.get_explicit_provider and resolver.get_explicit_provider() == provider then
+      event.provider = provider
+    end
+  end
+  return provider
+end
+
+---@param event PromptEvent
+---@return boolean
+local function has_explicit_provider(event)
+  return event and (event.provider ~= nil or event.explicit_provider ~= nil) or false
+end
+
 --- Retry event with additional context
 ---@param original_event table Original prompt event
 ---@param additional_context string Additional context from user
@@ -318,7 +342,7 @@ local function handle_worker_result(event, result)
     -- Remove in-buffer placeholder on failure (will be re-inserted if we escalate/retry)
     require("codetyper.core.thinking_placeholder").remove_on_failure(event.id)
     -- Failed - try escalation if this was ollama
-    if result.worker_type == "ollama" and event.attempt_count < 2 then
+    if result.worker_type == "ollama" and not has_explicit_provider(event) and event.attempt_count < 2 then
       pcall(function()
         local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
         logs_add({
@@ -341,7 +365,7 @@ local function handle_worker_result(event, result)
   -- Success - check confidence
   local needs_escalation = confidence_mod.needs_escalation(result.confidence, state.config.escalation_threshold)
 
-  if needs_escalation and result.worker_type == "ollama" and event.attempt_count < 2 then
+  if needs_escalation and result.worker_type == "ollama" and not has_explicit_provider(event) and event.attempt_count < 2 then
     -- Low confidence from ollama - escalate to remote
     pcall(function()
       local logs_add = require("codetyper.adapters.nvim.ui.logs.add")
@@ -401,8 +425,9 @@ local function handle_worker_result(event, result)
       local root = utils.get_project_root()
       local ops = parse_agent(result.response, root, event.target_path)
       if ops and #ops > 0 then
-        local executor = require("codetyper.core.agent.executor")
-        executor.execute(ops)
+        -- The native loop owns FILE execution. Mark the response as handled
+        -- here so the final text is not patched a second time, but do not
+        -- execute these operations before loop.start_native parses them.
         file_ops_handled = true
       end
     end)
@@ -593,7 +618,7 @@ local function dispatch_next()
   end
 
   -- Determine which provider to use
-  local provider = event.worker_type or get_primary_provider()
+  local provider = M.resolve_event_provider(event)
 
   -- Log dispatch with intent/scope info
   pcall(function()

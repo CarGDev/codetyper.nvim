@@ -1,8 +1,8 @@
 --- Copilot request building and sending
 local M = {}
 
+local auth = require("codetyper.core.llm.providers.copilot.auth")
 local http = require("codetyper.core.llm.shared.http")
-local flog = require("codetyper.support.flog")
 
 --- Terminal tool definition in OpenAI function-calling format
 M.terminal_tool = {
@@ -31,6 +31,10 @@ M.terminal_tool = {
 ---@return string[] Headers
 function M.build_headers(token, opts)
   opts = opts or {}
+  local valid, validation_error = auth.validate_exchange(token)
+  if not valid then
+    return nil, validation_error
+  end
   local headers = {
     "Authorization: Bearer " .. token.token,
     "Content-Type: application/json",
@@ -88,12 +92,19 @@ end
 ---@param body table Request body
 ---@param callback fun(parsed: table|nil, error: string|nil)
 function M.send(token, body, callback)
-  local endpoint = (token.endpoints and token.endpoints.api or "https://api.githubcopilot.com")
-    .. "/chat/completions"
+  callback = callback or function() end
+  local valid, validation_error = auth.validate_exchange(token)
+  if not valid then
+    callback(nil, validation_error)
+    return nil
+  end
+  local endpoint = token.endpoints.api:gsub("/+$", "") .. "/chat/completions"
   local json_body = vim.json.encode(body)
-  local headers = M.build_headers(token)
-
-  flog.info("copilot.request", "POST " .. endpoint .. " body_len=" .. #json_body)
+  local headers, header_error = M.build_headers(token)
+  if not headers then
+    callback(nil, header_error)
+    return nil
+  end
 
   http.post(endpoint, headers, json_body, callback)
 end
@@ -104,14 +115,23 @@ end
 ---@param opts table { on_chunk: fun(json_str), on_done: fun(), on_error: fun(err), is_follow_up: boolean|nil }
 ---@return number job_id for cancellation
 function M.send_stream(token, body, opts)
-  local endpoint = (token.endpoints and token.endpoints.api or "https://api.githubcopilot.com")
-    .. "/chat/completions"
+  opts = opts or {}
+  local valid, validation_error = auth.validate_exchange(token)
+  if not valid then
+    if opts.on_error then
+      opts.on_error(validation_error)
+    end
+    return -1
+  end
+  local endpoint = token.endpoints.api:gsub("/+$", "") .. "/chat/completions"
   local json_body = vim.json.encode(body)
-  local headers = M.build_headers(token, { is_follow_up = opts.is_follow_up })
-
-  flog.info("copilot.request", "POST_STREAM " .. endpoint .. " model=" .. (body.model or "?")
-    .. " body_len=" .. #json_body
-    .. " tools=" .. (body.tools and #body.tools or 0))
+  local headers, header_error = M.build_headers(token, { is_follow_up = opts.is_follow_up })
+  if not headers then
+    if opts.on_error then
+      opts.on_error(header_error)
+    end
+    return -1
+  end
 
   return http.post_stream(endpoint, headers, json_body, {
     on_chunk = opts.on_chunk,

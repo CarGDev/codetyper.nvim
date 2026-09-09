@@ -9,6 +9,7 @@ local M = {}
 local params = require("codetyper.params.agents.worker")
 local confidence = require("codetyper.core.llm.confidence")
 local flog = require("codetyper.support.flog") -- TODO: remove after debugging
+local utils = require("codetyper.support.utils")
 
 ---@class WorkerResult
 ---@field success boolean Whether the request succeeded
@@ -371,11 +372,83 @@ end
 ---@return table|nil client
 ---@return string|nil error
 local function get_client(worker_type)
+  local ok_llm, llm = pcall(require, "codetyper.core.llm")
+  if ok_llm and llm.get_client then
+    local ok_client, client = pcall(llm.get_client, worker_type)
+    if ok_client and client then
+      return client, nil
+    end
+    return nil, client
+  end
+
   local ok, client = pcall(require, "codetyper.core.llm.providers." .. worker_type)
   if ok and client then
     return client, nil
   end
   return nil, "Unknown provider: " .. worker_type
+end
+
+local function available_tool_snapshot(event)
+  local options = event and event.tool_options
+  local ok_registry, registry = pcall(require, "codetyper.core.agent.tools")
+  if not ok_registry or type(registry.list) ~= "function" then
+    return {}
+  end
+
+  local ok_list, definitions = pcall(registry.list, options)
+  if not ok_list or type(definitions) ~= "table" then
+    return {}
+  end
+
+  local result = {}
+  for _, definition in ipairs(definitions) do
+    if type(definition) == "table" and type(definition.name) == "string"
+      and (definition.available == true or definition.status == "available")
+      and definition.stale ~= true
+    then
+      result[#result + 1] = {
+        name = definition.name,
+        available = true,
+        stale = false,
+        status = "available",
+      }
+    end
+  end
+  return result
+end
+
+local function resolve_tool_capabilities(event, model, provider)
+  if event and type(event.tool_capabilities) == "table" then
+    return event.tool_capabilities
+  end
+
+  local project_task = event and event.is_project_task == true
+  local capabilities = {
+    provider = provider,
+    native_tools = false,
+    marker_tools = project_task,
+    limits = { max_result_chars = 4000 },
+    available_tools = available_tool_snapshot(event),
+  }
+
+  if provider == "copilot" and project_task then
+    local ok_caps, model_caps = pcall(require, "codetyper.constants.model_caps")
+    local caps = ok_caps and model_caps.get(model) or nil
+    capabilities.native_tools = caps and caps.tools == true or false
+  end
+
+  return capabilities
+end
+
+--- Return the explicit provider on an event before its resolved worker type.
+---@param event PromptEvent|nil
+---@param fallback string|nil
+---@return string|nil
+function M.resolve_provider(event, fallback)
+  if event and (event.provider or event.explicit_provider) then
+    return event.provider or event.explicit_provider
+  end
+  return fallback or (event and event.worker_type)
 end
 
 --- Format attached files for inclusion in prompt
@@ -412,16 +485,12 @@ local function get_coder_companion_path(target_path)
   end
 
   -- Skip if target is already a coder file
-  if target_path:match("%.codetyper%.") then
+  if utils.is_coder_file(target_path) then
     return nil
   end
 
-  local dir = vim.fn.fnamemodify(target_path, ":h")
-  local name = vim.fn.fnamemodify(target_path, ":t:r") -- filename without extension
-  local ext = vim.fn.fnamemodify(target_path, ":e")
-
-  local coder_path = dir .. "/" .. name .. ".codetyper/" .. ext
-  if vim.fn.filereadable(coder_path) == 1 then
+  local coder_path = utils.get_coder_path(target_path)
+  if coder_path ~= target_path and vim.fn.filereadable(coder_path) == 1 then
     return coder_path
   end
 
@@ -577,19 +646,25 @@ end
 ---@param model string|nil Model name for tier selection
 ---@return string prompt
 ---@return table context
-local function build_prompt(event, model)
+local function build_prompt(event, model, provider)
   local eid = event and event.id
   local gather_context = require("codetyper.core.llm.shared.build_context")
   local tier_router = require("codetyper.prompts.tiers")
 
+  local prompt_event = vim.tbl_extend("force", event, {
+    tool_capabilities = resolve_tool_capabilities(event, model, provider),
+  })
+
   notify_stage(eid, "Gathering context...")
-  local ctx = gather_context(event)
+  local ctx = gather_context(prompt_event)
 
   notify_stage(eid, "Building prompt...")
-  local user_prompt, system_prompt = tier_router.build_prompt(model or "copilot", event, ctx)
+  local user_prompt, system_prompt = tier_router.build_prompt(model or "copilot", prompt_event, ctx)
 
   local context = {
     target_path = event.target_path,
+    provider = event.provider or event.explicit_provider,
+    model = model,
     target_content = ctx.target_content,
     filetype = ctx.filetype,
     scope = event.scope,
@@ -601,6 +676,7 @@ local function build_prompt(event, model)
     formatted_prompt = user_prompt,
     is_whole_file = event.is_whole_file,
     is_project_task = event.is_project_task,
+    tool_capabilities = ctx.tool_capabilities,
   }
 
   return user_prompt, context
@@ -617,7 +693,7 @@ function M.create(event, worker_type, callback)
   local worker = {
     id = generate_id(),
     event = event,
-    worker_type = worker_type,
+    worker_type = M.resolve_provider(event, worker_type),
     status = "pending",
     start_time = os.clock(),
     callback = callback,
@@ -655,16 +731,16 @@ function M.start(worker)
   notify_stage(eid, "Reading context...")
 
   -- Resolve model name for tier selection
-  local model_name = nil
+  local model_name = worker.event.model
   pcall(function()
     local credentials = require("codetyper.config.credentials")
-    model_name = credentials.get_model(worker.worker_type)
+    model_name = model_name or credentials.get_model(worker.worker_type)
   end)
   if not model_name then
     model_name = worker.worker_type or "copilot"
   end
 
-  local prompt, context = build_prompt(worker.event, model_name)
+  local prompt, context = build_prompt(worker.event, model_name, worker.worker_type)
   flog.info("worker", string.format("prompt built: model=%s len=%d", model_name, #(prompt or ""))) -- TODO: remove after debugging
   flog.debug("worker", "prompt_preview: " .. (prompt and prompt:sub(1, 300):gsub("\n", "\\n") or "nil")) -- TODO: remove after debugging
 
@@ -695,7 +771,7 @@ function M.start(worker)
     -- Extract usage from metadata if smart_generate was used
     local usage = usage_or_metadata
     if type(usage_or_metadata) == "table" and usage_or_metadata.provider then
-      usage = nil
+      usage = usage_or_metadata.usage
       worker.worker_type = usage_or_metadata.provider
       if usage_or_metadata.pondered then
         pcall(function()
@@ -710,6 +786,21 @@ function M.start(worker)
           })
         end)
       end
+    end
+
+    if type(usage_or_metadata) == "table" and usage_or_metadata.structured then
+      worker._system_prompt = usage_or_metadata.system_prompt or worker._system_prompt
+      if err then
+        M.complete(worker, response, err, usage)
+      else
+        M.complete_structured(worker, {
+          text = response or "",
+          tool_calls = usage_or_metadata.tool_calls or {},
+          usage = usage,
+          finish_reason = usage_or_metadata.finish_reason,
+        })
+      end
+      return
     end
 
     M.complete(worker, response, err, usage)

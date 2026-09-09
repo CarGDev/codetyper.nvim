@@ -1,7 +1,6 @@
 --- Fetch available models from Copilot API and auto-detect capabilities
 local auth = require("codetyper.core.llm.providers.copilot.auth")
 local http = require("codetyper.core.llm.shared.http")
-local flog = require("codetyper.support.flog")
 local model_constants = require("codetyper.constants.models")
 
 local M = {}
@@ -10,6 +9,22 @@ local M = {}
 local models_cache = nil
 local cache_time = 0
 local CACHE_TTL = 300 -- 5 minutes (same as CLI)
+
+local function safe_error(message)
+  if auth.safe_error then
+    return auth.safe_error(message)
+  end
+  return tostring(message or "Copilot authentication failed")
+end
+
+local function endpoint_for(token)
+  local valid, validation_error = auth.validate_exchange(token)
+  if not valid then
+    return nil, validation_error
+  end
+  local endpoint = token.endpoints.api:gsub("/+$", "")
+  return endpoint, nil
+end
 
 --- Fetch models from Copilot API
 ---@param callback fun(models: table[]|nil, error: string|nil)
@@ -22,11 +37,17 @@ function M.fetch(callback)
 
   auth.get_valid_token(function(token, err)
     if err then
-      callback(nil, err)
+      M.invalidate()
+      callback(nil, safe_error(err))
       return
     end
 
-    local endpoint = (token.endpoints and token.endpoints.api or "https://api.githubcopilot.com") .. "/models"
+    local endpoint, endpoint_error = endpoint_for(token)
+    if endpoint_error then
+      M.invalidate()
+      callback(nil, endpoint_error)
+      return
+    end
 
     local headers = {
       "Authorization: Bearer " .. token.token,
@@ -37,71 +58,68 @@ function M.fetch(callback)
       "Copilot-Integration-Id: vscode-chat",
     }
 
-    http.get(endpoint, headers, function(parsed, http_err)
+    http.get(endpoint .. "/models", headers, function(parsed, http_err, response_meta)
       if http_err then
-        flog.warn("copilot.models", "fetch failed: " .. http_err)
-        -- Fall back to constants
-        local fallback = model_constants.fallback_models
-        callback(fallback, nil)
+        if response_meta and response_meta.status == 401 then
+          auth.invalidate_valid_cache()
+        end
+        callback(nil, safe_error(http_err), response_meta)
         return
       end
 
-      if not parsed or not parsed.data then
-        callback(model_constants.fallback_models, nil)
+      if type(parsed) ~= "table" or type(parsed.data) ~= "table" then
+        callback(nil, "Copilot models response is malformed", response_meta)
         return
       end
 
       -- Filter to chat-capable, picker-enabled models
       local models = {}
       for _, model in ipairs(parsed.data) do
-        local caps = model.capabilities or {}
-        local supports = caps.supports or {}
-        local limits = caps.limits or {}
-        local billing = model.billing or {}
+        if type(model) == "table" then
+          local caps = type(model.capabilities) == "table" and model.capabilities or {}
+          local supports = type(caps.supports) == "table" and caps.supports or {}
+          local limits = type(caps.limits) == "table" and caps.limits or {}
+          local billing = type(model.billing) == "table" and model.billing or {}
 
-        if caps.type == "chat" and model.model_picker_enabled then
-          -- Resolve cost multiplier: API billing > hardcoded fallback > 1.0
-          local cost = billing.multiplier
-          if cost == nil then
-            cost = model_constants.cost_multipliers[model.id] or 1.0
+          if type(model.id) == "string" and model.id ~= "" and caps.type == "chat" and model.model_picker_enabled then
+            -- Resolve cost multiplier: API billing > hardcoded fallback > 1.0
+            local cost = billing.multiplier
+            if cost == nil then
+              cost = model_constants.cost_multipliers[model.id] or 1.0
+            end
+
+            local is_unlimited = (billing.is_premium == false)
+              or (cost == 0)
+              or (model_constants.unlimited_models[model.id] == true)
+
+            table.insert(models, {
+              id = model.id,
+              name = model.name or model.id,
+              provider = "copilot",
+              capabilities = vim.deepcopy(supports),
+              version = model.version,
+              is_tool_capable = supports.tool_calls == true,
+              max_input_tokens = limits.max_prompt_tokens,
+              max_output_tokens = limits.max_output_tokens,
+              supports_streaming = supports.streaming == true,
+              supports_vision = supports.vision == true,
+              enabled = model.policy and model.policy.state == "enabled",
+              picker_enabled = true,
+              cost_multiplier = cost,
+              is_unlimited = is_unlimited,
+              is_premium = billing.is_premium or false,
+            })
           end
-
-          local is_unlimited = (billing.is_premium == false)
-            or (cost == 0)
-            or (model_constants.unlimited_models[model.id] == true)
-
-          table.insert(models, {
-            id = model.id,
-            name = model.name or model.id,
-            version = model.version,
-            is_tool_capable = supports.tool_calls == true,
-            max_input_tokens = limits.max_prompt_tokens,
-            max_output_tokens = limits.max_output_tokens,
-            supports_streaming = supports.streaming == true,
-            supports_vision = supports.vision == true,
-            enabled = model.policy and model.policy.state == "enabled",
-            picker_enabled = true,
-            cost_multiplier = cost,
-            is_unlimited = is_unlimited,
-            is_premium = billing.is_premium or false,
-          })
         end
-      end
-
-      flog.info("copilot.models", string.format("fetched %d chat models", #models))
-
-      -- If API returned zero models after filtering, use fallback
-      if #models == 0 then
-        models = model_constants.fallback_models
       end
 
       models_cache = models
       cache_time = os.time()
 
-      -- Save to disk for offline reference
+      -- Persist metadata only; the exchanged token never enters this cache.
       M.save_to_disk(models)
 
-      callback(models, nil)
+      callback(models, nil, response_meta)
     end)
   end)
 end
@@ -189,22 +207,6 @@ end
 --- Get models (cache → disk → API → fallback)
 ---@param callback fun(models: table[]|nil, error: string|nil)
 function M.get(callback)
-  if models_cache then
-    callback(models_cache, nil)
-    return
-  end
-
-  -- Try disk cache first
-  local disk_models = M.load_from_disk()
-  if disk_models then
-    models_cache = disk_models
-    callback(disk_models, nil)
-    -- Refresh in background
-    M.fetch(function() end)
-    return
-  end
-
-  -- Fetch from API
   M.fetch(callback)
 end
 

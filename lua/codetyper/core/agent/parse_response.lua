@@ -136,49 +136,91 @@ end
 
 --- Parse tool calls from agent response
 ---@param response string
----@return table[] tool_calls { type, server, tool, args, command }
+---@return table[] tool_calls { type, name, args, server, tool, command }
 local function parse_tool_calls(response)
   local calls = {}
   local cleaned = response:gsub("@thinking.-end thinking\n?", "")
 
-  -- TOOL:TERMINAL command
-  for cmd in cleaned:gmatch("TOOL:TERMINAL%s+([^\n]+)") do
-    table.insert(calls, {
-      type = "terminal",
-      command = cmd:gsub("^%s+", ""):gsub("%s+$", ""),
-    })
-    flog.info("agent.parse", "TOOL:TERMINAL: " .. cmd:sub(1, 80)) -- TODO: remove after debugging
-  end
+  -- Canonical local tools share their names and argument objects with native
+  -- structured calls. Unknown marker names are deliberately ignored here;
+  -- they must never become executable shell or MCP requests.
+  local marker_tools = {
+    CODEGRAPH = "codegraph_context",
+    TOKENSAVE = "tokensave_search",
+    CONTEXT7_RESOLVE = "context7_resolve_library",
+    CONTEXT7_QUERY = "context7_query_docs",
+    ASK_USER = "ask_user",
+    ADD_IMPORT = "add_import",
+  }
 
-  -- TOOL:MCP server/tool {json_args}
-  for server_tool, json_args in cleaned:gmatch("TOOL:MCP%s+(%S+)%s*(%b{})") do
-    local server, tool = server_tool:match("^([^/]+)/(.+)$")
-    if server and tool then
-      local ok, args = pcall(vim.json.decode, json_args)
-      if ok then
-        table.insert(calls, {
-          type = "mcp",
-          server = server,
-          tool = tool,
-          args = args,
-        })
-        flog.info("agent.parse", "TOOL:MCP: " .. server .. "/" .. tool) -- TODO: remove after debugging
+  local function is_object(value)
+    if type(value) ~= "table" then
+      return false
+    end
+    for key in pairs(value) do
+      if type(key) ~= "string" then
+        return false
       end
     end
+    return true
   end
 
-  -- TOOL:MCP server/tool (no args)
-  for server_tool in cleaned:gmatch("TOOL:MCP%s+(%S+)%s*\n") do
-    if not server_tool:match("^{") then
-      local server, tool = server_tool:match("^([^/]+)/(.+)$")
-      if server and tool then
+  for line in cleaned:gmatch("[^\n]+") do
+    local marker_start = line:find("TOOL:", 1, true)
+    if marker_start then
+      local marker_line = line:sub(marker_start):gsub("\r$", ""):gsub("%s+$", "")
+      local marker, payload = marker_line:match("^TOOL:([A-Z_]+)%s+(.+)$")
+
+      if marker == "TERMINAL" and payload then
         table.insert(calls, {
-          type = "mcp",
-          server = server,
-          tool = tool,
-          args = {},
+          type = "terminal",
+          command = payload:gsub("^%s+", ""):gsub("%s+$", ""),
         })
-        flog.info("agent.parse", "TOOL:MCP (no args): " .. server .. "/" .. tool) -- TODO: remove after debugging
+        flog.info("agent.parse", "TOOL:TERMINAL: " .. payload:sub(1, 80)) -- TODO: remove after debugging
+      elseif marker == "MCP" and payload then
+        local server_tool, json_args = payload:match("^(%S+)%s+(.+)$")
+        local server, tool
+        if server_tool then
+          server, tool = server_tool:match("^([^/]+)/(.+)$")
+        else
+          local server_token = payload:match("^%s*(%S+)%s*$")
+          if server_token then
+            server, tool = server_token:match("^([^/]+)/(.+)$")
+          end
+        end
+        if server and tool then
+          local args
+          if json_args then
+            local ok, decoded = pcall(vim.json.decode, json_args)
+            if ok and is_object(decoded) then
+              args = decoded
+            end
+          else
+            args = {}
+          end
+          if args then
+            table.insert(calls, {
+              type = "mcp",
+              server = server,
+              tool = tool,
+              args = args,
+            })
+            flog.info("agent.parse", "TOOL:MCP: " .. server .. "/" .. tool) -- TODO: remove after debugging
+          end
+        end
+      else
+        local name = marker_tools[marker]
+        if name and payload then
+          local ok, args = pcall(vim.json.decode, payload)
+          if ok and is_object(args) then
+            table.insert(calls, {
+              type = "registry",
+              name = name,
+              args = args,
+            })
+            flog.info("agent.parse", "TOOL:" .. marker .. " -> " .. name) -- TODO: remove after debugging
+          end
+        end
       end
     end
   end

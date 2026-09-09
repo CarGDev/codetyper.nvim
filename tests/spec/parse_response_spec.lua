@@ -248,3 +248,35 @@ describe("parse_response — FILE:DELETE + dedup handling", function()
     assert.are.equal("return true", read_file(to_create))
   end)
 end)
+
+describe("parse_response — tool marker boundary", function()
+  it("rejects malformed, non-object, and double-encoded marker payloads", function()
+    local response = table.concat({
+      'TOOL:CODEGRAPH {"query":"safe"} {"query":"duplicate"}',
+      "TOOL:CODEGRAPH {\"query\":",
+      'TOOL:ASK_USER ["not-an-object"]',
+      'TOOL:UNKNOWN {"command":"rm -rf /"}',
+    }, "\n")
+
+    local operations, is_agent, calls = parse_response(response, "/tmp/project", nil)
+
+    assert.are.same({}, operations)
+    assert.is_false(is_agent)
+    assert.are.same({}, calls)
+  end)
+
+  it("preserves one valid canonical marker while ignoring an unknown shell marker", function()
+    local response = table.concat({
+      'TOOL:CODEGRAPH {"query":"safe"}',
+      "TOOL:SHELL echo unsafe",
+    }, "\n")
+
+    local _operations, is_agent, calls = parse_response(response, "/tmp/project", nil)
+
+    assert.is_true(is_agent)
+    assert.are.equal(1, #calls)
+    assert.are.equal("registry", calls[1].type)
+    assert.are.equal("codegraph_context", calls[1].name)
+    assert.are.same({ query = "safe" }, calls[1].args)
+  end)
+end)

@@ -1,149 +1,211 @@
-# Codetyper.nvim — LLM Context File
+# Codetyper.nvim — LLM Context
 
-> Version: 1.1.0
-> Repository: https://github.com/CarGDev/codetyper.nvim
+> Repository: https://github.com/cargdev/codetyper.nvim
 > License: MIT
-> Neovim: >= 0.8
+> Runtime: Neovim 0.9+
 
-## What is Codetyper.nvim?
+## Purpose
 
-A Neovim plugin that acts as an AI-powered coding partner. It uses LLM APIs
-(GitHub Copilot, Ollama) to help write, refactor, explain, and organize code
-while staying in the editor. Features an agent system that can create files,
-move functions, and manage imports across a project.
+Codetyper.nvim is a Neovim coding partner. It builds bounded prompts from a
+selection, cursor position, or `/@ ... @/` tag, sends them through an explicit
+provider, and applies reviewable edits. The plugin keeps external context and
+interactive actions behind explicit, validated boundaries.
+
+## Provider model
+
+The supported providers are `copilot`, `ollama`, `claude`, and `openai`.
+
+- Copilot uses OAuth exchange credentials and may receive native structured
+  tools only for eligible project tasks and tool-capable models.
+- Ollama uses a configured local HTTP host and can be the automatic fallback
+  when Copilot authentication is unavailable.
+- Claude reads only `ANTHROPIC_API_KEY` from the inherited environment. It is
+  non-streaming and does not receive native tools.
+- OpenAI means ChatGPT Plus/Pro subscription OAuth, not `OPENAI_API_KEY`.
+  Tokens remain session-only and the provider is non-streaming/no-tools.
+
+Explicit provider and model choices are authoritative. Automatic resolution
+checks verified provider contracts and never invents public model endpoints.
+
+Provider/model metadata is stored at
+`~/.local/share/nvim/codetyper/configuration.json`. Secret values, OAuth
+tokens, request headers, account identity, and residency are not persisted.
 
 ## Architecture
 
-```
+```text
 lua/codetyper/
-├── core/                    — Business logic
-│   ├── agent/               — Agent system (executor, loop, MCP, terminal, style analyzer, architecture)
-│   ├── cost/                — Cost tracking (calc, aggregate, format, view, stats, session)
-│   ├── diff/                — Diff/patch system (detect, resolve, patch, search_replace)
-│   ├── events/              — Event queue with priority scheduling
-│   ├── intent/              — Prompt intent detection (fix, add, refactor, explain, etc.)
-│   ├── llm/                 — LLM providers and selection
-│   │   ├── providers/copilot/{auth,request,response,init}.lua
-│   │   ├── providers/ollama/{config,request,response,init}.lua
-│   │   ├── selector/{select,ponder,accuracy,init}.lua
-│   │   └── shared/{http,extract_code,build_system_prompt,build_context}.lua
-│   ├── memory/              — Brain/knowledge graph (nodes, edges, learners, delta versioning)
-│   ├── scheduler/           — Event-driven scheduler with worker dispatch
-│   ├── scope/               — Tree-sitter scope resolution
-│   └── transform.lua        — Prompt window and visual selection handling
-├── window/                  — UI windows
-│   ├── cost.lua             — Cost estimation floating window
-│   ├── conflict.lua         — Git-style conflict resolution
-│   ├── explain.lua          — Right-side markdown explanation panel
-│   ├── queue.lua            — Prompt queue status panel
-│   └── terminal.lua         — Bottom terminal split
-├── handler/                 — Side-effect handlers
-├── constants/               — Static data (prices, model_caps, model_tiers, defaults)
-├── utils/                   — Utility functions
-├── prompts/                 — LLM prompt templates
-│   └── tiers/{agent,chat,basic}.lua — Model-tier-specific prompt strategies
-├── inject/                  — Code injection strategies
-├── parser/                  — Tag and prompt parsing
-├── adapters/nvim/           — Neovim-specific glue (commands, autocmds, UI)
-└── support/                 — Shared utilities (logger, flog, tree, langmap)
+├── core/agent/
+│   ├── executor.lua, loop.lua, parse_response.lua
+│   ├── mcp.lua
+│   └── tools/
+│       ├── init.lua                 canonical six-tool registry
+│       ├── local_cli.lua             fixed argv runner
+│       ├── codegraph.lua             read-only CodeGraph adapter
+│       ├── tokensave.lua             branch-aware TokenSave adapter
+│       ├── context7.lua              MCPHub/fallback adapter
+│       ├── context7_transport.lua    bounded MCP HTTP/SSE transport
+│       ├── imports.lua, add_import.lua
+│       └── ...
+├── core/llm/
+│   ├── providers/{copilot,claude,ollama,openai}/
+│   ├── selector/                    provider and smart routing
+│   └── shared/{http,build_context}.lua
+├── prompts/tiers/{agent,chat,basic}.lua
+├── scheduler/{scheduler,worker}.lua
+├── inject/                           safe buffer insertion
+├── window/ask_user.lua               bounded interactive popup
+├── features/indexer/                 project context indexing
+└── adapters/nvim/                    commands, keymaps, and UI glue
 ```
 
-## Key Concepts
+## Canonical agent tools
 
-### Model Tiers
-Models are classified by capability:
-- **agent** (Claude, GPT-4o, o3): tool calls, FILE: operations, TOOL: calls, multi-step reasoning
-- **chat** (GPT-4o-mini, Copilot default): strict format, explicit line boundaries
-- **basic** (codellama, small Ollama): fill-in-the-middle, minimal prompt
+The registry in `core/agent/tools/init.lua` owns exactly six names:
 
-Tier auto-detected from Copilot /models API (tool_calls capability) or hardcoded in model_caps.lua.
-
-### Agent Operations
-When using agent-tier models, the LLM can output:
-- `FILE:CREATE path` — create a new file
-- `FILE:MODIFY path` + SEARCH/REPLACE — modify existing files
-- `FILE:DELETE path` — delete files
-- `TOOL:TERMINAL command` — run shell commands
-- `TOOL:MCP server/tool {args}` — call MCP tools
-
-The agent loop supports multi-turn: LLM calls tools, results fed back, LLM continues (max 5 iterations).
-
-### Brain/Memory System
-The brain is a graph-based knowledge store in `.codetyper/brain/`:
-- Learns coding style on file save (indent, module patterns, error handling, guards)
-- Learns project architecture from tree.log (which directories hold what code)
-- Learns from successful injections (what conventions were used)
-- Targeted queries: file conventions, intent patterns, scope context (not a context dump)
-- Nodes: patterns, corrections, conventions, metrics
-- Edges: semantic, file-based, temporal relationships
-
-### Prompt Pipeline
-1. User prompts via `<leader>ctt` (selection or cursor) or `/@ @/` tags
-2. Intent detected (fix, add, refactor, explain, etc.)
-3. Scope resolved via Tree-sitter (function, method, class, file)
-4. Context gathered (brain, architecture, indexed files, attached files)
-5. Prompt built using model-tier-specific builder (agent/chat/basic)
-6. Sent to LLM via Copilot or Ollama
-7. Response parsed for agent operations (FILE:, TOOL:) or plain code
-8. Code injected at correct position using extmark-tracked ranges
-
-### Tag System (/@ @/)
-Inline tags in code (must be inside comments for valid syntax):
-```lua
--- /@ add error handling to this function @/
-```
-- Default: manual processing via `:CoderProcess`
-- Toggle auto-processing: `:CoderAutotrigger`
-- Multiple tags processed sequentially bottom-to-top
-
-## Commands
-
-| Command | Description |
-|---------|-------------|
-| `:Coder transform-selection` | Open prompt window |
-| `:Coder cost` | Toggle cost tracking window |
-| `:Coder terminal` | Toggle terminal panel |
-| `:Coder queue` | Toggle prompt queue window |
-| `:Coder autotrigger` | Toggle /@ @/ auto-processing |
-| `:Coder process` | Manually process /@ @/ tags |
-| `:Coder model [name]` | Switch Copilot model |
-| `:CoderTransformSelection` | Open prompt window |
-| `:CoderCost` | Toggle cost window |
-| `:CoderAutotrigger` | Toggle autotrigger |
-| `:CoderProcess` | Process /@ @/ tags |
-
-## Keymaps
-
-| Key | Mode | Description |
-|-----|------|-------------|
-| `<leader>ctt` | Normal/Visual | Open prompt window |
-| `<leader>ter` | Normal | Toggle terminal |
-| `@` | Insert (prompt window) | Open file picker to attach files |
-
-## Configuration
-
-```lua
-require("codetyper").setup({
-  llm = {
-    provider = "copilot",  -- or "ollama"
-    copilot = { model = "claude-sonnet-4" },
-    ollama = { host = "http://localhost:11434", model = "llama3" },
-  },
-  scheduler = {
-    enabled = true,
-    apply_delay_ms = 500,
-  },
-  brain = { enabled = true },
-  indexer = { enabled = false },
-})
+```text
+codegraph_context(query,max_nodes,no_code)
+tokensave_search(query,limit)
+context7_resolve_library(query)
+context7_query_docs(library_id,query)
+ask_user(question,options)
+add_import(path,statement)
 ```
 
-## .codetyper/ Directory
+All native calls and text markers use bounded validation and the result shape
+`{status,data,error,stale}`. Encoded results are limited to 4000 characters.
+Unknown names, extra fields, invalid ranges, control characters, and malformed
+objects have no side effects.
 
-Per-project data stored in `.codetyper/` (auto-gitignored):
-- `brain/` — Knowledge graph (nodes, edges, indices, deltas)
-- `agents/` — Agent persona definitions (.agent.md)
-- `tree.log` — Project file structure
-- `cost_history.json` — Token usage tracking
-- `models_cache.json` — Cached Copilot model capabilities
-- `settings.json` — Project-specific settings
+### CodeGraph
+
+The adapter checks the executable, validates the absolute project root, and
+runs status before a read-only query. The only command shapes are equivalent
+to:
+
+```text
+codegraph status --json <root>
+codegraph context <query> --path <root> --format json --max-nodes <n> [--no-code]
+codegraph explore <query> --path <root> --format json --max-nodes <n> [--no-code]
+```
+
+Uninitialized projects are `unavailable`; pending, indexing, or stale indexes
+are `stale`; malformed output is an error. The adapter never runs `init`,
+`sync`, `index`, `daemon`, or database operations.
+
+### TokenSave
+
+The adapter requires `.tokensave/config.json`, `.tokensave/branch-meta.json`,
+an absolute matching root, a current mapped Git branch, and ready status. It
+runs only:
+
+```text
+git -C <root> branch --show-current
+```
+
+It accepts bare JSON and the observed `content[].text` double-encoded envelope.
+Unmapped branches, stale indexes, malformed markers, invalid JSON, or unsafe
+database paths fail closed. It never opens or assumes a TokenSave database.
+
+### Context7
+
+MCPHub is tried first under the `context7` alias. The fallback uses only
+`https://mcp.context7.com/mcp` and the read-only Streamable HTTP surface:
+
+```text
+initialize
+notifications/initialized
+```
+
+The fallback retains `Mcp-Session-Id`, accepts JSON/SSE responses, bounds body
+and timeout values, and supports cancellation. `CONTEXT7_API_KEY` is read in
+memory only. URLs, headers, session IDs, payloads, and credentials are removed
+from result metadata and errors.
+
+### Imports and interaction
+
+`add_import` plans a single declaration for JavaScript/TypeScript, Python, Lua,
+Go, Rust, C/C++, Java/Kotlin, Ruby, or PHP. It preserves headers/package
+metadata, deduplicates equivalent declarations, respects open-buffer content,
+and rejects traversal, absolute paths, documentation files, remote references,
+multiline statements, unsupported languages, and ambiguous declarations.
+
+`ask_user` renders a bounded selectable float with at most eight options.
+`<Up>`/`<Down>` move, `<CR>` selects, and `<Esc>` cancels. Interactive and
+mutating calls are FIFO-serialized and complete exactly once.
+
+## Dispatch contracts
+
+The parser recognizes these local markers and maps them to the same registry:
+
+```text
+TOOL:CODEGRAPH {"query":"request","max_nodes":20}
+TOOL:TOKENSAVE {"query":"request","limit":10}
+TOOL:CONTEXT7_RESOLVE {"query":"neovim"}
+TOOL:CONTEXT7_QUERY {"library_id":"/neovim/neovim","query":"autocmd"}
+TOOL:ASK_USER {"question":"Continue?","options":["Yes","No"]}
+TOOL:ADD_IMPORT {"path":"lua/app.lua","statement":"local M = {}"}
+```
+
+Malformed, double-encoded, array-shaped, unknown, or extra-field marker
+payloads are ignored or rejected before execution. Native structured calls and
+markers use one executor. Local registry tools run before external MCP calls;
+results are bounded, cancellable, serialized where necessary, and protected
+against late callbacks.
+
+Terminal calls remain a separate visible boundary with dangerous command
+patterns blocked. MCP calls use the installed allowlist and exclude filesystem
+and shell operations that overlap with file markers or the terminal.
+
+## Prompt and context flow
+
+```text
+user selection/tag
+  -> intent and scope resolution
+  -> synchronous local context snapshot
+  -> capability-aware prompt tier
+  -> explicit provider selection
+  -> native Copilot dispatch or text-marker dispatch
+  -> bounded executor/adapter
+  -> reviewable buffer or file result
+```
+
+Prompt construction advertises only explicitly available tools, fixed limits,
+safe statuses, and capability mode. It does not probe MCP or execute tools while
+assembling context. Context gathering uses injected snapshots and remains
+synchronous; external work is model-invoked through the executor boundary.
+
+## Persistent project data
+
+The plugin may maintain project index and memory data under `.codetyper/` when
+those features are enabled, plus cost history at `.codetyper/cost_history.json`.
+These files contain project context or usage metadata, not provider secrets.
+The plugin does not create or modify a project's `.gitignore` by default.
+
+## Commands and configuration
+
+The main dispatcher is `:Coder` with `version`, `reset`,
+`transform-selection`, `index-project`, `index-status`, `llm-stats`,
+`llm-reset-stats`, `cost`, `cost-clear`, `terminal`, `queue`, `autotrigger`,
+`process`, `credentials`, `switch-provider`, `model`, and `auth` subcommands.
+OpenAI auth is available as `:Coder auth openai browser` or
+`:Coder auth openai device`.
+
+Default mappings are `<leader>ctt` (transform), `<leader>ctm` (model), and
+`<leader>ter` (terminal). Inline tags default to `/@` and `@/`; the canonical
+companion pattern is `*.codetyper.*`.
+
+## Testing boundary
+
+Tests run in headless Neovim with Plenary. HTTP, CLI, MCPHub, provider, popup,
+buffer, and cancellation seams use injected fakes. The suite does not require
+network access, credentials, installed CodeGraph/TokenSave binaries, an MCP
+server, or a database.
+
+```text
+make test
+make test-file FILE=tests/spec/context7_spec.lua
+make lint
+make format-check
+make docs
+```

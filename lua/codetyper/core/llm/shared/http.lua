@@ -35,7 +35,9 @@ function M.post(url, headers, body, callback)
   vim.fn.jobstart(cmd, {
     stdout_buffered = true,
     on_stdout = function(_, data)
-      if done then return end
+      if done then
+        return
+      end
       if not data or #data == 0 or (data[1] == "" and #data == 1) then
         return
       end
@@ -65,7 +67,9 @@ function M.post(url, headers, body, callback)
       end)
     end,
     on_stderr = function(_, data)
-      if done then return end
+      if done then
+        return
+      end
       if data and #data > 0 and data[1] ~= "" then
         done = true
         vim.schedule(function()
@@ -76,7 +80,9 @@ function M.post(url, headers, body, callback)
     on_exit = function(_, code)
       -- Clean up temp file
       os.remove(tmp)
-      if done then return end
+      if done then
+        return
+      end
       if code ~= 0 then
         done = true
         vim.schedule(function()
@@ -105,7 +111,9 @@ function M.get(url, headers, callback)
   vim.fn.jobstart(cmd, {
     stdout_buffered = true,
     on_stdout = function(_, data)
-      if done then return end
+      if done then
+        return
+      end
       if not data or #data == 0 or (data[1] == "" and #data == 1) then
         return
       end
@@ -126,7 +134,9 @@ function M.get(url, headers, callback)
       end)
     end,
     on_stderr = function(_, data)
-      if done then return end
+      if done then
+        return
+      end
       if data and #data > 0 and data[1] ~= "" then
         done = true
         vim.schedule(function()
@@ -135,7 +145,9 @@ function M.get(url, headers, callback)
       end
     end,
     on_exit = function(_, code)
-      if done then return end
+      if done then
+        return
+      end
       if code ~= 0 then
         done = true
         vim.schedule(function()
@@ -183,8 +195,12 @@ function M.post_stream(url, headers, body, opts)
   local job_id = vim.fn.jobstart(cmd, {
     stdout_buffered = false,
     on_stdout = function(_, data)
-      if done then return end
-      if not data then return end
+      if done then
+        return
+      end
+      if not data then
+        return
+      end
 
       -- Append incoming data to line buffer and process complete lines
       for _, chunk in ipairs(data) do
@@ -231,7 +247,9 @@ function M.post_stream(url, headers, body, opts)
       line_buffer = remaining
     end,
     on_stderr = function(_, data)
-      if done then return end
+      if done then
+        return
+      end
       if data and #data > 0 and data[1] ~= "" then
         local err_text = table.concat(data, "\n")
         -- Ignore curl progress output
@@ -242,7 +260,9 @@ function M.post_stream(url, headers, body, opts)
     end,
     on_exit = function(_, code)
       os.remove(tmp)
-      if done then return end
+      if done then
+        return
+      end
       done = true
       if code ~= 0 then
         vim.schedule(function()
@@ -258,6 +278,116 @@ function M.post_stream(url, headers, body, opts)
   })
 
   return job_id
+end
+
+-- The catalog boundary keeps status parsing, cancellation, and body cleanup in one seam.
+local STATUS_MARKER = "__CODETYPER_STATUS__"
+
+local function redact(value)
+  local text = tostring(value or "")
+  text = text:gsub("([Aa]uthorization:%s*[Bb]earer%s+)[^%s]+", "%1[REDACTED]")
+  text = text:gsub("([Xx%-][Aa][Pp][Ii]%-[Kk][Ee][Yy]:%s*)[^%s]+", "%1[REDACTED]")
+  return text
+end
+
+M.redact = redact
+
+local function boundary_request(method, url, headers, body, callback)
+  local temp_path
+  if body then
+    temp_path = os.tmpname()
+    local file = io.open(temp_path, "w")
+    if not file then
+      callback(nil, "Failed to create request body", { status = 0 })
+      return { cancel = function() end }
+    end
+    file:write(body)
+    file:close()
+  end
+
+  local command =
+    { "curl", "--silent", "--show-error", "--request", method, "--write-out", "\n" .. STATUS_MARKER .. "%{http_code}" }
+  for _, header in ipairs(headers or {}) do
+    command[#command + 1], command[#command + 2] = "--header", header
+  end
+  if temp_path then
+    command[#command + 1], command[#command + 2] = "--data-binary", "@" .. temp_path
+  end
+  command[#command + 1] = url
+
+  local finished, cancelled, output = false, false, ""
+  local job_id
+  local function cleanup()
+    if temp_path then
+      os.remove(temp_path)
+      temp_path = nil
+    end
+  end
+  local function finish(data, err, status)
+    if finished then
+      return
+    end
+    finished = true
+    cleanup()
+    if not cancelled then
+      callback(data, err, { status = status })
+    end
+  end
+  local handle = {}
+  function handle.cancel()
+    if finished then
+      return
+    end
+    cancelled = true
+    if job_id and job_id > 0 then
+      vim.fn.jobstop(job_id)
+    end
+    finish(nil, nil, 0)
+  end
+
+  job_id = vim.fn.jobstart(command, {
+    stdout_buffered = true,
+    on_stdout = function(_, data)
+      if data then
+        output = output .. table.concat(data, "\n")
+      end
+    end,
+    on_exit = function(_, code)
+      if finished then
+        return
+      end
+      local response, status_text = output:match("^(.*)\n" .. STATUS_MARKER .. "(%d+)%s*$")
+      local status = tonumber(status_text) or (code == 0 and 200 or 0)
+      if code ~= 0 then
+        finish(nil, "curl exited with code " .. code, status)
+        return
+      end
+      local ok, parsed = pcall(vim.json.decode, response or output)
+      if not ok then
+        finish(nil, "Invalid JSON response: " .. redact(response or output), status)
+        return
+      end
+      if status >= 400 then
+        local message = parsed and (parsed.message or parsed.error) or nil
+        finish(nil, redact(message or ("HTTP request failed with status " .. status)), status)
+        return
+      end
+      finish(parsed, nil, status)
+    end,
+  })
+  handle.job_id = job_id
+  if not job_id or job_id <= 0 then
+    finish(nil, "Failed to start curl job", 0)
+  end
+  return handle
+end
+
+M.get = function(url, headers, callback)
+  return boundary_request("GET", url, headers, nil, callback)
+end
+
+M.post = function(url, headers, body, callback)
+  return boundary_request("POST", url, headers, body, callback)
 end
 
 return M

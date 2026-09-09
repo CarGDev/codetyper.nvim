@@ -41,6 +41,73 @@ local function get_model(context)
   return "claude-sonnet-4"
 end
 
+local function native_tools_enabled(context, model)
+  if not context or context.is_project_task ~= true then
+    return false, "native tools require a Copilot project task"
+  end
+  if context.provider and context.provider ~= "copilot" then
+    return false, "native tools are unavailable for this provider"
+  end
+  local model_caps = require("codetyper.constants.model_caps")
+  local caps = model_caps.get(model)
+  if not caps or caps.tools ~= true then
+    return false, "the selected Copilot model does not advertise native tools"
+  end
+  return true, nil
+end
+
+local function native_registry_tool(definition)
+  if type(definition) ~= "table" or definition.available ~= true or definition.stale == true then
+    return nil
+  end
+  local parameters = definition.parameters or definition.inputSchema or definition.schema
+  if type(definition.name) ~= "string" or type(parameters) ~= "table" then
+    return nil
+  end
+  return {
+    type = "function",
+    ["function"] = {
+      name = definition.name,
+      description = definition.description or "Bounded project agent tool",
+      parameters = parameters,
+    },
+  }
+end
+
+--- Return the explicit Copilot native/marker capability decision.
+---@param context table|nil Request context
+---@return table { provider, native_tools, marker_tools, reason, tools }
+function M.get_tool_capabilities(context)
+  local model = get_model(context)
+  local enabled, reason = native_tools_enabled(context, model)
+  local tools = {}
+  if enabled then
+    local registry = require("codetyper.core.agent.tools")
+    local definitions = registry.list(context and context.tool_options or nil)
+    for _, definition in ipairs(definitions or {}) do
+      local tool = native_registry_tool(definition)
+      if tool then
+        tools[#tools + 1] = tool
+      end
+    end
+
+    tools[#tools + 1] = request.terminal_tool
+    local mcp = require("codetyper.core.agent.mcp")
+    for _, tool in ipairs(mcp.get_tools_for_api() or {}) do
+      tools[#tools + 1] = tool
+    end
+  end
+  return {
+    provider = "copilot",
+    native_tools = enabled,
+    marker_tools = true,
+    reason = reason,
+    tools = tools,
+  }
+end
+
+M.tool_capabilities = M.get_tool_capabilities
+
 --- Track if we've already suggested Ollama fallback this session
 local ollama_fallback_suggested = false
 
@@ -85,8 +152,17 @@ function M.generate(prompt, context, callback)
 
   auth.get_valid_token(function(token, err)
     if err then
-      utils.notify(err, vim.log.levels.ERROR)
-      callback(nil, err)
+      local safe_err = auth.safe_error(err)
+      utils.notify(safe_err, vim.log.levels.ERROR)
+      callback(nil, safe_err)
+      return
+    end
+
+    local valid, validation_error = auth.validate_exchange(token)
+    if not valid then
+      local safe_err = auth.safe_error(validation_error)
+      utils.notify(safe_err, vim.log.levels.ERROR)
+      callback(nil, safe_err)
       return
     end
 
@@ -104,11 +180,12 @@ function M.generate(prompt, context, callback)
 
     request.send(token, body, function(parsed, http_err)
       if http_err then
-        if http_err:match("limit") or http_err:match("Upgrade") or http_err:match("quota") then
-          suggest_ollama_fallback(http_err)
+        local safe_err = auth.safe_error(http_err)
+        if safe_err:match("limit") or safe_err:match("Upgrade") or safe_err:match("quota") then
+          suggest_ollama_fallback(safe_err)
         end
-        utils.notify(http_err, vim.log.levels.ERROR)
-        callback(nil, http_err)
+        utils.notify(safe_err, vim.log.levels.ERROR)
+        callback(nil, safe_err)
         return
       end
 
@@ -128,11 +205,12 @@ function M.generate(prompt, context, callback)
       end
 
       if result.error then
+        local safe_err = auth.safe_error(result.error)
         if result.rate_limited then
-          suggest_ollama_fallback(result.error)
+          suggest_ollama_fallback(safe_err)
         end
-        utils.notify(result.error, vim.log.levels.ERROR)
-        callback(nil, result.error)
+        utils.notify(safe_err, vim.log.levels.ERROR)
+        callback(nil, safe_err)
       else
         utils.notify("Code generated successfully", vim.log.levels.INFO)
         callback(result.code, nil, result.usage)
@@ -152,7 +230,13 @@ function M.generate_structured(prompt, context, callbacks)
 
   auth.get_valid_token(function(token, err)
     if err then
-      callbacks.on_error(err)
+      callbacks.on_error(auth.safe_error(err))
+      return
+    end
+
+    local valid, validation_error = auth.validate_exchange(token)
+    if not valid then
+      callbacks.on_error(auth.safe_error(validation_error))
       return
     end
 
@@ -165,25 +249,11 @@ function M.generate_structured(prompt, context, callbacks)
       system_prompt = build_sys(context or {})
     end
 
-    -- Build tools: terminal + MCP
-    -- Only include tools for project-level tasks where the user gave an
-    -- instruction without selecting specific code. When code IS selected
-    -- (even if it covers the whole file), the user wants it modified directly
-    -- — tools just distract the model.
-    local tools = {}
-    local is_project_task = context and context.is_project_task or false
-    if is_project_task then
-      local model_caps = require("codetyper.constants.model_caps")
-      local caps = model_caps.get(model)
-      if caps and caps.tools then
-        table.insert(tools, request.terminal_tool)
-        local mcp = require("codetyper.core.agent.mcp")
-        local mcp_tools = mcp.get_tools_for_api()
-        for _, t in ipairs(mcp_tools) do
-          table.insert(tools, t)
-        end
-      end
-    end
+    -- Native schemas are a Copilot-only project-task capability. Non-project
+    -- requests and models without an explicit tools capability send no tools;
+    -- they retain the validated text-marker contract instead.
+    local tool_capabilities = M.get_tool_capabilities(context)
+    local tools = tool_capabilities.tools
 
     -- Build body with streaming enabled
     local body = request.build_body(model, system_prompt, prompt, {
@@ -212,10 +282,15 @@ function M.generate_structured(prompt, context, callbacks)
       end,
       on_done = function()
         local result = stream.get_result(acc)
-        flog.info("copilot.stream", string.format(
-          "complete: text_len=%d tool_calls=%d finish=%s",
-          #result.text, #result.tool_calls, result.finish_reason or "nil"
-        ))
+        flog.info(
+          "copilot.stream",
+          string.format(
+            "complete: text_len=%d tool_calls=%d finish=%s",
+            #result.text,
+            #result.tool_calls,
+            result.finish_reason or "nil"
+          )
+        )
 
         -- Record usage
         if result.usage then
@@ -225,8 +300,7 @@ function M.generate_structured(prompt, context, callbacks)
               model,
               result.usage.prompt_tokens or 0,
               result.usage.completion_tokens or 0,
-              (result.usage.prompt_tokens_details
-                and result.usage.prompt_tokens_details.cached_tokens) or 0
+              (result.usage.prompt_tokens_details and result.usage.prompt_tokens_details.cached_tokens) or 0
             )
           end)
         end
@@ -234,7 +308,8 @@ function M.generate_structured(prompt, context, callbacks)
         callbacks.on_complete(result)
       end,
       on_error = function(stream_err)
-        flog.info("copilot.stream", "stream error, falling back to non-streaming: " .. stream_err)
+        local safe_stream_error = auth.safe_error(stream_err)
+        flog.info("copilot.stream", "stream error, falling back to non-streaming: " .. safe_stream_error)
         -- Fallback: rebuild request as non-streaming but preserve conversation history
         local fallback_body = request.build_body(model, system_prompt, prompt, {
           messages = context and context.messages or nil,
@@ -244,12 +319,12 @@ function M.generate_structured(prompt, context, callbacks)
         })
         request.send(token, fallback_body, function(parsed, http_err)
           if http_err then
-            callbacks.on_error(http_err)
+            callbacks.on_error(auth.safe_error(http_err))
             return
           end
           local fb_result = parse_response(parsed)
           if fb_result.error then
-            callbacks.on_error(fb_result.error)
+            callbacks.on_error(auth.safe_error(fb_result.error))
             return
           end
           callbacks.on_complete({

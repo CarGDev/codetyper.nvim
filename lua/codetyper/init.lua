@@ -26,6 +26,10 @@ function M.setup(opts)
 
   local config = require("codetyper.constants.defaults")
   M.config = config.setup(opts)
+  local valid, validation_error = config.validate(M.config)
+  if not valid then
+    error("Invalid Codetyper configuration: " .. validation_error, 2)
+  end
 
   -- Initialize modules
   local commands_setup = require("codetyper.adapters.nvim.commands.setup")

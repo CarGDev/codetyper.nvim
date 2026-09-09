@@ -1,4 +1,69 @@
 local flog = require("codetyper.support.flog") -- TODO: remove after debugging
+local utils = require("codetyper.support.utils")
+local SAFE_TOOL_STATUSES = {
+  available = true,
+  unavailable = true,
+  stale = true,
+  error = true,
+  cancelled = true,
+}
+
+local function copy_tool_capabilities(capabilities)
+  if type(capabilities) ~= "table" then
+    return nil
+  end
+
+  local result = {}
+  if type(capabilities.provider) == "string" then
+    result.provider = capabilities.provider:sub(1, 32)
+  end
+  if type(capabilities.native_tools) == "boolean" then
+    result.native_tools = capabilities.native_tools
+  end
+  if type(capabilities.marker_tools) == "boolean" then
+    result.marker_tools = capabilities.marker_tools
+  end
+
+  if type(capabilities.limits) == "table" then
+    result.limits = {}
+    for _, key in ipairs({ "max_result_chars", "max_query_chars", "max_nodes", "max_items" }) do
+      if type(capabilities.limits[key]) == "number" then
+        result.limits[key] = math.floor(capabilities.limits[key])
+      end
+    end
+  end
+
+  local source = capabilities.available_tools
+  if type(source) ~= "table" then
+    source = capabilities.tools
+  end
+  if type(source) == "table" then
+    result.available_tools = {}
+    for _, tool in ipairs(source) do
+      if type(tool) == "table" and type(tool.name) == "string" then
+        local name = tool.name:match("^[%w_%-]+$")
+        if name then
+          local copy = { name = name:sub(1, 64) }
+          if type(tool.marker) == "string" and tool.marker:match("^TOOL:[A-Z_]+$") then
+            copy.marker = tool.marker
+          end
+          if type(tool.status) == "string" and SAFE_TOOL_STATUSES[tool.status] then
+            copy.status = tool.status
+          end
+          if type(tool.available) == "boolean" then
+            copy.available = tool.available
+          end
+          if type(tool.stale) == "boolean" then
+            copy.stale = tool.stale
+          end
+          result.available_tools[#result.available_tools + 1] = copy
+        end
+      end
+    end
+  end
+
+  return result
+end
 
 --- Strip /@ @/ tag blocks from file lines, except the one at current_range
 ---@param lines string[] File lines
@@ -48,7 +113,13 @@ end
 ---@param event table PromptEvent
 ---@return table context { target_content, target_lines, filetype, brain, coder, indexed, attached, project, extra }
 local function gather(event)
+  event = event or {}
   flog.info("build_context", ">>> gather ENTERED") -- TODO: remove after debugging
+
+  -- Tool availability is an explicit snapshot supplied by the caller. It is
+  -- copied here for prompt construction, never discovered or executed during
+  -- synchronous context gathering.
+  local tool_capabilities = copy_tool_capabilities(event.tool_capabilities)
 
   -- Read target file
   local target_content = ""
@@ -109,11 +180,13 @@ local function gather(event)
     if not event.target_path then
       return
     end
-    local coder_path = event.target_path:gsub("([^/]+)$", ".codetyper.%1")
-    if vim.fn.filereadable(coder_path) == 1 then
-      local lines_read = vim.fn.readfile(coder_path)
-      if lines_read and #lines_read > 0 then
-        coder_content = "\n\n--- Coder Context ---\n" .. table.concat(lines_read, "\n"):sub(1, 3000)
+    if not utils.is_coder_file(event.target_path) then
+      local coder_path = utils.get_coder_path(event.target_path)
+      if coder_path ~= event.target_path and vim.fn.filereadable(coder_path) == 1 then
+        local lines_read = vim.fn.readfile(coder_path)
+        if lines_read and #lines_read > 0 then
+          coder_content = "\n\n--- Coder Context ---\n" .. table.concat(lines_read, "\n"):sub(1, 3000)
+        end
       end
     end
   end)
@@ -260,6 +333,7 @@ local function gather(event)
     attached = attached_content,
     project = project_content,
     extra = extra,
+    tool_capabilities = tool_capabilities,
   }
 end
 

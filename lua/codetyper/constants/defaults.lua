@@ -5,10 +5,22 @@ local M = {}
 --- Relative path (from project root) to the cost/usage history file
 M.COST_HISTORY_FILE = "/.codetyper/cost_history.json"
 
+--- Providers supported by the common routing and catalog contracts.
+M.SUPPORTED_PROVIDERS = { "ollama", "copilot", "claude", "openai" }
+
+local SUPPORTED_PROVIDER_SET = {
+  ollama = true,
+  copilot = true,
+  claude = true,
+  openai = true,
+}
+
+local COMPANION_FILE_PATTERN = "*.codetyper.*"
+
 ---@type CoderConfig
 local defaults = {
   llm = {
-    provider = "copilot", -- Options: "ollama", "copilot", "claude"
+    provider = "copilot", -- Options: "ollama", "copilot", "claude", "openai"
     smart_selection = false, -- Try Ollama first if available, escalate to Copilot on failure/low confidence
     ollama = {
       host = "http://localhost:11434",
@@ -19,13 +31,26 @@ local defaults = {
       model = "claude-sonnet-5", -- Uses GitHub Copilot authentication
       ask_model = "gpt-5-mini", -- Cheaper model for question/explain calls
     },
+    claude = {
+      model = "claude-sonnet-4-5", -- Uses ANTHROPIC_API_KEY from the environment
+      ask_model = "claude-3-5-haiku-20241022", -- Optional cheaper Anthropic model
+    },
+    openai = {
+      model = "gpt-5.5", -- Uses the ChatGPT Plus/Pro subscription session
+      ask_model = "gpt-5.4-mini", -- Optional verified subscription model
+    },
   },
   auto_gitignore = false, -- Disabled - no longer creating project folders
   auto_index = false, -- Auto-create coder companion files on file open
   patterns = {
     open_tag = "/@", -- Opening tag for inline prompts
     close_tag = "@/", -- Closing tag for inline prompts
-    file_pattern = "*.coder.*", -- Pattern for coder companion files
+    file_pattern = COMPANION_FILE_PATTERN, -- Canonical dotted companion-file pattern
+  },
+  keymaps = {
+    transform = "<leader>ctt",
+    model = "<leader>ctm",
+    terminal = "<leader>ter",
   },
   indexer = {
     enabled = true, -- Enable project indexing
@@ -80,7 +105,16 @@ end
 ---@return CoderConfig Final configuration
 function M.setup(opts)
   opts = opts or {}
-  return deep_merge(defaults, opts)
+  if type(opts) ~= "table" then
+    error("Codetyper configuration must be a table", 2)
+  end
+
+  local result = deep_merge(defaults, opts)
+  local valid, validation_error = M.validate(result)
+  if not valid then
+    error("Invalid Codetyper configuration: " .. validation_error, 2)
+  end
+  return result
 end
 
 --- Get default configuration
@@ -93,21 +127,56 @@ end
 ---@param config CoderConfig Configuration to validate
 ---@return boolean, string? Valid status and optional error message
 function M.validate(config)
-  if not config.llm then
+  if type(config) ~= "table" then
+    return false, "Configuration must be a table"
+  end
+
+  if type(config.llm) ~= "table" then
     return false, "Missing LLM configuration"
   end
 
-  local valid_providers = { "ollama", "copilot" }
-  local is_valid_provider = false
-  for _, p in ipairs(valid_providers) do
-    if config.llm.provider == p then
-      is_valid_provider = true
-      break
+  if not SUPPORTED_PROVIDER_SET[config.llm.provider] then
+    return false, "Invalid LLM provider. Must be one of: " .. table.concat(M.SUPPORTED_PROVIDERS, ", ")
+  end
+
+  for _, provider in ipairs(M.SUPPORTED_PROVIDERS) do
+    local provider_config = config.llm[provider]
+    if provider_config ~= nil and type(provider_config) ~= "table" then
+      return false, provider .. " configuration must be a table"
+    end
+    if provider_config then
+      for _, field in ipairs({ "model", "ask_model" }) do
+        if provider_config[field] ~= nil and type(provider_config[field]) ~= "string" then
+          return false, provider .. "." .. field .. " must be a string"
+        end
+      end
     end
   end
 
-  if not is_valid_provider then
-    return false, "Invalid LLM provider. Must be one of: " .. table.concat(valid_providers, ", ")
+  if config.patterns ~= nil then
+    if type(config.patterns) ~= "table" then
+      return false, "patterns configuration must be a table"
+    end
+    if config.patterns.file_pattern ~= nil and config.patterns.file_pattern ~= COMPANION_FILE_PATTERN then
+      return false, "patterns.file_pattern must be " .. COMPANION_FILE_PATTERN
+    end
+    for _, field in ipairs({ "open_tag", "close_tag" }) do
+      if config.patterns[field] ~= nil and type(config.patterns[field]) ~= "string" then
+        return false, "patterns." .. field .. " must be a string"
+      end
+    end
+  end
+
+  if config.keymaps ~= nil then
+    if type(config.keymaps) ~= "table" then
+      return false, "keymaps configuration must be a table"
+    end
+    for _, name in ipairs({ "transform", "model", "terminal" }) do
+      local mapping = config.keymaps[name]
+      if mapping ~= nil and mapping ~= false and type(mapping) ~= "string" and type(mapping) ~= "table" then
+        return false, "keymaps." .. name .. " must be a string, table, or false"
+      end
+    end
   end
 
   return true
